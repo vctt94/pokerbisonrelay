@@ -1,0 +1,319 @@
+syntax = "proto3";
+
+package pokerrpc;
+
+option go_package = "grpc/pokerrpc";
+
+// PokerService handles the actual poker game mechanics
+service PokerService {
+  // Game stream for real-time updates
+  rpc StartGameStream(StartGameStreamRequest) returns (stream GameUpdate) {}
+  
+  // Player actions
+  rpc MakeBet(MakeBetRequest) returns (MakeBetResponse) {}
+  rpc Fold(FoldRequest) returns (FoldResponse) {}
+  rpc Check(CheckRequest) returns (CheckResponse) {}
+  
+  // Game state
+  rpc GetGameState(GetGameStateRequest) returns (GetGameStateResponse) {}
+  
+  // Hand evaluation
+  rpc EvaluateHand(EvaluateHandRequest) returns (EvaluateHandResponse) {}
+  rpc GetWinners(GetWinnersRequest) returns (GetWinnersResponse) {}
+}
+
+// LobbyService handles table management and player connections
+service LobbyService {
+  // Table management
+  rpc CreateTable(CreateTableRequest) returns (CreateTableResponse) {}
+  rpc JoinTable(JoinTableRequest) returns (JoinTableResponse) {}
+  rpc LeaveTable(LeaveTableRequest) returns (LeaveTableResponse) {}
+  rpc GetTables(GetTablesRequest) returns (GetTablesResponse) {}
+  
+  // Player management
+  rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse) {}
+  rpc UpdateBalance(UpdateBalanceRequest) returns (UpdateBalanceResponse) {}
+  rpc ProcessTip(ProcessTipRequest) returns (ProcessTipResponse) {}
+  
+  // Ready state management
+  rpc SetPlayerReady(SetPlayerReadyRequest) returns (SetPlayerReadyResponse) {}
+  rpc SetPlayerUnready(SetPlayerUnreadyRequest) returns (SetPlayerUnreadyResponse) {}
+  
+  // Notification stream
+  rpc StartNotificationStream(StartNotificationStreamRequest) returns (stream Notification) {}
+}
+
+// Enums
+enum GamePhase {
+  WAITING = 0;
+  PRE_FLOP = 1;
+  FLOP = 2;
+  TURN = 3;
+  RIVER = 4;
+  SHOWDOWN = 5;
+}
+
+enum NotificationType {
+  UNKNOWN = 0;
+  PLAYER_JOINED = 1;
+  PLAYER_LEFT = 2;
+  GAME_STARTED = 3;
+  GAME_ENDED = 4;
+  BET_MADE = 5;
+  PLAYER_FOLDED = 6;
+  NEW_ROUND = 7;
+  SHOWDOWN_RESULT = 8;
+  TIP_RECEIVED = 9;
+  BALANCE_UPDATED = 10;
+  TABLE_CREATED = 11;
+  TABLE_REMOVED = 12;
+  PLAYER_READY = 13;
+  PLAYER_UNREADY = 14;
+  ALL_PLAYERS_READY = 15;
+}
+
+enum HandRank {
+  HIGH_CARD = 0;
+  PAIR = 1;
+  TWO_PAIR = 2;
+  THREE_OF_A_KIND = 3;
+  STRAIGHT = 4;
+  FLUSH = 5;
+  FULL_HOUSE = 6;
+  FOUR_OF_A_KIND = 7;
+  STRAIGHT_FLUSH = 8;
+  ROYAL_FLUSH = 9;
+}
+
+// Game Messages
+message StartGameStreamRequest {
+  string player_id = 1;
+  string table_id = 2;
+}
+
+message GameUpdate {
+  string table_id = 1;
+  GamePhase phase = 2;
+  repeated Player players = 3;
+  repeated Card community_cards = 4;
+  int64 pot = 5;
+  int64 current_bet = 6;
+  string current_player = 7;
+  int64 min_raise = 8;
+  int64 max_raise = 9;
+  bool game_started = 10;
+  int32 players_required = 11;
+  int32 players_joined = 12;
+}
+
+message MakeBetRequest {
+  string player_id = 1;
+  string table_id = 2;
+  int64 amount = 3;
+}
+
+message MakeBetResponse {
+  bool success = 1;
+  string message = 2;
+  int64 new_balance = 3;
+}
+
+message FoldRequest {
+  string player_id = 1;
+  string table_id = 2;
+}
+
+message FoldResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message CheckRequest {
+  string player_id = 1;
+  string table_id = 2;
+}
+
+message CheckResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message GetGameStateRequest {
+  string table_id = 1;
+}
+
+message GetGameStateResponse {
+  GameUpdate game_state = 1;
+}
+
+message EvaluateHandRequest {
+  repeated Card cards = 1;
+}
+
+message EvaluateHandResponse {
+  HandRank rank = 1;
+  string description = 2;
+  repeated Card best_hand = 3;
+}
+
+message GetWinnersRequest {
+  string table_id = 1;
+}
+
+message GetWinnersResponse {
+  repeated Winner winners = 1;
+  int64 pot = 2;
+}
+
+message Winner {
+  string player_id = 1;
+  HandRank hand_rank = 2;
+  repeated Card best_hand = 3;
+  int64 winnings = 4;
+}
+
+// Lobby Messages
+message CreateTableRequest {
+  string player_id = 1;
+  int64 small_blind = 2;
+  int64 big_blind = 3;
+  int32 max_players = 4;
+  int32 min_players = 5;
+  int64 min_balance = 6;
+  int64 buy_in = 7;
+}
+
+message CreateTableResponse {
+  string table_id = 1;
+}
+
+message JoinTableRequest {
+  string player_id = 1;
+  string table_id = 2;
+}
+
+message JoinTableResponse {
+  bool success = 1;
+  string message = 2;
+  int64 new_balance = 3;
+}
+
+message LeaveTableRequest {
+  string player_id = 1;
+  string table_id = 2;
+}
+
+message LeaveTableResponse {
+  bool success = 1;
+  string message = 2;
+  int64 refund_amount = 3;
+}
+
+message GetTablesRequest {}
+
+message GetTablesResponse {
+  repeated Table tables = 1;
+}
+
+message Table {
+  string id = 1;
+  string host_id = 2;
+  repeated Player players = 3;
+  int64 small_blind = 4;
+  int64 big_blind = 5;
+  int32 max_players = 6;
+  int32 min_players = 7;
+  int32 current_players = 8;
+  int64 min_balance = 9;
+  int64 buy_in = 10;
+  GamePhase phase = 11;
+  bool game_started = 12;
+  bool all_players_ready = 13;
+}
+
+message GetBalanceRequest {
+  string player_id = 1;
+}
+
+message GetBalanceResponse {
+  int64 balance = 1;
+}
+
+message UpdateBalanceRequest {
+  string player_id = 1;
+  int64 amount = 2;
+  string description = 3;
+}
+
+message UpdateBalanceResponse {
+  int64 new_balance = 1;
+  string message = 2;
+}
+
+message ProcessTipRequest {
+  string from_player_id = 1;
+  string to_player_id = 2;
+  int64 amount = 3;
+  string message = 4;
+}
+
+message ProcessTipResponse {
+  bool success = 1;
+  string message = 2;
+  int64 new_balance = 3;
+}
+
+message StartNotificationStreamRequest {
+  string player_id = 1;
+}
+
+message Notification {
+  NotificationType type = 1;
+  string message = 2;
+  string table_id = 3;
+  string player_id = 4;
+  int64 amount = 5;
+  repeated Card cards = 6;
+  HandRank hand_rank = 7;
+  int64 new_balance = 8;
+}
+
+// Common Messages
+message Player {
+  string id = 1;
+  string name = 2;
+  int64 balance = 3;
+  repeated Card hand = 4;
+  int64 current_bet = 5;
+  bool folded = 6;
+  bool is_turn = 7;
+  bool is_all_in = 8;
+  bool is_dealer = 9;
+  bool is_ready = 10;
+}
+
+message Card {
+  string suit = 1;
+  string value = 2;
+}
+
+message SetPlayerReadyRequest {
+  string player_id = 1;
+  string table_id = 2;
+}
+
+message SetPlayerReadyResponse {
+  bool success = 1;
+  string message = 2;
+  bool all_players_ready = 3;
+}
+
+message SetPlayerUnreadyRequest {
+  string player_id = 1;
+  string table_id = 2;
+}
+
+message SetPlayerUnreadyResponse {
+  bool success = 1;
+  string message = 2;
+} 
