@@ -484,16 +484,40 @@ func (s *Server) StartNotificationStream(req *pokerrpc.StartNotificationStreamRe
 	// Implementation for notification streaming
 	// This would typically involve subscribing to a notification channel
 	// and sending notifications as they occur
-	updates := make(chan *pokerrpc.GameUpdate)
-	go func() {
-		for {
-			select {
-			case <-stream.Context().Done():
-				return
-			case <-time.After(1 * time.Second):
-				// Send periodic updates for all tables
-				s.mu.RLock()
-				for _, table := range s.tables {
+	playerID := req.PlayerId
+	if playerID == "" {
+		return status.Error(codes.InvalidArgument, "player ID is required")
+	}
+
+	// Send an initial notification to ensure the stream is established
+	initialNotification := &pokerrpc.Notification{
+		Type:     pokerrpc.NotificationType_UNKNOWN,
+		Message:  "Connected to notification stream",
+		PlayerId: playerID,
+	}
+	if err := stream.Send(initialNotification); err != nil {
+		return err
+	}
+
+	// Keep the stream open with periodic heartbeat notifications
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	ctx := stream.Context()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			// Send periodic updates for all tables this player is in
+			s.mu.RLock()
+			playerHasTables := false
+
+			for _, table := range s.tables {
+				// Only send updates for tables that this player is in
+				if table.GetPlayer(playerID) != nil {
+					playerHasTables = true
 					players := make([]*pokerrpc.Player, 0, len(table.GetPlayers()))
 					for _, p := range table.GetPlayers() {
 						players = append(players, &pokerrpc.Player{
@@ -503,21 +527,50 @@ func (s *Server) StartNotificationStream(req *pokerrpc.StartNotificationStreamRe
 							Folded:  p.HasFolded,
 						})
 					}
-					update := &pokerrpc.GameUpdate{
-						TableId:         table.GetConfig().ID,
-						Phase:           table.GetGamePhase(),
-						Players:         players,
-						Pot:             table.GetPot(),
-						GameStarted:     table.IsGameStarted(),
-						PlayersRequired: int32(table.GetMinPlayers()),
-						PlayersJoined:   int32(len(table.GetPlayers())),
+
+					// Determine notification type based on game phase
+					var notificationType pokerrpc.NotificationType
+					switch table.GetGamePhase() {
+					case pokerrpc.GamePhase_WAITING:
+						notificationType = pokerrpc.NotificationType_PLAYER_READY
+					case pokerrpc.GamePhase_PRE_FLOP:
+						notificationType = pokerrpc.NotificationType_GAME_STARTED
+					case pokerrpc.GamePhase_FLOP, pokerrpc.GamePhase_TURN, pokerrpc.GamePhase_RIVER:
+						notificationType = pokerrpc.NotificationType_NEW_ROUND
+					case pokerrpc.GamePhase_SHOWDOWN:
+						notificationType = pokerrpc.NotificationType_SHOWDOWN_RESULT
+					default:
+						notificationType = pokerrpc.NotificationType_UNKNOWN
 					}
-					updates <- update
+
+					notification := &pokerrpc.Notification{
+						Type:     notificationType,
+						Message:  fmt.Sprintf("Game update for table %s: Phase=%s, Players=%d", table.GetConfig().ID, table.GetGamePhase(), len(players)),
+						TableId:  table.GetConfig().ID,
+						PlayerId: playerID,
+					}
+
+					// Send to client
+					if err := stream.Send(notification); err != nil {
+						s.mu.RUnlock()
+						return err
+					}
 				}
-				s.mu.RUnlock()
 			}
+
+			// If player isn't at any tables, send a heartbeat notification
+			if !playerHasTables {
+				heartbeatNotification := &pokerrpc.Notification{
+					Type:     pokerrpc.NotificationType_UNKNOWN,
+					Message:  "Heartbeat",
+					PlayerId: playerID,
+				}
+				if err := stream.Send(heartbeatNotification); err != nil {
+					s.mu.RUnlock()
+					return err
+				}
+			}
+			s.mu.RUnlock()
 		}
-	}()
-	defer close(updates)
-	return nil
+	}
 }

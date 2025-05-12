@@ -4,13 +4,12 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/companyzero/bisonrelay/clientrpc/types"
@@ -22,7 +21,9 @@ import (
 	"github.com/vctt94/bisonbotkit/logging"
 	"github.com/vctt94/bisonbotkit/utils"
 	"github.com/vctt94/poker-bisonrelay/poker"
+	"github.com/vctt94/poker-bisonrelay/rpc/grpc/pokerrpc"
 	"github.com/vctt94/poker-bisonrelay/server"
+	"google.golang.org/grpc"
 )
 
 var (
@@ -239,6 +240,24 @@ func realMain() error {
 	}
 	defer db.Close()
 
+	// Initialize and start the gRPC poker server
+	pokerServer := server.NewServer(db)
+	grpcLis, err := net.Listen("tcp", ":50051")
+	if err != nil {
+		return fmt.Errorf("failed to listen for gRPC poker server: %v", err)
+	}
+	grpcServer := grpc.NewServer()
+	pokerrpc.RegisterLobbyServiceServer(grpcServer, pokerServer)
+	pokerrpc.RegisterPokerServiceServer(grpcServer, pokerServer)
+
+	go func() {
+		log.Infof("Starting gRPC poker server on :50051")
+		if err := grpcServer.Serve(grpcLis); err != nil {
+			log.Errorf("gRPC poker server error: %v", err)
+		}
+	}()
+	defer grpcServer.Stop() // Ensure gRPC server is stopped on exit
+
 	// Initialize bot state
 	state := &BotState{
 		db:     db,
@@ -250,17 +269,15 @@ func realMain() error {
 	tipChan := make(chan types.ReceivedTip)
 	tipProgressChan := make(chan types.TipProgressEvent)
 
-	// Set up PM channel and log
 	cfg.PMChan = pmChan
 	cfg.PMLog = logBackend.Logger("PM")
-
-	// Set up tip channels/logs
 	cfg.TipLog = logBackend.Logger("TIP")
 	cfg.TipProgressChan = tipProgressChan
 	cfg.TipReceivedLog = logBackend.Logger("TIP_RECEIVED")
 	cfg.TipReceivedChan = tipChan
 
-	// Create the bot
+	log.Infof("Starting bot...")
+
 	bot, err := kit.NewBot(cfg, logBackend)
 	if err != nil {
 		return fmt.Errorf("failed to create bot: %v", err)
@@ -269,16 +286,6 @@ func realMain() error {
 	// Set up context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	// Handle shutdown signals
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		sig := <-sigChan
-		log.Infof("Received shutdown signal: %v", sig)
-		bot.Close()
-		cancel()
-	}()
 
 	// Handle PMs
 	go func() {

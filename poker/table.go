@@ -286,16 +286,20 @@ func (t *Table) AreAllPlayersReady() bool {
 // Subscribe returns a channel for receiving game updates
 func (t *Table) Subscribe(ctx context.Context) chan *pokerrpc.GameUpdate {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 
 	updates := make(chan *pokerrpc.GameUpdate, 10)
 	go func() {
 		defer close(updates)
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(1 * time.Second):
+			case <-ticker.C:
+				t.mu.RLock()
+
 				players := make([]*pokerrpc.Player, 0, len(t.players))
 				for _, p := range t.players {
 					players = append(players, &pokerrpc.Player{
@@ -304,15 +308,39 @@ func (t *Table) Subscribe(ctx context.Context) chan *pokerrpc.GameUpdate {
 						IsReady: p.IsReady,
 					})
 				}
+
+				var currentPlayerID string
+				if t.game != nil && len(t.game.players) > 0 {
+					if t.game.currentPlayer >= 0 && t.game.currentPlayer < len(t.game.players) {
+						currentPlayerID = t.game.players[t.game.currentPlayer].ID
+					}
+				}
+
+				var communityCards []*pokerrpc.Card
+				if t.game != nil {
+					for _, c := range t.game.GetCommunityCards() {
+						communityCards = append(communityCards, &pokerrpc.Card{
+							Suit:  c.GetSuit(),
+							Value: c.GetValue(),
+						})
+					}
+				}
+
 				update := &pokerrpc.GameUpdate{
 					TableId:         t.config.ID,
-					Phase:           pokerrpc.GamePhase_WAITING,
+					Phase:           t.GetGamePhase(),
 					Players:         players,
+					CommunityCards:  communityCards,
 					Pot:             t.GetPot(),
+					CurrentBet:      t.GetCurrentBet(),
+					CurrentPlayer:   currentPlayerID,
 					GameStarted:     t.gameStarted,
 					PlayersRequired: int32(t.config.MinPlayers),
 					PlayersJoined:   int32(len(t.players)),
 				}
+
+				t.mu.RUnlock()
+
 				select {
 				case updates <- update:
 				case <-ctx.Done():
