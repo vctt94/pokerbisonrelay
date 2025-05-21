@@ -27,16 +27,6 @@ tmux new-window -t "$SESSION":2 -n dcrlnd \
    dcrlnd '"$NET"' --dcrd.rpchost=localhost --dcrd.rpcuser='"$RPCUSER"' \
           --dcrd.rpcpass='"$RPCPASS"' 2>&1 | tee '"$LOGDIR"'/dcrlnd.log'
 
-# 2-bis : desbloqueio automático
-tmux new-window -t "$SESSION":3 -n unlock \
-  'until nc -z localhost 10009; do echo waiting for dcrlnd RPC; sleep 3; done;
-   # tenta até conseguir; nao faz mal se já estiver desbloqueada
-   until dcrlncli '"$NET"' getinfo >/dev/null 2>&1; do
-        yes "'"$WALLETPASS"'" | dcrlncli '"$NET"' unlock || true
-        sleep 2
-   done;
-   echo "dcrlnd unlocked !"'
-
 ###############################################################################
 # 4 : brserver  (usa porta 12345 por padrão)
 ###############################################################################
