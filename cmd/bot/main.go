@@ -24,10 +24,20 @@ import (
 	"github.com/vctt94/poker-bisonrelay/rpc/grpc/pokerrpc"
 	"github.com/vctt94/poker-bisonrelay/server"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 var (
-	flagAppRoot = flag.String("approot", "~/.pokerbot", "Path to application data directory")
+	datadir                = flag.String("datadir", "", "Directory to load config file from")
+	flagURL                = flag.String("url", "", "URL of the websocket endpoint")
+	flagGRPCServerCertPath = flag.String("grpcservercert", "", "Path to server.crt file for TLS")
+	flagCertFile           = flag.String("cert", "", "Path to TLS certificate file")
+	flagKeyFile            = flag.String("key", "", "Path to TLS key file")
+	rpcUser                = flag.String("rpcuser", "", "RPC user for basic authentication")
+	rpcPass                = flag.String("rpcpass", "", "RPC password for basic authentication")
+	grpcHost               = flag.String("grpchost", "", "GRPC server hostname")
+	grpcPort               = flag.String("grpcport", "", "GRPC server port")
+	debugLevel             = flag.String("debuglevel", "", "Debug level for logging")
 )
 
 // BotState holds the state of the poker bot
@@ -205,19 +215,50 @@ func handlePM(ctx context.Context, bot *kit.Bot, pm *types.ReceivedPM, state *Bo
 func realMain() error {
 	flag.Parse()
 
-	// Expand and clean the app root path
-	appRoot := utils.CleanAndExpandPath(*flagAppRoot)
+	// Set up configuration directory
+	if *datadir == "" {
+		*datadir = utils.AppDataDir("pokerbot", false)
+	}
 
 	// Ensure the log directory exists
-	logDir := filepath.Join(appRoot, "logs")
+	logDir := filepath.Join(*datadir, "logs")
 	if err := os.MkdirAll(logDir, 0700); err != nil {
 		return fmt.Errorf("failed to create log directory: %v", err)
+	}
+
+	// Load bot configuration
+	cfg, err := config.LoadBotConfig(*datadir, "pokerbot.conf")
+	if err != nil {
+		return fmt.Errorf("failed to load config: %v", err)
+	}
+
+	// Apply overrides from flags
+	if *flagURL != "" {
+		cfg.RPCURL = *flagURL
+	}
+	if *flagGRPCServerCertPath != "" {
+		cfg.ServerCertPath = *flagGRPCServerCertPath
+	}
+	if *rpcUser != "" {
+		cfg.RPCUser = *rpcUser
+	}
+	if *rpcPass != "" {
+		cfg.RPCPass = *rpcPass
+	}
+	if *debugLevel != "" {
+		cfg.Debug = *debugLevel
+	}
+
+	// Set grpc server address
+	serverAddress := ":50051"
+	if *grpcHost != "" && *grpcPort != "" {
+		serverAddress = fmt.Sprintf("%s:%s", *grpcHost, *grpcPort)
 	}
 
 	// Initialize logging
 	logBackend, err := logging.NewLogBackend(logging.LogConfig{
 		LogFile:     filepath.Join(logDir, "pokerbot.log"),
-		DebugLevel:  "info",
+		DebugLevel:  cfg.Debug,
 		MaxLogFiles: 5,
 	})
 	if err != nil {
@@ -227,14 +268,8 @@ func realMain() error {
 
 	log := logBackend.Logger("PokerBot")
 
-	// Load bot configuration
-	cfg, err := config.LoadBotConfig(appRoot, "pokerbot.conf")
-	if err != nil {
-		return fmt.Errorf("failed to load config: %v", err)
-	}
-
 	// Initialize database
-	db, err := server.NewDatabase(filepath.Join(appRoot, "poker.db"))
+	db, err := server.NewDatabase(filepath.Join(*datadir, "poker.db"))
 	if err != nil {
 		return fmt.Errorf("failed to initialize database: %v", err)
 	}
@@ -242,16 +277,52 @@ func realMain() error {
 
 	// Initialize and start the gRPC poker server
 	pokerServer := server.NewServer(db)
-	grpcLis, err := net.Listen("tcp", ":50051")
+
+	// Determine certificate and key file paths
+	grpcCertFile := ""
+	keyFile := ""
+
+	if *flagCertFile != "" {
+		grpcCertFile = *flagCertFile
+	}
+	if *flagKeyFile != "" {
+		keyFile = *flagKeyFile
+	}
+
+	// If paths are still empty, use defaults
+	if grpcCertFile == "" {
+		grpcCertFile = filepath.Join(*datadir, "server.cert")
+	}
+	if keyFile == "" {
+		keyFile = filepath.Join(*datadir, "server.key")
+	}
+
+	// Check if certificate files exist
+	if _, err := os.Stat(grpcCertFile); os.IsNotExist(err) {
+		return fmt.Errorf("certificate file not found: %s", grpcCertFile)
+	}
+	if _, err := os.Stat(keyFile); os.IsNotExist(err) {
+		return fmt.Errorf("key file not found: %s", keyFile)
+	}
+
+	// Load TLS credentials
+	creds, err := credentials.NewServerTLSFromFile(grpcCertFile, keyFile)
+	if err != nil {
+		return fmt.Errorf("failed to load TLS credentials: %v", err)
+	}
+
+	// Create gRPC server with TLS credentials
+	grpcServer := grpc.NewServer(grpc.Creds(creds))
+
+	grpcLis, err := net.Listen("tcp", serverAddress)
 	if err != nil {
 		return fmt.Errorf("failed to listen for gRPC poker server: %v", err)
 	}
-	grpcServer := grpc.NewServer()
 	pokerrpc.RegisterLobbyServiceServer(grpcServer, pokerServer)
 	pokerrpc.RegisterPokerServiceServer(grpcServer, pokerServer)
 
 	go func() {
-		log.Infof("Starting gRPC poker server on :50051")
+		log.Infof("Starting gRPC poker server on %s", serverAddress)
 		if err := grpcServer.Serve(grpcLis); err != nil {
 			log.Errorf("gRPC poker server error: %v", err)
 		}
