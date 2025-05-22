@@ -33,6 +33,54 @@ var (
 	grpcPort               = flag.String("grpcport", "50051", "GRPC server port")
 )
 
+// ensureDataDirExists creates the datadir and necessary subdirectories if they don't exist
+func ensureDataDirExists(datadir string) error {
+	// Create main datadir
+	if err := os.MkdirAll(datadir, 0700); err != nil {
+		return fmt.Errorf("failed to create datadir %s: %v", datadir, err)
+	}
+
+	// Create logs subdirectory
+	logsDir := filepath.Join(datadir, "logs")
+	if err := os.MkdirAll(logsDir, 0700); err != nil {
+		return fmt.Errorf("failed to create logs directory %s: %v", logsDir, err)
+	}
+
+	return nil
+}
+
+// createDefaultServerCert creates a basic server certificate file for testing
+// Note: In production, you should use a proper certificate from your server
+func createDefaultServerCert(certPath string) error {
+	// This is a placeholder self-signed certificate for development/testing
+	// In production, you should get this from your actual server
+	defaultCert := `-----BEGIN CERTIFICATE-----
+MIIBzDCCAXGgAwIBAgIRAKzgtkERbGLTLSM3kvtKq4YwCgYIKoZIzj0EAwIwKzER
+MA8GA1UEChMIZ2VuY2VydHMxFjAUBgNVBAMTDTE5Mi4xNjguMC4xMDkwHhcNMjUw
+NTIxMTcwMzEyWhcNMzUwNTIwMTcwMzEyWjArMREwDwYDVQQKEwhnZW5jZXJ0czEW
+MBQGA1UEAxMNMTkyLjE2OC4wLjEwOTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IA
+BCeYEkUALzxW+deCYqEXk9n5SXpm/0k7cprUzOhyxo3rgFEcXAswmtuTj4aRItsV
+mHWffXRqnTRQmPMjlngoHBijdjB0MA4GA1UdDwEB/wQEAwIChDAPBgNVHRMBAf8E
+BTADAQH/MB0GA1UdDgQWBBQVCe1KJ5IC9UbKr0CxQ8zoc/DcQTAyBgNVHREEKzAp
+gglsb2NhbGhvc3SHBMCoAG2HBH8AAAGHEAAAAAAAAAAAAAAAAAAAAAEwCgYIKoZI
+zj0EAwIDSQAwRgIhAK2zFZM5R6hjDnSVDZFqgL7Glnc1kYm0WwAyuqQ3u6pSAiEA
+stnyeJa1nliPo5mCKwgl5c2S/knBIm6f0y61CN6IFWw=
+-----END CERTIFICATE-----`
+
+	// Create directory for cert file if it doesn't exist
+	dir := filepath.Dir(certPath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("failed to create cert directory %s: %v", dir, err)
+	}
+
+	// Write the certificate file
+	if err := os.WriteFile(certPath, []byte(defaultCert), 0600); err != nil {
+		return fmt.Errorf("failed to write cert file %s: %v", certPath, err)
+	}
+
+	return nil
+}
+
 func main() {
 	flag.Parse()
 
@@ -41,10 +89,26 @@ func main() {
 		*datadir = utils.AppDataDir("pokerclient", false)
 	}
 
+	// Expand tilde in datadir path
+	if filepath.HasPrefix(*datadir, "~/") {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Printf("Error getting home directory: %v\n", err)
+			os.Exit(1)
+		}
+		*datadir = filepath.Join(homeDir, (*datadir)[2:])
+	}
+
+	// Ensure datadir exists
+	if err := ensureDataDirExists(*datadir); err != nil {
+		fmt.Printf("Error creating datadir: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Load the configuration
 	cfg, err := config.LoadClientConfig(*datadir, "pokerclient.conf")
 	if err != nil {
-		fmt.Println("Error loading configuration:", err)
+		fmt.Printf("Error loading configuration: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -85,38 +149,48 @@ func main() {
 		MaxBufferLines: 1000,
 		UseStdout:      &useStdout,
 	})
-	log := logBackend.Logger("PokerClient")
 
 	if err != nil {
-		fmt.Errorf("Failed to set up logging: %v", err)
+		fmt.Printf("Failed to set up logging: %v\n", err)
+		os.Exit(1)
 	}
 
+	log := logBackend.Logger("PokerClient")
+
 	// Log server address after logger is initialized
-	if *grpcHost != "" && *grpcPort != "" {
-		log.Infof("Using server address: %s", cfg.ServerAddr)
-	}
+	log.Infof("Using server address: %s", cfg.ServerAddr)
 
 	// Initialize BisonRelay client
 	brClient, err := botclient.NewClient(cfg, logBackend)
 	if err != nil {
 		log.Errorf("Failed to create bot client: %v", err)
+		os.Exit(1)
 	}
 
-	// Start the RPC client in a goroutine
+	// Start the RPC client in a goroutine only if brClient was created successfully
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go brClient.RunRPC(ctx)
 
-	// Get the client ID
-	var publicIdentity types.PublicIdentity
-	err = brClient.Chat.UserPublicIdentity(ctx, &types.PublicIdentityReq{}, &publicIdentity)
-	if err != nil {
-		log.Errorf("Failed to get user public identity: %v", err)
+	var clientID string
+	if brClient != nil {
+		go brClient.RunRPC(ctx)
+
+		// Get the client ID
+		var publicIdentity types.PublicIdentity
+		err = brClient.Chat.UserPublicIdentity(ctx, &types.PublicIdentityReq{}, &publicIdentity)
+		if err != nil {
+			log.Errorf("Failed to get user public identity: %v", err)
+		}
+
+		// Convert the identity to a hex string for use as client ID
+		clientID = hex.EncodeToString(publicIdentity.Identity[:])
+	} else {
+		// Use a fallback client ID if BR client failed
+		clientID = fmt.Sprintf("client-%d", os.Getpid())
+		log.Warnf("Using fallback client ID: %s", clientID)
 	}
 
-	// Convert the identity to a hex string for use as client ID
-	clientID := hex.EncodeToString(publicIdentity.Identity[:])
-	log.Errorf("Using client ID: %s", clientID)
+	log.Infof("Using client ID: %s", clientID)
 
 	// Connect to the poker server
 	var dialOpts []grpc.DialOption
@@ -129,17 +203,30 @@ func main() {
 	if grpcServerCertPath == "" {
 		grpcServerCertPath = filepath.Join(*datadir, "server.cert")
 	}
-	fmt.Println("Server cert path: ", grpcServerCertPath)
+
+	log.Infof("Server cert path: %s", grpcServerCertPath)
+
+	// Check if server certificate exists, create default one if not
+	if _, err := os.Stat(grpcServerCertPath); os.IsNotExist(err) {
+		log.Warnf("Server certificate not found at %s, creating default certificate", grpcServerCertPath)
+		if err := createDefaultServerCert(grpcServerCertPath); err != nil {
+			log.Errorf("Failed to create default server certificate: %v", err)
+			os.Exit(1)
+		}
+		log.Infof("Created default server certificate at %s", grpcServerCertPath)
+	}
 
 	// Load the server certificate
 	pemServerCA, err := os.ReadFile(grpcServerCertPath)
 	if err != nil {
 		log.Errorf("Failed to read server certificate: %v", err)
+		os.Exit(1)
 	}
 
 	certPool := x509.NewCertPool()
 	if !certPool.AppendCertsFromPEM(pemServerCA) {
-		log.Error("Failed to add server certificate to pool")
+		log.Errorf("Failed to add server certificate to pool")
+		os.Exit(1)
 	}
 
 	// Create the TLS credentials with ServerName set to grpcHost
