@@ -4,325 +4,53 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
 
 	"github.com/companyzero/bisonrelay/clientrpc/types"
 	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/decred/dcrd/dcrutil/v4"
 	_ "github.com/mattn/go-sqlite3" // SQLite3 driver
 	kit "github.com/vctt94/bisonbotkit"
-	"github.com/vctt94/bisonbotkit/config"
-	"github.com/vctt94/bisonbotkit/logging"
-	"github.com/vctt94/bisonbotkit/utils"
-	"github.com/vctt94/poker-bisonrelay/poker"
-	"github.com/vctt94/poker-bisonrelay/rpc/grpc/pokerrpc"
-	"github.com/vctt94/poker-bisonrelay/server"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
+	"github.com/vctt94/poker-bisonrelay/pkg/bot"
+	"github.com/vctt94/poker-bisonrelay/pkg/server"
 )
-
-var (
-	datadir                = flag.String("datadir", "", "Directory to load config file from")
-	flagURL                = flag.String("url", "", "URL of the websocket endpoint")
-	flagGRPCServerCertPath = flag.String("grpcservercert", "", "Path to server.crt file for TLS")
-	flagCertFile           = flag.String("cert", "", "Path to TLS certificate file")
-	flagKeyFile            = flag.String("key", "", "Path to TLS key file")
-	rpcUser                = flag.String("rpcuser", "", "RPC user for basic authentication")
-	rpcPass                = flag.String("rpcpass", "", "RPC password for basic authentication")
-	grpcHost               = flag.String("grpchost", "", "GRPC server hostname")
-	grpcPort               = flag.String("grpcport", "", "GRPC server port")
-	debugLevel             = flag.String("debuglevel", "", "Debug level for logging")
-)
-
-// BotState holds the state of the poker bot
-type BotState struct {
-	db     server.Database
-	tables map[string]*poker.Table
-	mu     sync.RWMutex
-}
-
-// handlePM handles incoming PM commands.
-func handlePM(ctx context.Context, bot *kit.Bot, pm *types.ReceivedPM, state *BotState) {
-	tokens := strings.Fields(pm.Msg.Message)
-	if len(tokens) == 0 {
-		return
-	}
-
-	cmd := strings.ToLower(tokens[0])
-	var uid zkidentity.ShortID
-	uid.FromBytes(pm.Uid)
-	playerID := uid.String()
-
-	switch cmd {
-	case "balance":
-		balance, err := state.db.GetPlayerBalance(playerID)
-		if err != nil {
-			bot.SendPM(ctx, pm.Nick, "Error checking balance: "+err.Error())
-			return
-		}
-		bot.SendPM(ctx, pm.Nick, fmt.Sprintf("Your current balance is: %.8f DCR",
-			dcrutil.Amount(balance).ToCoin()))
-
-	case "create":
-		if len(tokens) < 2 {
-			bot.SendPM(ctx, pm.Nick, "Usage: create <buy-in amount in DCR>")
-			return
-		}
-
-		// Parse buy-in amount
-		buyInFloat, err := strconv.ParseFloat(tokens[1], 64)
-		if err != nil {
-			bot.SendPM(ctx, pm.Nick, "Invalid buy-in amount. Please enter a valid number.")
-			return
-		}
-
-		buyIn, err := dcrutil.NewAmount(buyInFloat)
-		if err != nil {
-			bot.SendPM(ctx, pm.Nick, "Invalid DCR amount. Please enter a valid number.")
-			return
-		}
-
-		// Check player balance
-		balance, err := state.db.GetPlayerBalance(playerID)
-		if err != nil {
-			bot.SendPM(ctx, pm.Nick, "Error checking balance: "+err.Error())
-			return
-		}
-
-		if balance < int64(buyIn) {
-			bot.SendPM(ctx, pm.Nick, "Insufficient balance for buy-in.")
-			return
-		}
-
-		// Create new table
-		tableID := fmt.Sprintf("table-%d", time.Now().Unix())
-		table := poker.NewTable(poker.TableConfig{
-			ID:         tableID,
-			CreatorID:  playerID,
-			BuyIn:      int64(buyIn),
-			MinPlayers: 2,
-			MaxPlayers: 6,
-			SmallBlind: int64(buyIn) / 100, // 1% of buy-in
-			BigBlind:   int64(buyIn) / 50,  // 2% of buy-in
-			TimeBank:   30 * time.Second,
-		})
-
-		// Add creator to table
-		err = table.AddPlayer(playerID, balance)
-		if err != nil {
-			bot.SendPM(ctx, pm.Nick, "Error creating table: "+err.Error())
-			return
-		}
-
-		// Add table to state
-		state.mu.Lock()
-		state.tables[tableID] = table
-		state.mu.Unlock()
-
-		bot.SendPM(ctx, pm.Nick, fmt.Sprintf("Table %s created with buy-in of %.8f DCR. Use 'join %s' to join.",
-			tableID, buyIn.ToCoin(), tableID))
-
-	case "join":
-		if len(tokens) < 2 {
-			bot.SendPM(ctx, pm.Nick, "Usage: join <table-id>")
-			return
-		}
-
-		tableID := tokens[1]
-		state.mu.RLock()
-		table, exists := state.tables[tableID]
-		state.mu.RUnlock()
-
-		if !exists {
-			bot.SendPM(ctx, pm.Nick, "Table not found.")
-			return
-		}
-
-		// Check player balance
-		balance, err := state.db.GetPlayerBalance(playerID)
-		if err != nil {
-			bot.SendPM(ctx, pm.Nick, "Error checking balance: "+err.Error())
-			return
-		}
-
-		// Add player to table
-		err = table.AddPlayer(playerID, balance)
-		if err != nil {
-			bot.SendPM(ctx, pm.Nick, "Error joining table: "+err.Error())
-			return
-		}
-
-		// Notify all players at the table
-		players := table.GetPlayers()
-		for _, p := range players {
-			if p.ID != playerID {
-				bot.SendPM(ctx, p.ID, fmt.Sprintf("%s has joined the table.", pm.Nick))
-			}
-		}
-
-		bot.SendPM(ctx, pm.Nick, fmt.Sprintf("Joined table %s. Current status:\n%s",
-			tableID, table.GetStatus()))
-
-		// Check if we can start the game
-		if len(players) >= table.GetMinPlayers() {
-			err = table.StartGame()
-			if err != nil {
-				bot.SendPM(ctx, pm.Nick, "Error starting game: "+err.Error())
-				return
-			}
-
-			// Notify all players
-			for _, p := range players {
-				bot.SendPM(ctx, p.ID, "Game started!")
-			}
-		}
-
-	case "tables":
-		state.mu.RLock()
-		defer state.mu.RUnlock()
-
-		if len(state.tables) == 0 {
-			bot.SendPM(ctx, pm.Nick, "No active tables.")
-			return
-		}
-
-		msg := "Active tables:\n"
-		for id, table := range state.tables {
-			msg += fmt.Sprintf("%s: %d/%d players\n", id, len(table.GetPlayers()), table.GetMaxPlayers())
-		}
-		bot.SendPM(ctx, pm.Nick, msg)
-
-	case "help":
-		helpMsg := `Available commands:
-- balance: Check your current balance
-- create <amount>: Create a new poker table with specified buy-in
-- join <table-id>: Join an existing poker table
-- tables: List all active tables
-- help: Show this help message`
-		bot.SendPM(ctx, pm.Nick, helpMsg)
-
-	default:
-		bot.SendPM(ctx, pm.Nick, "Unknown command. Type 'help' for available commands.")
-	}
-}
 
 func realMain() error {
+	// Register and parse flags
+	flags := bot.RegisterBotFlags()
 	flag.Parse()
 
-	// Set up configuration directory
-	if *datadir == "" {
-		*datadir = utils.AppDataDir("pokerbot", false)
-	}
-
-	// Ensure the log directory exists
-	logDir := filepath.Join(*datadir, "logs")
-	if err := os.MkdirAll(logDir, 0700); err != nil {
-		return fmt.Errorf("failed to create log directory: %v", err)
-	}
-
-	// Load bot configuration
-	cfg, err := config.LoadBotConfig(*datadir, "pokerbot.conf")
+	// Load configuration
+	cfg, err := bot.LoadBotConfig(flags, "pokerbot")
 	if err != nil {
-		return fmt.Errorf("failed to load config: %v", err)
-	}
-
-	// Apply overrides from flags
-	if *flagURL != "" {
-		cfg.RPCURL = *flagURL
-	}
-	if *flagGRPCServerCertPath != "" {
-		cfg.ServerCertPath = *flagGRPCServerCertPath
-	}
-	if *rpcUser != "" {
-		cfg.RPCUser = *rpcUser
-	}
-	if *rpcPass != "" {
-		cfg.RPCPass = *rpcPass
-	}
-	if *debugLevel != "" {
-		cfg.Debug = *debugLevel
-	}
-
-	// Set grpc server address
-	serverAddress := ":50051"
-	if *grpcHost != "" && *grpcPort != "" {
-		serverAddress = fmt.Sprintf("%s:%s", *grpcHost, *grpcPort)
+		return fmt.Errorf("configuration error: %v", err)
 	}
 
 	// Initialize logging
-	logBackend, err := logging.NewLogBackend(logging.LogConfig{
-		LogFile:     filepath.Join(logDir, "pokerbot.log"),
-		DebugLevel:  cfg.Debug,
-		MaxLogFiles: 5,
-	})
+	logBackend, err := bot.SetupBotLogging(cfg.LogDir, cfg.Config.Debug)
 	if err != nil {
-		return fmt.Errorf("failed to initialize logging: %v", err)
+		return fmt.Errorf("logging error: %v", err)
 	}
 	defer logBackend.Close()
 
 	log := logBackend.Logger("PokerBot")
 
 	// Initialize database
-	db, err := server.NewDatabase(filepath.Join(*datadir, "poker.db"))
+	db, err := server.NewDatabase(filepath.Join(cfg.DataDir, "poker.db"))
 	if err != nil {
 		return fmt.Errorf("failed to initialize database: %v", err)
 	}
 	defer db.Close()
 
 	// Initialize and start the gRPC poker server
-	pokerServer := server.NewServer(db)
-
-	// Determine certificate and key file paths
-	grpcCertFile := ""
-	keyFile := ""
-
-	if *flagCertFile != "" {
-		grpcCertFile = *flagCertFile
-	}
-	if *flagKeyFile != "" {
-		keyFile = *flagKeyFile
-	}
-
-	// If paths are still empty, use defaults
-	if grpcCertFile == "" {
-		grpcCertFile = filepath.Join(*datadir, "server.cert")
-	}
-	if keyFile == "" {
-		keyFile = filepath.Join(*datadir, "server.key")
-	}
-
-	// Check if certificate files exist
-	if _, err := os.Stat(grpcCertFile); os.IsNotExist(err) {
-		return fmt.Errorf("certificate file not found: %s", grpcCertFile)
-	}
-	if _, err := os.Stat(keyFile); os.IsNotExist(err) {
-		return fmt.Errorf("key file not found: %s", keyFile)
-	}
-
-	// Load TLS credentials
-	creds, err := credentials.NewServerTLSFromFile(grpcCertFile, keyFile)
+	grpcServer, grpcLis, err := bot.SetupGRPCServer(cfg.DataDir, cfg.CertFile, cfg.KeyFile, cfg.ServerAddress, db)
 	if err != nil {
-		return fmt.Errorf("failed to load TLS credentials: %v", err)
+		return fmt.Errorf("failed to setup gRPC server: %v", err)
 	}
-
-	// Create gRPC server with TLS credentials
-	grpcServer := grpc.NewServer(grpc.Creds(creds))
-
-	grpcLis, err := net.Listen("tcp", serverAddress)
-	if err != nil {
-		return fmt.Errorf("failed to listen for gRPC poker server: %v", err)
-	}
-	pokerrpc.RegisterLobbyServiceServer(grpcServer, pokerServer)
-	pokerrpc.RegisterPokerServiceServer(grpcServer, pokerServer)
 
 	go func() {
-		log.Infof("Starting gRPC poker server on %s", serverAddress)
+		log.Infof("Starting gRPC poker server on %s", cfg.ServerAddress)
 		if err := grpcServer.Serve(grpcLis); err != nil {
 			log.Errorf("gRPC poker server error: %v", err)
 		}
@@ -330,26 +58,23 @@ func realMain() error {
 	defer grpcServer.Stop() // Ensure gRPC server is stopped on exit
 
 	// Initialize bot state
-	state := &BotState{
-		db:     db,
-		tables: make(map[string]*poker.Table),
-	}
+	state := bot.NewState(db)
 
 	// Create channels for handling PMs and tips
 	pmChan := make(chan types.ReceivedPM)
 	tipChan := make(chan types.ReceivedTip)
 	tipProgressChan := make(chan types.TipProgressEvent)
 
-	cfg.PMChan = pmChan
-	cfg.PMLog = logBackend.Logger("PM")
-	cfg.TipLog = logBackend.Logger("TIP")
-	cfg.TipProgressChan = tipProgressChan
-	cfg.TipReceivedLog = logBackend.Logger("TIP_RECEIVED")
-	cfg.TipReceivedChan = tipChan
+	cfg.Config.PMChan = pmChan
+	cfg.Config.PMLog = logBackend.Logger("PM")
+	cfg.Config.TipLog = logBackend.Logger("TIP")
+	cfg.Config.TipProgressChan = tipProgressChan
+	cfg.Config.TipReceivedLog = logBackend.Logger("TIP_RECEIVED")
+	cfg.Config.TipReceivedChan = tipChan
 
 	log.Infof("Starting bot...")
 
-	bot, err := kit.NewBot(cfg, logBackend)
+	botInstance, err := kit.NewBot(cfg.Config, logBackend)
 	if err != nil {
 		return fmt.Errorf("failed to create bot: %v", err)
 	}
@@ -361,7 +86,7 @@ func realMain() error {
 	// Handle PMs
 	go func() {
 		for pm := range pmChan {
-			handlePM(ctx, bot, &pm, state)
+			state.HandlePM(ctx, botInstance, &pm)
 		}
 	}()
 
@@ -380,15 +105,15 @@ func realMain() error {
 				"tip", "Received tip from user")
 			if err != nil {
 				log.Errorf("Failed to update player balance: %v", err)
-				bot.SendPM(ctx, userID.String(),
+				botInstance.SendPM(ctx, userID.String(),
 					"Error updating your balance. Please contact support.")
 			} else {
-				bot.SendPM(ctx, userID.String(),
+				botInstance.SendPM(ctx, userID.String(),
 					fmt.Sprintf("Thank you for the tip of %.8f DCR! Your balance has been updated.",
 						dcrutil.Amount(tip.AmountMatoms/1e3).ToCoin()))
 			}
 
-			bot.AckTipReceived(ctx, tip.SequenceId)
+			botInstance.AckTipReceived(ctx, tip.SequenceId)
 		}
 	}()
 
@@ -396,7 +121,7 @@ func realMain() error {
 	go func() {
 		for progress := range tipProgressChan {
 			log.Infof("Tip progress event (sequence ID: %d)", progress.SequenceId)
-			err := bot.AckTipProgress(ctx, progress.SequenceId)
+			err := botInstance.AckTipProgress(ctx, progress.SequenceId)
 			if err != nil {
 				log.Errorf("Failed to acknowledge tip progress: %v", err)
 			}
@@ -404,7 +129,7 @@ func realMain() error {
 	}()
 
 	// Run the bot
-	err = bot.Run(ctx)
+	err = botInstance.Run(ctx)
 	log.Infof("Bot exited: %v", err)
 	return err
 }

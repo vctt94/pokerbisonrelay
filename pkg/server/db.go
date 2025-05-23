@@ -5,8 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/vctt94/poker-bisonrelay/server/internal/db"
-	"github.com/vctt94/poker-bisonrelay/server/types"
+	"github.com/vctt94/poker-bisonrelay/pkg/server/internal/db"
 )
 
 // Database defines the interface for database operations
@@ -15,8 +14,7 @@ type Database interface {
 	GetPlayerBalance(playerID string) (int64, error)
 	// UpdatePlayerBalance updates a player's balance and records the transaction
 	UpdatePlayerBalance(playerID string, amount int64, transactionType, description string) error
-	// GetPlayerTransactions returns the transaction history for a player
-	GetPlayerTransactions(playerID string, limit int) ([]types.Transaction, error)
+
 	// Close closes the database connection
 	Close() error
 }

@@ -11,9 +11,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/vctt94/poker-bisonrelay/rpc/grpc/pokerrpc"
-	"github.com/vctt94/poker-bisonrelay/server/internal/db"
-	"github.com/vctt94/poker-bisonrelay/server/types"
+	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
+	"github.com/vctt94/poker-bisonrelay/pkg/server/internal/db"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -28,14 +27,14 @@ type TestServer struct {
 // InMemoryDB implements Database interface for testing
 type InMemoryDB struct {
 	balances     map[string]int64
-	transactions map[string][]types.Transaction
+	transactions map[string][]Transaction
 }
 
 // NewInMemoryDB creates a new in-memory database for testing
 func NewInMemoryDB() *InMemoryDB {
 	return &InMemoryDB{
 		balances:     make(map[string]int64),
-		transactions: make(map[string][]types.Transaction),
+		transactions: make(map[string][]Transaction),
 	}
 }
 
@@ -49,7 +48,7 @@ func (db *InMemoryDB) UpdatePlayerBalance(playerID string, amount int64, transac
 	db.balances[playerID] += amount
 
 	// Record transaction
-	tx := types.Transaction{
+	tx := Transaction{
 		ID:          int64(len(db.transactions[playerID]) + 1),
 		PlayerID:    playerID,
 		Amount:      amount,
@@ -63,7 +62,7 @@ func (db *InMemoryDB) UpdatePlayerBalance(playerID string, amount int64, transac
 }
 
 // GetPlayerTransactions returns the transaction history for a player
-func (db *InMemoryDB) GetPlayerTransactions(playerID string, limit int) ([]types.Transaction, error) {
+func (db *InMemoryDB) GetPlayerTransactions(playerID string, limit int) ([]Transaction, error) {
 	transactions := db.transactions[playerID]
 	if limit > 0 && limit < len(transactions) {
 		return transactions[:limit], nil
