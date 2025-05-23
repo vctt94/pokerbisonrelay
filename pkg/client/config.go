@@ -9,50 +9,29 @@ import (
 	"path/filepath"
 
 	"github.com/vctt94/bisonbotkit/config"
-	"github.com/vctt94/bisonbotkit/logging"
 	"github.com/vctt94/bisonbotkit/utils"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-
-	pokerutils "github.com/vctt94/poker-bisonrelay/pkg/utils"
 )
-
-// SetupClientLogging sets up logging for client applications
-func SetupClientLogging(datadir, debugLevel string) (*logging.LogBackend, error) {
-	useStdout := true
-	logConfig := logging.LogConfig{
-		LogFile:        filepath.Join(datadir, "logs", "pokerclient.log"),
-		DebugLevel:     debugLevel,
-		MaxLogFiles:    10,
-		MaxBufferLines: 1000,
-		UseStdout:      &useStdout,
-	}
-
-	logBackend, err := logging.NewLogBackend(logConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to set up logging: %v", err)
-	}
-
-	return logBackend, nil
-}
 
 // ClientFlags holds all client command line flags
 type ClientFlags struct {
-	ServerAddr         *string
-	DataDir            *string
-	URL                *string
-	GRPCServerCertPath *string
-	ClientCertPath     *string
-	ClientKeyPath      *string
-	RPCUser            *string
-	RPCPass            *string
-	GRPCHost           *string
-	GRPCPort           *string
+	ServerAddr      *string
+	DataDir         *string
+	URL             *string
+	GRPCServerCert  *string
+	BRClientCert    *string
+	BRClientRPCCert *string
+	BRClientRPCKey  *string
+	RPCUser         *string
+	RPCPass         *string
+	GRPCHost        *string
+	GRPCPort        *string
 }
 
 // ClientConfig represents the processed client configuration
 type ClientConfig struct {
-	Config     *config.ClientConfig
+	Cfg        *config.ClientConfig
 	DataDir    string
 	ServerAddr string
 	GRPCHost   string
@@ -61,16 +40,17 @@ type ClientConfig struct {
 // RegisterClientFlags registers all client command line flags
 func RegisterClientFlags() *ClientFlags {
 	return &ClientFlags{
-		ServerAddr:         flag.String("server", "", "Server address"),
-		DataDir:            flag.String("datadir", "", "Directory to load config file from"),
-		URL:                flag.String("url", "", "URL of the websocket endpoint"),
-		GRPCServerCertPath: flag.String("grpcservercert", "", "Path to server.crt file for TLS"),
-		ClientCertPath:     flag.String("clientcert", "", "Path to rpc-client.cert file"),
-		ClientKeyPath:      flag.String("clientkey", "", "Path to rpc-client.key file"),
-		RPCUser:            flag.String("rpcuser", "", "RPC user for basic authentication"),
-		RPCPass:            flag.String("rpcpass", "", "RPC password for basic authentication"),
-		GRPCHost:           flag.String("grpchost", "localhost", "GRPC server hostname"),
-		GRPCPort:           flag.String("grpcport", "50051", "GRPC server port"),
+		ServerAddr:      flag.String("server", "", "Server address"),
+		DataDir:         flag.String("datadir", "", "Directory to load config file from"),
+		URL:             flag.String("url", "", "URL of the websocket endpoint"),
+		GRPCServerCert:  flag.String("grpcservercert", "", "Path to server.crt file for TLS"),
+		BRClientCert:    flag.String("brclientcert", "", "path to brclient rpc.cert file"),
+		BRClientRPCCert: flag.String("brclientrpc.cert", "", "Path to rpc-client.cert file"),
+		BRClientRPCKey:  flag.String("brclientrpc.key", "", "Path to rpc-client.key file"),
+		RPCUser:         flag.String("rpcuser", "", "RPC user for basic authentication"),
+		RPCPass:         flag.String("rpcpass", "", "RPC password for basic authentication"),
+		GRPCHost:        flag.String("grpchost", "", "GRPC server hostname"),
+		GRPCPort:        flag.String("grpcport", "", "GRPC server port"),
 	}
 }
 
@@ -80,20 +60,6 @@ func LoadClientConfig(flags *ClientFlags, appName string) (*ClientConfig, error)
 	datadir := *flags.DataDir
 	if datadir == "" {
 		datadir = utils.AppDataDir(appName, false)
-	}
-
-	// Expand tilde in datadir path
-	if filepath.HasPrefix(datadir, "~/") {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("error getting home directory: %v", err)
-		}
-		datadir = filepath.Join(homeDir, datadir[2:])
-	}
-
-	// Ensure datadir exists
-	if err := pokerutils.EnsureDataDirExists(datadir); err != nil {
-		return nil, fmt.Errorf("error creating datadir: %v", err)
 	}
 
 	// Load the configuration
@@ -109,14 +75,17 @@ func LoadClientConfig(flags *ClientFlags, appName string) (*ClientConfig, error)
 	if *flags.URL != "" {
 		cfg.RPCURL = *flags.URL
 	}
-	if *flags.GRPCServerCertPath != "" {
-		cfg.ServerCertPath = *flags.GRPCServerCertPath
+	if *flags.GRPCServerCert != "" {
+		cfg.GRPCServerCert = *flags.GRPCServerCert
 	}
-	if *flags.ClientCertPath != "" {
-		cfg.ClientCertPath = *flags.ClientCertPath
+	if *flags.BRClientCert != "" {
+		cfg.BRClientCert = *flags.BRClientCert
 	}
-	if *flags.ClientKeyPath != "" {
-		cfg.ClientKeyPath = *flags.ClientKeyPath
+	if *flags.BRClientRPCCert != "" {
+		cfg.BRClientRPCCert = *flags.BRClientRPCCert
+	}
+	if *flags.BRClientRPCKey != "" {
+		cfg.BRClientRPCKey = *flags.BRClientRPCKey
 	}
 	if *flags.RPCUser != "" {
 		cfg.RPCUser = *flags.RPCUser
@@ -133,7 +102,7 @@ func LoadClientConfig(flags *ClientFlags, appName string) (*ClientConfig, error)
 	}
 
 	return &ClientConfig{
-		Config:     cfg,
+		Cfg:        cfg,
 		DataDir:    datadir,
 		ServerAddr: serverAddr,
 		GRPCHost:   *flags.GRPCHost,

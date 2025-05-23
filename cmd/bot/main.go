@@ -27,14 +27,26 @@ func realMain() error {
 		return fmt.Errorf("configuration error: %v", err)
 	}
 
-	// Initialize logging
-	logBackend, err := bot.SetupBotLogging(cfg.LogDir, cfg.Config.Debug)
-	if err != nil {
-		return fmt.Errorf("logging error: %v", err)
-	}
-	defer logBackend.Close()
+	// Create channels for handling PMs and tips
+	pmChan := make(chan types.ReceivedPM)
+	tipChan := make(chan types.ReceivedTip)
+	tipProgressChan := make(chan types.TipProgressEvent)
 
-	log := logBackend.Logger("PokerBot")
+	cfg.Config.PMChan = pmChan
+	cfg.Config.TipProgressChan = tipProgressChan
+	cfg.Config.TipReceivedChan = tipChan
+
+	botInstance, err := kit.NewBot(cfg.Config)
+	if err != nil {
+		return fmt.Errorf("failed to create bot: %v", err)
+	}
+	log := botInstance.LogBackend.Logger("BOT")
+
+	log.Infof("Starting bot...")
+	// Set up context with cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer botInstance.Close()
 
 	// Initialize database
 	db, err := server.NewDatabase(filepath.Join(cfg.DataDir, "poker.db"))
@@ -49,6 +61,8 @@ func realMain() error {
 		return fmt.Errorf("failed to setup gRPC server: %v", err)
 	}
 
+	// Initialize bot state
+	state := bot.NewState(db)
 	go func() {
 		log.Infof("Starting gRPC poker server on %s", cfg.ServerAddress)
 		if err := grpcServer.Serve(grpcLis); err != nil {
@@ -56,33 +70,6 @@ func realMain() error {
 		}
 	}()
 	defer grpcServer.Stop() // Ensure gRPC server is stopped on exit
-
-	// Initialize bot state
-	state := bot.NewState(db)
-
-	// Create channels for handling PMs and tips
-	pmChan := make(chan types.ReceivedPM)
-	tipChan := make(chan types.ReceivedTip)
-	tipProgressChan := make(chan types.TipProgressEvent)
-
-	cfg.Config.PMChan = pmChan
-	cfg.Config.PMLog = logBackend.Logger("PM")
-	cfg.Config.TipLog = logBackend.Logger("TIP")
-	cfg.Config.TipProgressChan = tipProgressChan
-	cfg.Config.TipReceivedLog = logBackend.Logger("TIP_RECEIVED")
-	cfg.Config.TipReceivedChan = tipChan
-
-	log.Infof("Starting bot...")
-
-	botInstance, err := kit.NewBot(cfg.Config, logBackend)
-	if err != nil {
-		return fmt.Errorf("failed to create bot: %v", err)
-	}
-
-	// Set up context with cancellation
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	// Handle PMs
 	go func() {
 		for pm := range pmChan {

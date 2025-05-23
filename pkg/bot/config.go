@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 
 	"github.com/vctt94/bisonbotkit/config"
-	"github.com/vctt94/bisonbotkit/logging"
 	"github.com/vctt94/bisonbotkit/utils"
 )
 
@@ -32,7 +31,8 @@ type BotConfig struct {
 	ServerAddress string
 	CertFile      string
 	KeyFile       string
-	LogDir        string
+	MaxLogFiles   string
+	LogFile       string
 }
 
 // RegisterBotFlags registers all bot command line flags
@@ -100,22 +100,7 @@ func LoadBotConfig(flags *BotFlags, appName string) (*BotConfig, error) {
 		ServerAddress: serverAddress,
 		CertFile:      *flags.CertFile,
 		KeyFile:       *flags.KeyFile,
-		LogDir:        logDir,
+		MaxLogFiles:   "5",
+		LogFile:       filepath.Join(logDir, "pokerbot.log"),
 	}, nil
-}
-
-// SetupBotLogging sets up logging for bot applications
-func SetupBotLogging(logDir, debugLevel string) (*logging.LogBackend, error) {
-	logConfig := logging.LogConfig{
-		LogFile:     filepath.Join(logDir, "pokerbot.log"),
-		DebugLevel:  debugLevel,
-		MaxLogFiles: 5,
-	}
-
-	logBackend, err := logging.NewLogBackend(logConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize logging: %v", err)
-	}
-
-	return logBackend, nil
 }

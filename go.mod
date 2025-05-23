@@ -9,7 +9,7 @@ require (
 	github.com/decred/dcrd/dcrutil/v4 v4.0.2
 	github.com/mattn/go-sqlite3 v1.14.28
 	github.com/stretchr/testify v1.10.0
-	github.com/vctt94/bisonbotkit v0.0.1
+	github.com/vctt94/bisonbotkit v0.0.2-0.20250523161144-863683dc780c
 	google.golang.org/grpc v1.64.0
 	google.golang.org/protobuf v1.36.6
 )

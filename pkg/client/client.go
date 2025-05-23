@@ -12,7 +12,6 @@ import (
 	"github.com/companyzero/bisonrelay/clientrpc/types"
 	"github.com/vctt94/bisonbotkit/botclient"
 	"github.com/vctt94/bisonbotkit/config"
-	"github.com/vctt94/bisonbotkit/logging"
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 	"github.com/vctt94/poker-bisonrelay/pkg/utils"
 	"google.golang.org/grpc"
@@ -33,20 +32,22 @@ type Client struct {
 
 // Config holds the client configuration options
 type Config struct {
-	ServerAddr         string
-	DataDir            string
-	RPCURL             string
-	GRPCServerCertPath string
-	ClientCertPath     string
-	ClientKeyPath      string
-	RPCUser            string
-	RPCPass            string
-	GRPCHost           string
-	GRPCPort           string
+	Debug           string
+	ServerAddr      string
+	DataDir         string
+	RPCURL          string
+	GRPCServerCert  string
+	BRClientCert    string
+	BRClientRPCCert string
+	BRClientRPCKey  string
+	RPCUser         string
+	RPCPass         string
+	GRPCHost        string
+	GRPCPort        string
 }
 
 // NewClient creates a new poker client with the given configuration
-func NewClient(ctx context.Context, cfg *Config, logBackend interface{}) (*Client, error) {
+func NewClient(ctx context.Context, cfg *Config) (*Client, error) {
 	// Ensure datadir exists
 	if err := utils.EnsureDataDirExists(cfg.DataDir); err != nil {
 		return nil, fmt.Errorf("failed to create datadir: %v", err)
@@ -65,14 +66,17 @@ func NewClient(ctx context.Context, cfg *Config, logBackend interface{}) (*Clien
 	if cfg.RPCURL != "" {
 		clientConfig.RPCURL = cfg.RPCURL
 	}
-	if cfg.GRPCServerCertPath != "" {
-		clientConfig.ServerCertPath = cfg.GRPCServerCertPath
+	if cfg.GRPCServerCert != "" {
+		clientConfig.GRPCServerCert = cfg.GRPCServerCert
 	}
-	if cfg.ClientCertPath != "" {
-		clientConfig.ClientCertPath = cfg.ClientCertPath
+	if cfg.BRClientCert != "" {
+		clientConfig.BRClientCert = cfg.BRClientCert
 	}
-	if cfg.ClientKeyPath != "" {
-		clientConfig.ClientKeyPath = cfg.ClientKeyPath
+	if cfg.BRClientRPCCert != "" {
+		clientConfig.BRClientRPCCert = cfg.BRClientRPCCert
+	}
+	if cfg.BRClientRPCKey != "" {
+		clientConfig.BRClientRPCKey = cfg.BRClientRPCKey
 	}
 	if cfg.RPCUser != "" {
 		clientConfig.RPCUser = cfg.RPCUser
@@ -86,20 +90,13 @@ func NewClient(ctx context.Context, cfg *Config, logBackend interface{}) (*Clien
 		clientConfig.ServerAddr = fmt.Sprintf("%s:%s", cfg.GRPCHost, cfg.GRPCPort)
 	}
 
-	// Get logger from logBackend
-	logBackendTyped, ok := logBackend.(*logging.LogBackend)
-	if !ok {
-		return nil, fmt.Errorf("invalid logBackend type")
-	}
-	log := logBackendTyped.Logger("PokerClient")
-	log.Infof("Using server address: %s", clientConfig.ServerAddr)
-
 	// Initialize BisonRelay client
-	brClient, err := botclient.NewClient(clientConfig, logBackendTyped)
+	brClient, err := botclient.NewClient(clientConfig)
 	if err != nil {
-		log.Errorf("Failed to create bot client: %v", err)
-		// Continue without BR client for now
+		fmt.Errorf("Failed to create bot client: %v", err)
+		os.Exit(1)
 	}
+	log := brClient.LogBackend.Logger("PokerClient")
 
 	client := &Client{
 		Config:   clientConfig,
