@@ -3,7 +3,7 @@ package poker
 import (
 	"sort"
 
-	"github.com/vctt94/poker-bisonrelay/rpc/grpc/pokerrpc"
+	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
 // HandRank represents the rank of a poker hand

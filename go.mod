@@ -3,14 +3,13 @@ module github.com/vctt94/poker-bisonrelay
 go 1.24.1
 
 require (
-	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.4
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/companyzero/bisonrelay v0.2.4-0.20250321132913-c1cc5b0fd438
 	github.com/decred/dcrd/dcrutil/v4 v4.0.2
 	github.com/mattn/go-sqlite3 v1.14.28
 	github.com/stretchr/testify v1.10.0
-	github.com/vctt94/bisonbotkit v0.0.1
+	github.com/vctt94/bisonbotkit v0.0.2-0.20250523161144-863683dc780c
 	google.golang.org/grpc v1.64.0
 	google.golang.org/protobuf v1.36.6
 )
@@ -19,7 +18,6 @@ replace github.com/companyzero/bisonrelay => ../../bisonrelay
 
 require (
 	github.com/agl/ed25519 v0.0.0-20170116200512-5312a6153412 // indirect
-	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect
 	github.com/charmbracelet/x/ansi v0.8.0 // indirect

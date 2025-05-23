@@ -3,8 +3,6 @@ package db
 import (
 	"database/sql"
 	"fmt"
-
-	"github.com/vctt94/poker-bisonrelay/server/types"
 )
 
 // DB represents the database connection
@@ -102,33 +100,6 @@ func (db *DB) UpdatePlayerBalance(playerID string, amount int64, transactionType
 	}
 
 	return tx.Commit()
-}
-
-// GetPlayerTransactions returns the transaction history for a player
-func (db *DB) GetPlayerTransactions(playerID string, limit int) ([]types.Transaction, error) {
-	rows, err := db.Query(`
-		SELECT id, player_id, amount, type, description, created_at
-		FROM transactions
-		WHERE player_id = ?
-		ORDER BY created_at DESC
-		LIMIT ?
-	`, playerID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var transactions []types.Transaction
-	for rows.Next() {
-		var t types.Transaction
-		err := rows.Scan(&t.ID, &t.PlayerID, &t.Amount, &t.Type, &t.Description, &t.CreatedAt)
-		if err != nil {
-			return nil, err
-		}
-		transactions = append(transactions, t)
-	}
-
-	return transactions, nil
 }
 
 // Close closes the database connection

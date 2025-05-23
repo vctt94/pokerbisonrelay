@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vctt94/poker-bisonrelay/rpc/grpc/pokerrpc"
+	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
 // GameConfig holds configuration for a new game
