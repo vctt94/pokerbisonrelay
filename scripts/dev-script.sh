@@ -40,23 +40,5 @@ tmux new-window -t "$SESSION":4 -n brserver \
    ./brserver             # ajuste flags se for usar outra porta
   '
 
-###############################################################################
-# 5-7 : brclient ×3  (já esperam brserver escutar em 12345)
-###############################################################################
-# BRCLIENT_SRC=~/projects/bisonrelay/brclient
-# CLIENT_CFG_DIRS=(/home/vctt/brclientdirs/dir1 /home/vctt/brclientdirs/dir2 /home/vctt/brclientdirs/dir3)
-
-# ( cd "$BRCLIENT_SRC" && go build -o brclient )
-
-# for idx in "${!CLIENT_CFG_DIRS[@]}"; do
-#   win=$((5 + idx))
-#   cdir=${CLIENT_CFG_DIRS[$idx]}
-#   cname="brclient$((idx+1))"
-#   tmux new-window -t "$SESSION":$win -n "$cname" \
-#     'until nc -z localhost 12345; do echo waiting for brserver; sleep 3; done;
-#      cd '"$BRCLIENT_SRC"';
-#      ./brclient -cfg '"$cdir"'/brclient.conf 2>&1 | tee '"$LOGDIR"'/'"$cname"'.log'
-# done
-
 tmux select-window -t "$SESSION":0
 tmux attach -t "$SESSION"
