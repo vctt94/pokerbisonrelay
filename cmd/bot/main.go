@@ -16,15 +16,54 @@ import (
 	"github.com/vctt94/poker-bisonrelay/pkg/server"
 )
 
+var (
+	dataDir            = flag.String("datadir", "", "Data directory for bot files")
+	url                = flag.String("url", "", "Server URL")
+	grpcServerCertPath = flag.String("grpcservercert", "", "Path to gRPC server certificate")
+	certFile           = flag.String("cert", "", "Path to certificate file")
+	keyFile            = flag.String("key", "", "Path to key file")
+	rpcUser            = flag.String("rpcuser", "", "RPC username")
+	rpcPass            = flag.String("rpcpass", "", "RPC password")
+	grpcHost           = flag.String("grpchost", "", "gRPC host address")
+	grpcPort           = flag.String("grpcport", "", "gRPC port")
+	debugLevel         = flag.String("debuglevel", "", "Debug level")
+)
+
 func realMain() error {
-	// Register and parse flags
-	flags := bot.RegisterBotFlags()
+	// Parse flags
 	flag.Parse()
 
 	// Load configuration
-	cfg, err := bot.LoadBotConfig(flags, "pokerbot")
+	cfg, err := bot.LoadBotConfig("pokerbot", *dataDir)
 	if err != nil {
 		return fmt.Errorf("configuration error: %v", err)
+	}
+
+	// Override config with flags if provided
+	if *grpcHost != "" {
+		cfg.Config.ExtraConfig["grpchost"] = *grpcHost
+	}
+	if *grpcPort != "" {
+		cfg.Config.ExtraConfig["grpcport"] = *grpcPort
+	}
+	if *certFile != "" {
+		cfg.CertFile = *certFile
+	}
+	if *keyFile != "" {
+		cfg.KeyFile = *keyFile
+	}
+
+	// Rebuild server address if gRPC host/port were overridden
+	if *grpcHost != "" || *grpcPort != "" {
+		grpcHostVal := cfg.Config.ExtraConfig["grpchost"]
+		grpcPortVal := cfg.Config.ExtraConfig["grpcport"]
+		if grpcHostVal == "" {
+			return fmt.Errorf("GRPCHost is required")
+		}
+		if grpcPortVal == "" {
+			return fmt.Errorf("GRPCPort is required")
+		}
+		cfg.ServerAddress = fmt.Sprintf("%s:%s", grpcHostVal, grpcPortVal)
 	}
 
 	// Create channels for handling PMs and tips

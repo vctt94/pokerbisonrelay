@@ -34,7 +34,7 @@ tmux new-session -d -s "$SESSION" -n brclient \
 ###############################################################################
 # Window 1: bot
 ###############################################################################
-tmux new-window -t "$SESSION" -n bot bash -lc \
+tmux new-window -t "$SESSION" -n bot \
   "until nc -z localhost $BR_RPC_PORT; do \
        echo 'waiting for WS on :$BR_RPC_PORT'; sleep 3; \
    done; \
