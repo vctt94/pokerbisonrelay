@@ -105,7 +105,7 @@ func (s *State) handleCreateTable(ctx context.Context, bot *kit.Bot, pm *types.R
 	tableID := fmt.Sprintf("table-%d", time.Now().Unix())
 	table := poker.NewTable(poker.TableConfig{
 		ID:         tableID,
-		CreatorID:  playerID,
+		HostID:     playerID,
 		BuyIn:      int64(buyIn),
 		MinPlayers: 2,
 		MaxPlayers: 6,

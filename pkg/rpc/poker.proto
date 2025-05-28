@@ -29,6 +29,7 @@ service LobbyService {
   rpc JoinTable(JoinTableRequest) returns (JoinTableResponse) {}
   rpc LeaveTable(LeaveTableRequest) returns (LeaveTableResponse) {}
   rpc GetTables(GetTablesRequest) returns (GetTablesResponse) {}
+  rpc GetPlayerCurrentTable(GetPlayerCurrentTableRequest) returns (GetPlayerCurrentTableResponse) {}
   
   // Player management
   rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse) {}
@@ -206,7 +207,6 @@ message LeaveTableRequest {
 message LeaveTableResponse {
   bool success = 1;
   string message = 2;
-  int64 refund_amount = 3;
 }
 
 message GetTablesRequest {}
@@ -276,6 +276,12 @@ message Notification {
   repeated Card cards = 6;
   HandRank hand_rank = 7;
   int64 new_balance = 8;
+  Table table = 9;
+  bool ready = 10;
+  bool started = 11;
+  bool game_ready_to_play = 12;
+  int32 countdown = 13;
+  repeated Winner winners = 14;
 }
 
 // Common Messages
@@ -316,4 +322,12 @@ message SetPlayerUnreadyRequest {
 message SetPlayerUnreadyResponse {
   bool success = 1;
   string message = 2;
+}
+
+message GetPlayerCurrentTableRequest {
+  string player_id = 1;
+}
+
+message GetPlayerCurrentTableResponse {
+  string table_id = 1;
 } 

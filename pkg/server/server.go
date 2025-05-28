@@ -48,7 +48,7 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 	// Create table config
 	cfg := poker.TableConfig{
 		ID:         fmt.Sprintf("table-%d", time.Now().UnixNano()),
-		CreatorID:  req.PlayerId,
+		HostID:     req.PlayerId,
 		BuyIn:      req.BuyIn,
 		MinPlayers: int(req.MinPlayers),
 		MaxPlayers: int(req.MaxPlayers),
@@ -127,6 +127,10 @@ func (s *Server) LeaveTable(ctx context.Context, req *pokerrpc.LeaveTableRequest
 		return &pokerrpc.LeaveTableResponse{Success: false, Message: "Player not at table"}, nil
 	}
 
+	// Check if the leaving player is the host of the table
+	config := table.GetConfig()
+	isHost := req.PlayerId == config.HostID
+
 	// Remove player from table
 	err := table.RemovePlayer(req.PlayerId)
 	if err != nil {
@@ -136,7 +140,7 @@ func (s *Server) LeaveTable(ctx context.Context, req *pokerrpc.LeaveTableRequest
 	// Refund buy-in if game hasn't started
 	refundAmount := int64(0)
 	if !table.IsGameStarted() {
-		refundAmount = table.GetConfig().BuyIn
+		refundAmount = config.BuyIn
 		// Update player's balance in the database
 		err = s.db.UpdatePlayerBalance(req.PlayerId, refundAmount, "table refund", "left table")
 		if err != nil {
@@ -144,10 +148,33 @@ func (s *Server) LeaveTable(ctx context.Context, req *pokerrpc.LeaveTableRequest
 		}
 	}
 
+	// If the host leaves, close the table completely
+	if isHost {
+		// Refund remaining players who haven't started playing
+		if !table.IsGameStarted() {
+			remainingPlayers := table.GetPlayers()
+			for _, p := range remainingPlayers {
+				// Refund their buy-in
+				err = s.db.UpdatePlayerBalance(p.ID, table.GetConfig().BuyIn, "table closed by host", "host left table")
+				if err != nil {
+					// Log error but continue with table closure
+					// In a production system, you might want better error handling here
+				}
+			}
+		}
+
+		// Remove the table from the server
+		delete(s.tables, req.TableId)
+
+		return &pokerrpc.LeaveTableResponse{
+			Success: true,
+			Message: "Host left - table closed",
+		}, nil
+	}
+
 	return &pokerrpc.LeaveTableResponse{
-		Success:      true,
-		Message:      "Successfully left table",
-		RefundAmount: refundAmount,
+		Success: true,
+		Message: "Successfully left table",
 	}, nil
 }
 
@@ -161,7 +188,7 @@ func (s *Server) GetTables(ctx context.Context, req *pokerrpc.GetTablesRequest) 
 		config := table.GetConfig()
 		protoTable := &pokerrpc.Table{
 			Id:              config.ID,
-			HostId:          config.CreatorID,
+			HostId:          config.HostID,
 			SmallBlind:      config.SmallBlind,
 			BigBlind:        config.BigBlind,
 			MaxPlayers:      int32(table.GetMaxPlayers()),
@@ -276,6 +303,25 @@ func (s *Server) SetPlayerUnready(ctx context.Context, req *pokerrpc.SetPlayerUn
 	return &pokerrpc.SetPlayerUnreadyResponse{
 		Success: true,
 		Message: "Player is unready",
+	}, nil
+}
+
+func (s *Server) GetPlayerCurrentTable(ctx context.Context, req *pokerrpc.GetPlayerCurrentTableRequest) (*pokerrpc.GetPlayerCurrentTableResponse, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Search through all tables to find if the player is in any table
+	for _, table := range s.tables {
+		if table.GetPlayer(req.PlayerId) != nil {
+			return &pokerrpc.GetPlayerCurrentTableResponse{
+				TableId: table.GetConfig().ID,
+			}, nil
+		}
+	}
+
+	// Player is not in any table, return empty table ID
+	return &pokerrpc.GetPlayerCurrentTableResponse{
+		TableId: "",
 	}, nil
 }
 
@@ -481,9 +527,6 @@ func (s *Server) GetWinners(ctx context.Context, req *pokerrpc.GetWinnersRequest
 
 // StartNotificationStream handles notification streaming
 func (s *Server) StartNotificationStream(req *pokerrpc.StartNotificationStreamRequest, stream pokerrpc.LobbyService_StartNotificationStreamServer) error {
-	// Implementation for notification streaming
-	// This would typically involve subscribing to a notification channel
-	// and sending notifications as they occur
 	playerID := req.PlayerId
 	if playerID == "" {
 		return status.Error(codes.InvalidArgument, "player ID is required")
@@ -499,78 +542,9 @@ func (s *Server) StartNotificationStream(req *pokerrpc.StartNotificationStreamRe
 		return err
 	}
 
-	// Keep the stream open with periodic heartbeat notifications
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
+	// Keep the stream open and wait for context cancellation
+	// Notifications will be sent through specific events rather than polling
 	ctx := stream.Context()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			// Send periodic updates for all tables this player is in
-			s.mu.RLock()
-			playerHasTables := false
-
-			for _, table := range s.tables {
-				// Only send updates for tables that this player is in
-				if table.GetPlayer(playerID) != nil {
-					playerHasTables = true
-					players := make([]*pokerrpc.Player, 0, len(table.GetPlayers()))
-					for _, p := range table.GetPlayers() {
-						players = append(players, &pokerrpc.Player{
-							Id:      p.ID,
-							Balance: p.Balance,
-							IsReady: p.IsReady,
-							Folded:  p.HasFolded,
-						})
-					}
-
-					// Determine notification type based on game phase
-					var notificationType pokerrpc.NotificationType
-					switch table.GetGamePhase() {
-					case pokerrpc.GamePhase_WAITING:
-						notificationType = pokerrpc.NotificationType_PLAYER_READY
-					case pokerrpc.GamePhase_PRE_FLOP:
-						notificationType = pokerrpc.NotificationType_GAME_STARTED
-					case pokerrpc.GamePhase_FLOP, pokerrpc.GamePhase_TURN, pokerrpc.GamePhase_RIVER:
-						notificationType = pokerrpc.NotificationType_NEW_ROUND
-					case pokerrpc.GamePhase_SHOWDOWN:
-						notificationType = pokerrpc.NotificationType_SHOWDOWN_RESULT
-					default:
-						notificationType = pokerrpc.NotificationType_UNKNOWN
-					}
-
-					notification := &pokerrpc.Notification{
-						Type:     notificationType,
-						Message:  fmt.Sprintf("Game update for table %s: Phase=%s, Players=%d", table.GetConfig().ID, table.GetGamePhase(), len(players)),
-						TableId:  table.GetConfig().ID,
-						PlayerId: playerID,
-					}
-
-					// Send to client
-					if err := stream.Send(notification); err != nil {
-						s.mu.RUnlock()
-						return err
-					}
-				}
-			}
-
-			// If player isn't at any tables, send a heartbeat notification
-			if !playerHasTables {
-				heartbeatNotification := &pokerrpc.Notification{
-					Type:     pokerrpc.NotificationType_UNKNOWN,
-					Message:  "Heartbeat",
-					PlayerId: playerID,
-				}
-				if err := stream.Send(heartbeatNotification); err != nil {
-					s.mu.RUnlock()
-					return err
-				}
-			}
-			s.mu.RUnlock()
-		}
-	}
+	<-ctx.Done()
+	return nil
 }

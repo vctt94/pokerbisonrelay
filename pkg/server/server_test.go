@@ -427,3 +427,149 @@ func TestPokerGameFlow(t *testing.T) {
 		t.Errorf("expected pot size 40, got %d", state.GameState.Pot)
 	}
 }
+
+func TestHostLeavesTableClosure(t *testing.T) {
+	// Create a new server
+	db := NewInMemoryDB()
+	server := NewServer(db)
+	ctx := context.Background()
+
+	// Create three players
+	hostID := "host"
+	player1ID := "player1"
+	player2ID := "player2"
+	initialBalance := int64(1000)
+
+	// Set initial balances
+	for _, playerID := range []string{hostID, player1ID, player2ID} {
+		_, err := server.UpdateBalance(ctx, &pokerrpc.UpdateBalanceRequest{
+			PlayerId: playerID,
+			Amount:   initialBalance,
+		})
+		require.NoError(t, err)
+	}
+
+	// Host creates a table
+	createTableResp, err := server.CreateTable(ctx, &pokerrpc.CreateTableRequest{
+		PlayerId:   hostID,
+		BuyIn:      100,
+		MinPlayers: 2,
+		MaxPlayers: 3,
+		SmallBlind: 5,
+		BigBlind:   10,
+		MinBalance: 100,
+	})
+	require.NoError(t, err)
+	tableID := createTableResp.TableId
+
+	// Player1 and Player2 join the table
+	_, err = server.JoinTable(ctx, &pokerrpc.JoinTableRequest{
+		PlayerId: player1ID,
+		TableId:  tableID,
+	})
+	require.NoError(t, err)
+
+	_, err = server.JoinTable(ctx, &pokerrpc.JoinTableRequest{
+		PlayerId: player2ID,
+		TableId:  tableID,
+	})
+	require.NoError(t, err)
+
+	// Verify table exists and has 3 players
+	tablesResp, err := server.GetTables(ctx, &pokerrpc.GetTablesRequest{})
+	require.NoError(t, err)
+	require.Len(t, tablesResp.Tables, 1)
+	assert.Equal(t, int32(3), tablesResp.Tables[0].CurrentPlayers)
+
+	// Get initial balances before host leaves
+	balance1Before, err := server.GetBalance(ctx, &pokerrpc.GetBalanceRequest{PlayerId: player1ID})
+	require.NoError(t, err)
+	balance2Before, err := server.GetBalance(ctx, &pokerrpc.GetBalanceRequest{PlayerId: player2ID})
+	require.NoError(t, err)
+
+	// Host leaves the table
+	leaveResp, err := server.LeaveTable(ctx, &pokerrpc.LeaveTableRequest{
+		PlayerId: hostID,
+		TableId:  tableID,
+	})
+	require.NoError(t, err)
+	assert.True(t, leaveResp.Success)
+	assert.Equal(t, "Host left - table closed", leaveResp.Message)
+
+	// Verify table is removed from server
+	tablesResp, err = server.GetTables(ctx, &pokerrpc.GetTablesRequest{})
+	require.NoError(t, err)
+	assert.Len(t, tablesResp.Tables, 0, "Table should be removed when host leaves")
+
+	// Verify that remaining players got their buy-ins refunded
+	balance1After, err := server.GetBalance(ctx, &pokerrpc.GetBalanceRequest{PlayerId: player1ID})
+	require.NoError(t, err)
+	balance2After, err := server.GetBalance(ctx, &pokerrpc.GetBalanceRequest{PlayerId: player2ID})
+	require.NoError(t, err)
+
+	// Players should have their buy-ins refunded (balance should be back to initial)
+	assert.Equal(t, balance1Before.Balance+100, balance1After.Balance, "Player1 should get buy-in refunded")
+	assert.Equal(t, balance2Before.Balance+100, balance2After.Balance, "Player2 should get buy-in refunded")
+}
+
+func TestNonHostLeavesTable(t *testing.T) {
+	// Create a new server
+	db := NewInMemoryDB()
+	server := NewServer(db)
+	ctx := context.Background()
+
+	// Create two players
+	hostID := "host"
+	playerID := "player"
+	initialBalance := int64(1000)
+
+	// Set initial balances
+	for _, id := range []string{hostID, playerID} {
+		_, err := server.UpdateBalance(ctx, &pokerrpc.UpdateBalanceRequest{
+			PlayerId: id,
+			Amount:   initialBalance,
+		})
+		require.NoError(t, err)
+	}
+
+	// Host creates a table
+	createTableResp, err := server.CreateTable(ctx, &pokerrpc.CreateTableRequest{
+		PlayerId:   hostID,
+		BuyIn:      100,
+		MinPlayers: 2,
+		MaxPlayers: 2,
+		SmallBlind: 5,
+		BigBlind:   10,
+		MinBalance: 100,
+	})
+	require.NoError(t, err)
+	tableID := createTableResp.TableId
+
+	// Player joins the table
+	_, err = server.JoinTable(ctx, &pokerrpc.JoinTableRequest{
+		PlayerId: playerID,
+		TableId:  tableID,
+	})
+	require.NoError(t, err)
+
+	// Verify table exists and has 2 players
+	tablesResp, err := server.GetTables(ctx, &pokerrpc.GetTablesRequest{})
+	require.NoError(t, err)
+	require.Len(t, tablesResp.Tables, 1)
+	assert.Equal(t, int32(2), tablesResp.Tables[0].CurrentPlayers)
+
+	// Non-host player leaves the table
+	leaveResp, err := server.LeaveTable(ctx, &pokerrpc.LeaveTableRequest{
+		PlayerId: playerID,
+		TableId:  tableID,
+	})
+	require.NoError(t, err)
+	assert.True(t, leaveResp.Success)
+	assert.Equal(t, "Successfully left table", leaveResp.Message)
+
+	// Verify table still exists (should not be closed when non-host leaves)
+	tablesResp, err = server.GetTables(ctx, &pokerrpc.GetTablesRequest{})
+	require.NoError(t, err)
+	assert.Len(t, tablesResp.Tables, 1, "Table should still exist when non-host leaves")
+	assert.Equal(t, int32(1), tablesResp.Tables[0].CurrentPlayers, "Table should have 1 player remaining")
+}

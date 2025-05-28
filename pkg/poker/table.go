@@ -3,6 +3,7 @@ package poker
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 // TableConfig holds configuration for a new poker table
 type TableConfig struct {
 	ID         string
-	CreatorID  string
+	HostID     string
 	BuyIn      int64
 	MinPlayers int
 	MaxPlayers int
@@ -178,6 +179,12 @@ func (t *Table) GetPlayers() []*Player {
 		players = append(players, p)
 	}
 
+	// Sort by TableSeat to ensure consistent ordering
+	// This prevents players from appearing to move up/down in the UI
+	sort.Slice(players, func(i, j int) bool {
+		return players[i].TableSeat < players[j].TableSeat
+	})
+
 	return players
 }
 
@@ -290,7 +297,7 @@ func (t *Table) Subscribe(ctx context.Context) chan *pokerrpc.GameUpdate {
 	updates := make(chan *pokerrpc.GameUpdate, 10)
 	go func() {
 		defer close(updates)
-		ticker := time.NewTicker(1 * time.Second)
+		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 
 		for {
@@ -308,6 +315,12 @@ func (t *Table) Subscribe(ctx context.Context) chan *pokerrpc.GameUpdate {
 						IsReady: p.IsReady,
 					})
 				}
+
+				// Sort by player ID to ensure consistent ordering
+				// This prevents players from appearing to move up/down in the UI
+				sort.Slice(players, func(i, j int) bool {
+					return players[i].Id < players[j].Id
+				})
 
 				var currentPlayerID string
 				if t.game != nil && len(t.game.players) > 0 {

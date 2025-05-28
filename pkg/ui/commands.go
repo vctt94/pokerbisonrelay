@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,6 +21,7 @@ type playerUnreadyMsg struct{}
 type gameStartedMsg struct{}
 type gameUpdateMsg *pokerrpc.GameUpdate
 type tickMsg struct{}
+type tableNotFoundMsg struct{}
 
 // Helper functions for commands
 func getBalanceCmd(ctx context.Context, clientID string, lobbyClient pokerrpc.LobbyServiceClient) tea.Cmd {
@@ -120,6 +122,10 @@ func checkGameStateCmd(ctx context.Context, clientID, tableID string, pokerClien
 			TableId: tableID,
 		})
 		if err != nil {
+			// Check if this is a "table not found" error
+			if strings.Contains(err.Error(), "table not found") {
+				return tableNotFoundMsg{}
+			}
 			return errorMsg(err)
 		}
 		return gameUpdateMsg(resp.GameState)
@@ -127,7 +133,7 @@ func checkGameStateCmd(ctx context.Context, clientID, tableID string, pokerClien
 }
 
 func gameUpdateTicker() tea.Cmd {
-	return tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
+	return tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
 		return tickMsg{}
 	})
 }
@@ -191,7 +197,18 @@ func betCmd(ctx context.Context, clientID, tableID string, amount int64, pokerCl
 }
 
 func updateMenuOptionsForGameState(m *Model) {
-	if m.state == stateGameLobby {
+	if m.state == stateMainMenu {
+		m.menuOptions = []menuOption{
+			optionListTables,
+			optionCreateTable,
+			optionJoinTable,
+			optionCheckBalance,
+			optionQuit,
+		}
+		if m.tableID != "" {
+			m.menuOptions = append([]menuOption{"Return to Table"}, m.menuOptions...)
+		}
+	} else if m.state == stateGameLobby {
 		m.menuOptions = []menuOption{
 			optionSetReady,
 			optionSetUnready,

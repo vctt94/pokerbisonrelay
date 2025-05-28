@@ -7,6 +7,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/companyzero/bisonrelay v0.2.4-0.20250321132913-c1cc5b0fd438
 	github.com/decred/dcrd/dcrutil/v4 v4.0.2
+	github.com/decred/slog v1.2.0
 	github.com/mattn/go-sqlite3 v1.14.28
 	github.com/stretchr/testify v1.10.0
 	github.com/vctt94/bisonbotkit v0.0.2-0.20250523161144-863683dc780c
@@ -15,6 +16,8 @@ require (
 )
 
 replace github.com/companyzero/bisonrelay => ../../bisonrelay
+
+replace github.com/vctt94/bisonbotkit => ../bisonbotkit
 
 require (
 	github.com/agl/ed25519 v0.0.0-20170116200512-5312a6153412 // indirect
@@ -35,7 +38,6 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0 // indirect
 	github.com/decred/dcrd/txscript/v4 v4.1.1 // indirect
 	github.com/decred/dcrd/wire v1.7.0 // indirect
-	github.com/decred/slog v1.2.0 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/jrick/logrotate v1.1.2 // indirect

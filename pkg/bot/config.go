@@ -89,10 +89,13 @@ func LoadBotConfig(flags *BotFlags, appName string) (*BotConfig, error) {
 	}
 
 	// Set grpc server address
-	serverAddress := ":50051"
-	if *flags.GRPCHost != "" && *flags.GRPCPort != "" {
-		serverAddress = fmt.Sprintf("%s:%s", *flags.GRPCHost, *flags.GRPCPort)
+	if *flags.GRPCHost == "" {
+		return nil, fmt.Errorf("GRPCHost is required")
 	}
+	if *flags.GRPCPort == "" {
+		return nil, fmt.Errorf("GRPCPort is required")
+	}
+	serverAddress := fmt.Sprintf("%s:%s", *flags.GRPCHost, *flags.GRPCPort)
 
 	return &BotConfig{
 		Config:        cfg,

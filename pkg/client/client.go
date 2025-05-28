@@ -10,8 +10,9 @@ import (
 	"path/filepath"
 
 	"github.com/companyzero/bisonrelay/clientrpc/types"
+	"github.com/decred/slog"
 	"github.com/vctt94/bisonbotkit/botclient"
-	"github.com/vctt94/bisonbotkit/config"
+	"github.com/vctt94/bisonbotkit/logging"
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 	"github.com/vctt94/poker-bisonrelay/pkg/utils"
 	"google.golang.org/grpc"
@@ -20,78 +21,68 @@ import (
 
 // Client represents a poker client with all necessary components
 type Client struct {
-	ID          string
-	Config      *config.ClientConfig
-	DataDir     string
-	BRClient    interface{} // Use interface{} to avoid type issues
-	Logger      interface{} // Use interface{} to avoid type issues
-	LobbyClient pokerrpc.LobbyServiceClient
-	PokerClient pokerrpc.PokerServiceClient
-	conn        *grpc.ClientConn
-}
+	ID     string
+	Config *PokerClientConfig
 
-// Config holds the client configuration options
-type Config struct {
-	Debug           string
-	ServerAddr      string
-	DataDir         string
-	RPCURL          string
-	GRPCServerCert  string
-	BRClientCert    string
-	BRClientRPCCert string
-	BRClientRPCKey  string
-	RPCUser         string
-	RPCPass         string
-	GRPCHost        string
-	GRPCPort        string
+	BRClient      *botclient.BotClient
+	log           slog.Logger
+	LogBackend    *logging.LogBackend
+	LobbyService  pokerrpc.LobbyServiceClient
+	PokerServcice pokerrpc.PokerServiceClient
+	conn          *grpc.ClientConn
 }
 
 // NewClient creates a new poker client with the given configuration
-func NewClient(ctx context.Context, cfg *Config) (*Client, error) {
+func NewClient(ctx context.Context, cfg *PokerClientConfig) (*Client, error) {
 	// Ensure datadir exists
 	if err := utils.EnsureDataDirExists(cfg.DataDir); err != nil {
 		return nil, fmt.Errorf("failed to create datadir: %v", err)
 	}
 
-	// Load the configuration
-	clientConfig, err := config.LoadClientConfig(cfg.DataDir, "pokerclient.conf")
-	if err != nil {
+	// Create PokerClientConfig and load configuration
+	pokerCfg := &PokerClientConfig{
+		DataDir: cfg.DataDir,
+	}
+
+	// Load existing config file
+	if err := pokerCfg.LoadConfig("pokerclient", cfg.DataDir); err != nil {
 		return nil, fmt.Errorf("failed to load configuration: %v", err)
 	}
 
-	// Apply overrides from config
-	if cfg.ServerAddr != "" {
-		clientConfig.ServerAddr = cfg.ServerAddr
-	}
-	if cfg.RPCURL != "" {
-		clientConfig.RPCURL = cfg.RPCURL
+	// Apply overrides from cfg parameter
+	if cfg.BRConfig.RPCURL != "" {
+		pokerCfg.BRConfig.RPCURL = cfg.BRConfig.RPCURL
 	}
 	if cfg.GRPCServerCert != "" {
-		clientConfig.GRPCServerCert = cfg.GRPCServerCert
+		pokerCfg.GRPCServerCert = cfg.GRPCServerCert
 	}
-	if cfg.BRClientCert != "" {
-		clientConfig.BRClientCert = cfg.BRClientCert
+	if cfg.BRConfig.BRClientCert != "" {
+		pokerCfg.BRConfig.BRClientCert = cfg.BRConfig.BRClientCert
 	}
-	if cfg.BRClientRPCCert != "" {
-		clientConfig.BRClientRPCCert = cfg.BRClientRPCCert
+	if cfg.BRConfig.BRClientRPCCert != "" {
+		pokerCfg.BRConfig.BRClientRPCCert = cfg.BRConfig.BRClientRPCCert
 	}
-	if cfg.BRClientRPCKey != "" {
-		clientConfig.BRClientRPCKey = cfg.BRClientRPCKey
+	if cfg.BRConfig.BRClientRPCKey != "" {
+		pokerCfg.BRConfig.BRClientRPCKey = cfg.BRConfig.BRClientRPCKey
 	}
-	if cfg.RPCUser != "" {
-		clientConfig.RPCUser = cfg.RPCUser
+	if cfg.BRConfig.RPCUser != "" {
+		pokerCfg.BRConfig.RPCUser = cfg.BRConfig.RPCUser
 	}
-	if cfg.RPCPass != "" {
-		clientConfig.RPCPass = cfg.RPCPass
+	if cfg.BRConfig.RPCPass != "" {
+		pokerCfg.BRConfig.RPCPass = cfg.BRConfig.RPCPass
+	}
+	if cfg.GRPCHost != "" {
+		pokerCfg.GRPCHost = cfg.GRPCHost
+	}
+	if cfg.GRPCPort != "" {
+		pokerCfg.GRPCPort = cfg.GRPCPort
 	}
 
-	// Construct server address from host and port if provided
-	if cfg.GRPCHost != "" && cfg.GRPCPort != "" {
-		clientConfig.ServerAddr = fmt.Sprintf("%s:%s", cfg.GRPCHost, cfg.GRPCPort)
-	}
+	// Convert to BisonRelay config (includes grpchost/grpcport in ExtraConfig)
+	brConfig := pokerCfg.ToBisonRelayConfig()
 
 	// Initialize BisonRelay client
-	brClient, err := botclient.NewClient(clientConfig)
+	brClient, err := botclient.NewClient(brConfig)
 	if err != nil {
 		fmt.Errorf("Failed to create bot client: %v", err)
 		os.Exit(1)
@@ -99,10 +90,16 @@ func NewClient(ctx context.Context, cfg *Config) (*Client, error) {
 	log := brClient.LogBackend.Logger("PokerClient")
 
 	client := &Client{
-		Config:   clientConfig,
-		DataDir:  cfg.DataDir,
+		Config: &PokerClientConfig{
+			BRConfig:       brConfig,
+			DataDir:        cfg.DataDir,
+			GRPCHost:       cfg.GRPCHost,
+			GRPCPort:       cfg.GRPCPort,
+			GRPCServerCert: cfg.GRPCServerCert,
+			Notifications:  cfg.Notifications,
+		},
 		BRClient: brClient,
-		Logger:   log,
+		log:      log,
 	}
 
 	// Start the RPC client in a goroutine if brClient was created successfully
@@ -148,7 +145,7 @@ func (c *Client) connectToPokerServer(ctx context.Context, grpcHost string) erro
 	// Use TLS
 	grpcServerCertPath := c.Config.GRPCServerCert
 	if grpcServerCertPath == "" {
-		grpcServerCertPath = filepath.Join(c.DataDir, "server.cert")
+		grpcServerCertPath = filepath.Join(c.Config.DataDir, "server.cert")
 	}
 
 	// Check if server certificate exists, create default one if not
@@ -178,15 +175,18 @@ func (c *Client) connectToPokerServer(ctx context.Context, grpcHost string) erro
 	creds := credentials.NewTLS(tlsConfig)
 	dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
 
+	grpcHost = c.Config.GRPCHost
+	grpcPort := c.Config.GRPCPort
+	serverAddr := fmt.Sprintf("%s:%s", grpcHost, grpcPort)
 	// Create the client connection
-	conn, err := grpc.Dial(c.Config.ServerAddr, dialOpts...)
+	conn, err := grpc.Dial(serverAddr, dialOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to connect: %v", err)
 	}
 
 	c.conn = conn
-	c.LobbyClient = pokerrpc.NewLobbyServiceClient(conn)
-	c.PokerClient = pokerrpc.NewPokerServiceClient(conn)
+	c.LobbyService = pokerrpc.NewLobbyServiceClient(conn)
+	c.PokerServcice = pokerrpc.NewPokerServiceClient(conn)
 
 	return nil
 }
@@ -194,12 +194,12 @@ func (c *Client) connectToPokerServer(ctx context.Context, grpcHost string) erro
 // initializeAccount ensures the client has an account with the server
 func (c *Client) initializeAccount(ctx context.Context) error {
 	// Make sure we have an account
-	balanceResp, err := c.LobbyClient.GetBalance(ctx, &pokerrpc.GetBalanceRequest{
+	balanceResp, err := c.LobbyService.GetBalance(ctx, &pokerrpc.GetBalanceRequest{
 		PlayerId: c.ID,
 	})
 	if err != nil {
 		// Initialize account with deposit
-		updateResp, err := c.LobbyClient.UpdateBalance(ctx, &pokerrpc.UpdateBalanceRequest{
+		updateResp, err := c.LobbyService.UpdateBalance(ctx, &pokerrpc.UpdateBalanceRequest{
 			PlayerId:    c.ID,
 			Amount:      1000,
 			Description: "Initial deposit",
