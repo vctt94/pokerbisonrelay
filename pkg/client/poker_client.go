@@ -26,6 +26,16 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
+// TableCreateConfig holds configuration for creating a new table
+type TableCreateConfig struct {
+	SmallBlind int64
+	BigBlind   int64
+	MinPlayers int32
+	MaxPlayers int32
+	BuyIn      int64
+	MinBalance int64
+}
+
 // PokerClient represents a poker client with notification handling
 type PokerClient struct {
 	sync.RWMutex
@@ -445,7 +455,9 @@ func (pc *PokerClient) JoinTable(ctx context.Context, tableID string) error {
 }
 
 // CreateTable creates a new poker table and tracks the table ID
-func (pc *PokerClient) CreateTable(ctx context.Context, smallBlind, bigBlind int64, maxPlayers, minPlayers int32, minBalance, buyIn int64) (string, error) {
+func (pc *PokerClient) createTable(ctx context.Context,
+	smallBlind, bigBlind int64, maxPlayers, minPlayers int32, minBalance, buyIn int64,
+) (string, error) {
 	resp, err := pc.LobbyService.CreateTable(ctx, &pokerrpc.CreateTableRequest{
 		PlayerId:   pc.ID,
 		SmallBlind: smallBlind,
@@ -464,6 +476,11 @@ func (pc *PokerClient) CreateTable(ctx context.Context, smallBlind, bigBlind int
 	pc.Unlock()
 
 	return resp.TableId, nil
+}
+
+// CreateTable creates a new poker table using a configuration struct
+func (pc *PokerClient) CreateTable(ctx context.Context, config TableCreateConfig) (string, error) {
+	return pc.createTable(ctx, config.SmallBlind, config.BigBlind, config.MaxPlayers, config.MinPlayers, config.MinBalance, config.BuyIn)
 }
 
 // LeaveTable leaves the current table and clears the table ID

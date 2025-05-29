@@ -50,18 +50,15 @@ const (
 	stateActiveGame // New state for when the game is actively running
 )
 
-// Model contains all the state for our UI
-type Model struct {
+// PokerUI contains all the state for our poker client UI
+type PokerUI struct {
 	// Common fields
 	ctx          context.Context
 	clientID     string
-	lobbyClient  pokerrpc.LobbyServiceClient
-	pokerClient  pokerrpc.PokerServiceClient
+	pc           *client.PokerClient
 	state        screenState
 	err          error
-	balance      int64
 	selectedItem int
-	tableID      string
 	tables       []*pokerrpc.Table
 	menuOptions  []menuOption
 
@@ -91,10 +88,13 @@ type Model struct {
 	currentPlayerID string
 	playersRequired int32
 	playersJoined   int32
+
+	// Command dispatcher for backend operations
+	dispatcher *CommandDispatcher
 }
 
-// NewModel creates a new UI model
-func NewModel(ctx context.Context, client *client.PokerClient) Model {
+// NewPokerUI creates a new poker UI model
+func NewPokerUI(ctx context.Context, client *client.PokerClient) PokerUI {
 	// Initial menu options
 	menuOptions := []menuOption{
 		optionListTables,
@@ -104,11 +104,11 @@ func NewModel(ctx context.Context, client *client.PokerClient) Model {
 		optionQuit,
 	}
 
-	return Model{
-		ctx:             ctx,
-		clientID:        client.ID,
-		lobbyClient:     client.LobbyService,
-		pokerClient:     client.PokerService,
+	ui := PokerUI{
+		ctx:      ctx,
+		clientID: client.ID,
+		pc:       client,
+
 		state:           stateMainMenu,
 		menuOptions:     menuOptions,
 		smallBlind:      "10",
@@ -117,13 +117,18 @@ func NewModel(ctx context.Context, client *client.PokerClient) Model {
 		buyIn:           "100",
 		minBalance:      "100",
 	}
+
+	// Create dispatcher after UI is initialized
+	ui.dispatcher = NewCommandDispatcher(ctx, client.ID, client)
+
+	return ui
 }
 
-func (m Model) Init() tea.Cmd {
-	return getBalanceCmd(m.ctx, m.clientID, m.lobbyClient)
+func (m PokerUI) Init() tea.Cmd {
+	return m.dispatcher.getBalanceCmd()
 }
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m PokerUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -138,7 +143,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.state = stateMainMenu
 					m.message = ""
 					m.err = nil
-					updateMenuOptionsForGameState(&m)
+					m.updateMenuOptionsForGameState()
 					return m, nil
 				} else {
 					// For other screens (table list, create table, join table), go back to main menu
@@ -167,26 +172,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case stateMainMenu:
 				switch m.menuOptions[m.selectedItem] {
 				case "Return to Table":
-					if m.tableID != "" {
+					tableID := m.pc.GetCurrentTableID()
+					if tableID != "" {
 						// Determine which state to return to based on game phase
 						if m.gamePhase == pokerrpc.GamePhase_WAITING {
 							m.state = stateGameLobby
 						} else {
 							m.state = stateActiveGame
 						}
-						updateMenuOptionsForGameState(&m)
+						m.updateMenuOptionsForGameState()
 						// Refresh game state
-						cmds = append(cmds, checkGameStateCmd(m.ctx, m.clientID, m.tableID, m.pokerClient))
+						cmds = append(cmds, m.dispatcher.checkGameStateCmd())
 					}
 				case optionListTables:
 					m.state = stateTableList
-					cmds = append(cmds, getTablesCmd(m.ctx, m.lobbyClient))
+					cmds = append(cmds, m.dispatcher.getTablesCmd())
 				case optionCreateTable:
 					m.state = stateCreateTable
 				case optionJoinTable:
 					m.state = stateJoinTable
 				case optionCheckBalance:
-					cmds = append(cmds, getBalanceCmd(m.ctx, m.clientID, m.lobbyClient))
+					cmds = append(cmds, m.dispatcher.getBalanceCmd())
 				case optionQuit:
 					return m, tea.Quit
 				}
@@ -194,13 +200,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Handle game lobby menu selections
 				switch m.menuOptions[m.selectedItem] {
 				case optionLeaveTable:
-					cmds = append(cmds, leaveTableCmd(m.ctx, m.clientID, m.tableID, m.lobbyClient))
+					cmds = append(cmds, m.dispatcher.leaveTableCmd())
 				case optionSetReady:
-					cmds = append(cmds, setPlayerReadyCmd(m.ctx, m.clientID, m.tableID, m.lobbyClient))
+					cmds = append(cmds, m.dispatcher.setPlayerReadyCmd())
 				case optionSetUnready:
-					cmds = append(cmds, setPlayerUnreadyCmd(m.ctx, m.clientID, m.tableID, m.lobbyClient))
+					cmds = append(cmds, m.dispatcher.setPlayerUnreadyCmd())
 				case optionCheckBalance:
-					cmds = append(cmds, getBalanceCmd(m.ctx, m.clientID, m.lobbyClient))
+					cmds = append(cmds, m.dispatcher.getBalanceCmd())
 				case optionQuit:
 					return m, tea.Quit
 				}
@@ -208,22 +214,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Handle active game menu selections
 				switch m.menuOptions[m.selectedItem] {
 				case optionCheck:
-					cmds = append(cmds, checkCmd(m.ctx, m.clientID, m.tableID, m.pokerClient))
+					cmds = append(cmds, m.dispatcher.checkCmd())
 				case optionFold:
-					cmds = append(cmds, foldCmd(m.ctx, m.clientID, m.tableID, m.pokerClient))
+					cmds = append(cmds, m.dispatcher.foldCmd())
 				case optionBet:
 					// For simplicity, just bet the current bet + 10
 					betAmount := m.currentBet + 10
-					cmds = append(cmds, betCmd(m.ctx, m.clientID, m.tableID, betAmount, m.pokerClient))
+					cmds = append(cmds, m.dispatcher.betCmd(betAmount))
 				case optionLeaveTable:
-					cmds = append(cmds, leaveTableCmd(m.ctx, m.clientID, m.tableID, m.lobbyClient))
+					cmds = append(cmds, m.dispatcher.leaveTableCmd())
 				}
 			case stateTableList:
 				if len(m.tables) > 0 {
 					// Join the selected table
 					selectedTable := m.tables[m.selectedTable]
-					m.tableID = selectedTable.Id
-					cmds = append(cmds, joinTableCmd(m.ctx, m.clientID, selectedTable.Id, m.lobbyClient))
+					cmds = append(cmds, m.dispatcher.joinTableCmd(selectedTable.Id))
 				}
 			case stateCreateTable:
 				// Parse form inputs and create table
@@ -233,11 +238,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				buyIn, _ := strconv.ParseInt(m.buyIn, 10, 64)
 				minBalance, _ := strconv.ParseInt(m.minBalance, 10, 64)
 
-				cmds = append(cmds, createTableCmd(m.ctx, m.clientID, smallBlind, bigBlind, int32(requiredPlayers), 6, buyIn, minBalance, m.lobbyClient))
+				config := client.TableCreateConfig{
+					SmallBlind: smallBlind,
+					BigBlind:   bigBlind,
+					MinPlayers: int32(requiredPlayers),
+					MaxPlayers: int32(requiredPlayers),
+					BuyIn:      buyIn,
+					MinBalance: minBalance,
+				}
+				cmds = append(cmds, m.dispatcher.createTableCmd(config))
 			case stateJoinTable:
 				if m.tableIdInput != "" {
-					m.tableID = m.tableIdInput
-					cmds = append(cmds, joinTableCmd(m.ctx, m.clientID, m.tableIdInput, m.lobbyClient))
+					cmds = append(cmds, m.dispatcher.joinTableCmd(m.tableIdInput))
 				}
 			}
 		}
@@ -284,9 +296,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case balanceMsg:
-		m.balance = int64(msg)
-		m.message = fmt.Sprintf("Balance: %d", m.balance)
+	case notificationMsg:
+		notification := (*pokerrpc.Notification)(msg)
+		cmd := m.handleNotification(notification)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 
 	case errorMsg:
 		m.err = error(msg)
@@ -295,7 +310,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// If we get an error while checking game state and we're at a table,
 		// it likely means the table no longer exists (e.g., host left)
 		// Reset to main menu in this case
-		if m.tableID != "" && (m.state == stateGameLobby || m.state == stateActiveGame) {
+		tableID := m.pc.GetCurrentTableID()
+		if tableID != "" && (m.state == stateGameLobby || m.state == stateActiveGame) {
 			// Check if the error indicates the table doesn't exist
 			errorStr := m.err.Error()
 			if strings.Contains(errorStr, "table not found") ||
@@ -310,38 +326,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tablesMsg:
 		m.tables = []*pokerrpc.Table(msg)
 		m.selectedTable = 0
-
-	case tableJoinedMsg:
-		m.state = stateGameLobby
-		m.message = fmt.Sprintf("Joined table %s", m.tableID)
-		updateMenuOptionsForGameState(&m)
-		// Immediately fetch game state and start checking periodically
-		cmds = append(cmds, checkGameStateCmd(m.ctx, m.clientID, m.tableID, m.pokerClient))
-		cmds = append(cmds, gameUpdateTicker())
-
-	case tableLeftMsg:
-		m.resetToMainMenu()
-		m.message = "Left table"
-
-	case tableCreatedMsg:
-		m.tableID = string(msg)
-		m.state = stateGameLobby
-		m.message = fmt.Sprintf("Created table %s", m.tableID)
-		updateMenuOptionsForGameState(&m)
-		// Immediately fetch game state and start checking periodically
-		cmds = append(cmds, checkGameStateCmd(m.ctx, m.clientID, m.tableID, m.pokerClient))
-		cmds = append(cmds, gameUpdateTicker())
-
-	case playerReadyMsg:
-		m.message = "You are now ready"
-
-	case playerUnreadyMsg:
-		m.message = "You are now unready"
-
-	case gameStartedMsg:
-		m.state = stateActiveGame
-		m.message = "Game started!"
-		updateMenuOptionsForGameState(&m)
 
 	case gameUpdateMsg:
 		gameUpdate := (*pokerrpc.GameUpdate)(msg)
@@ -362,28 +346,130 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.state = stateActiveGame
 				}
-				updateMenuOptionsForGameState(&m)
+				m.updateMenuOptionsForGameState()
 			}
 		}
-		// Remove automatic checkGameStateCmd to prevent cascading updates
 
 	case tickMsg:
-		if m.tableID != "" {
-			cmds = append(cmds, checkGameStateCmd(m.ctx, m.clientID, m.tableID, m.pokerClient))
+		tableID := m.pc.GetCurrentTableID()
+		if tableID != "" {
+			cmds = append(cmds, m.dispatcher.checkGameStateCmd())
 		}
 		cmds = append(cmds, gameUpdateTicker())
-
-	case tableNotFoundMsg:
-		// Table no longer exists (likely closed by host), automatically leave
-		m.resetToMainMenu()
-		m.message = "Table was closed"
 	}
 
 	return m, tea.Batch(cmds...)
 }
 
+// handleNotification processes notifications from the backend
+func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cmd {
+	switch notification.Type {
+	case pokerrpc.NotificationType_BALANCE_UPDATED:
+		m.message = fmt.Sprintf("Balance: %d", notification.NewBalance)
+		return m.dispatcher.getBalanceCmd()
+
+	case pokerrpc.NotificationType_PLAYER_JOINED:
+		if notification.PlayerId == m.clientID {
+			m.state = stateGameLobby
+			m.message = fmt.Sprintf("Joined table %s", notification.TableId)
+			m.updateMenuOptionsForGameState()
+			// Start game state polling and ticker
+			return tea.Batch(
+				m.dispatcher.checkGameStateCmd(),
+				gameUpdateTicker(),
+			)
+		}
+
+	case pokerrpc.NotificationType_PLAYER_LEFT:
+		if notification.PlayerId == m.clientID {
+			m.resetToMainMenu()
+			m.message = "Left table"
+			return nil
+		}
+
+	case pokerrpc.NotificationType_TABLE_CREATED:
+		if notification.PlayerId == m.clientID {
+			m.state = stateGameLobby
+			m.message = fmt.Sprintf("Created table %s", notification.TableId)
+			m.updateMenuOptionsForGameState()
+			// Start game state polling and ticker
+			return tea.Batch(
+				m.dispatcher.checkGameStateCmd(),
+				gameUpdateTicker(),
+			)
+		}
+
+	case pokerrpc.NotificationType_TABLE_REMOVED:
+		currentTableID := m.pc.GetCurrentTableID()
+		if notification.TableId == currentTableID {
+			m.resetToMainMenu()
+			m.message = "Table was closed"
+			return nil
+		}
+
+	case pokerrpc.NotificationType_PLAYER_READY:
+		if notification.PlayerId == m.clientID {
+			m.message = "You are now ready"
+			return nil
+		}
+
+	case pokerrpc.NotificationType_PLAYER_UNREADY:
+		if notification.PlayerId == m.clientID {
+			m.message = "You are now unready"
+			return nil
+		}
+
+	case pokerrpc.NotificationType_ALL_PLAYERS_READY:
+		m.message = "All players are ready! Game starting soon..."
+		return nil
+
+	case pokerrpc.NotificationType_GAME_STARTED:
+		m.state = stateActiveGame
+		m.message = "Game started!"
+		m.updateMenuOptionsForGameState()
+		return m.dispatcher.getBalanceCmd()
+
+	case pokerrpc.NotificationType_GAME_ENDED:
+		m.state = stateGameLobby
+		m.message = "Game ended"
+		m.updateMenuOptionsForGameState()
+		return m.dispatcher.getBalanceCmd()
+
+	case pokerrpc.NotificationType_BET_MADE:
+		if notification.PlayerId == m.clientID {
+			m.message = fmt.Sprintf("Bet placed: %d", notification.Amount)
+			return nil
+		}
+
+	case pokerrpc.NotificationType_PLAYER_FOLDED:
+		if notification.PlayerId == m.clientID {
+			m.message = "You folded"
+			return nil
+		}
+
+	case pokerrpc.NotificationType_NEW_ROUND:
+		if notification.PlayerId == m.clientID {
+			m.message = "Action completed"
+			return nil
+		}
+
+	case pokerrpc.NotificationType_SHOWDOWN_RESULT:
+		m.message = "Showdown complete"
+		return nil
+
+	case pokerrpc.NotificationType_TIP_RECEIVED:
+		m.message = fmt.Sprintf("Tip received: %d", notification.Amount)
+		return nil
+
+	default:
+		m.message = notification.Message
+		return nil
+	}
+	return nil
+}
+
 // View renders the current state of the UI
-func (m Model) View() string {
+func (m PokerUI) View() string {
 	var s string
 
 	// Show any temporary message
@@ -400,11 +486,18 @@ func (m Model) View() string {
 	case stateMainMenu:
 		s += titleStyle.Render("Poker Client - Main Menu") + "\n\n"
 		s += fmt.Sprintf("Client ID: %s\n", m.clientID)
-		s += fmt.Sprintf("Balance: %d\n", m.balance)
+
+		// Get current balance from poker client
+		if balance, err := m.pc.GetBalance(m.ctx); err == nil {
+			s += fmt.Sprintf("Balance: %d\n", balance)
+		} else {
+			s += "Balance: (loading...)\n"
+		}
 
 		// Show current table info if player is at a table
-		if m.tableID != "" {
-			s += fmt.Sprintf("Current Table: %s (Phase: %s)\n", m.tableID, m.gamePhase.String())
+		currentTableID := m.pc.GetCurrentTableID()
+		if currentTableID != "" {
+			s += fmt.Sprintf("Current Table: %s (Phase: %s)\n", currentTableID, m.gamePhase.String())
 		}
 		s += "\n"
 
@@ -481,8 +574,14 @@ func (m Model) View() string {
 		s += helpStyle.Render("Enter table ID and press Enter to join")
 
 	case stateGameLobby:
-		s += titleStyle.Render(fmt.Sprintf("Game Lobby - Table %s", m.tableID)) + "\n\n"
-		s += fmt.Sprintf("Balance: %d\n\n", m.balance)
+		s += titleStyle.Render(fmt.Sprintf("Game Lobby - Table %s", m.pc.GetCurrentTableID())) + "\n\n"
+
+		// Get current balance from poker client
+		if balance, err := m.pc.GetBalance(m.ctx); err == nil {
+			s += fmt.Sprintf("Balance: %d\n\n", balance)
+		} else {
+			s += "Balance: (loading...)\n\n"
+		}
 
 		// Show table information if we have game update data
 		if len(m.players) > 0 {
@@ -525,7 +624,7 @@ func (m Model) View() string {
 		}
 
 	case stateActiveGame:
-		s += titleStyle.Render(fmt.Sprintf("Active Game - Table %s", m.tableID)) + "\n\n"
+		s += titleStyle.Render(fmt.Sprintf("Active Game - Table %s", m.pc.GetCurrentTableID())) + "\n\n"
 
 		// Game info
 		s += gameInfoStyle.Render(fmt.Sprintf("Pot: %d | Current Bet: %d | Phase: %s",
@@ -563,11 +662,16 @@ func (m Model) View() string {
 		}
 
 		// Menu options for current player
-		for i, option := range m.menuOptions {
-			if i == m.selectedItem {
-				s += focusedStyle.Render(fmt.Sprintf("> %s", option)) + "\n"
-			} else {
-				s += blurredStyle.Render(fmt.Sprintf("  %s", option)) + "\n"
+		if isPlayerTurn(m.currentPlayerID, m.clientID) {
+			m.menuOptions = []menuOption{
+				optionCheck,
+				optionBet,
+				optionFold,
+				optionLeaveTable,
+			}
+		} else {
+			m.menuOptions = []menuOption{
+				optionLeaveTable,
 			}
 		}
 	}
@@ -578,7 +682,7 @@ func (m Model) View() string {
 
 // Run starts the UI
 func Run(ctx context.Context, client *client.PokerClient) {
-	model := NewModel(ctx, client)
+	model := NewPokerUI(ctx, client)
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
@@ -587,17 +691,16 @@ func Run(ctx context.Context, client *client.PokerClient) {
 }
 
 // resetToMainMenu resets the model to the main menu state, clearing all table and game data
-func (m *Model) resetToMainMenu() {
+func (m *PokerUI) resetToMainMenu() {
 	m.state = stateMainMenu
-	m.tableID = ""
 	m.message = ""
 	m.err = nil
 	m.resetGameState()
-	updateMenuOptionsForGameState(m)
+	m.updateMenuOptionsForGameState()
 }
 
 // resetGameState resets all game-related fields while keeping table connection
-func (m *Model) resetGameState() {
+func (m *PokerUI) resetGameState() {
 	m.players = nil
 	m.communityCards = nil
 	m.gamePhase = pokerrpc.GamePhase_WAITING
@@ -606,4 +709,42 @@ func (m *Model) resetGameState() {
 	m.currentPlayerID = ""
 	m.playersRequired = 0
 	m.playersJoined = 0
+}
+
+// updateMenuOptionsForGameState updates the menu options based on the current game state
+func (m *PokerUI) updateMenuOptionsForGameState() {
+	if m.state == stateMainMenu {
+		m.menuOptions = []menuOption{
+			optionListTables,
+			optionCreateTable,
+			optionJoinTable,
+			optionCheckBalance,
+			optionQuit,
+		}
+		currentTableID := m.pc.GetCurrentTableID()
+		if currentTableID != "" {
+			m.menuOptions = append([]menuOption{"Return to Table"}, m.menuOptions...)
+		}
+	} else if m.state == stateGameLobby {
+		m.menuOptions = []menuOption{
+			optionSetReady,
+			optionSetUnready,
+			optionLeaveTable,
+			optionCheckBalance,
+			optionQuit,
+		}
+	} else if m.state == stateActiveGame {
+		if isPlayerTurn(m.currentPlayerID, m.clientID) {
+			m.menuOptions = []menuOption{
+				optionCheck,
+				optionBet,
+				optionFold,
+				optionLeaveTable,
+			}
+		} else {
+			m.menuOptions = []menuOption{
+				optionLeaveTable,
+			}
+		}
+	}
 }

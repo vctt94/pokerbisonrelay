@@ -6,125 +6,169 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/vctt94/poker-bisonrelay/pkg/client"
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
-// Message types for the UI
-type balanceMsg int64
+// Event-driven message types matching proto notifications
+type notificationMsg *pokerrpc.Notification
 type errorMsg error
-type tablesMsg []*pokerrpc.Table
-type tableJoinedMsg struct{}
-type tableLeftMsg struct{}
-type tableCreatedMsg string
-type playerReadyMsg struct{}
-type playerUnreadyMsg struct{}
-type gameStartedMsg struct{}
-type gameUpdateMsg *pokerrpc.GameUpdate
 type tickMsg struct{}
-type tableNotFoundMsg struct{}
 
-// Helper functions for commands
-func getBalanceCmd(ctx context.Context, clientID string, lobbyClient pokerrpc.LobbyServiceClient) tea.Cmd {
+// Legacy message types for specific data (can be refactored to use notifications)
+type tablesMsg []*pokerrpc.Table
+type gameUpdateMsg *pokerrpc.GameUpdate
+
+// CommandDispatcher dispatches commands from the UI to backend services
+type CommandDispatcher struct {
+	ctx      context.Context
+	clientID string
+	pc       *client.PokerClient
+}
+
+// NewCommandDispatcher creates a new command dispatcher for the UI
+func NewCommandDispatcher(ctx context.Context, clientID string, pc *client.PokerClient) *CommandDispatcher {
+	return &CommandDispatcher{
+		ctx:      ctx,
+		clientID: clientID,
+		pc:       pc,
+	}
+}
+
+// Command methods on the dispatcher
+
+func (d *CommandDispatcher) getBalanceCmd() tea.Cmd {
 	return func() tea.Msg {
-		resp, err := lobbyClient.GetBalance(ctx, &pokerrpc.GetBalanceRequest{
-			PlayerId: clientID,
+		balance, err := d.pc.GetBalance(d.ctx)
+		if err != nil {
+			return errorMsg(err)
+		}
+		// Return as balance updated notification
+		return notificationMsg(&pokerrpc.Notification{
+			Type:       pokerrpc.NotificationType_BALANCE_UPDATED,
+			PlayerId:   d.clientID,
+			NewBalance: balance,
+			Message:    "Balance retrieved",
 		})
-		if err != nil {
-			return errorMsg(err)
-		}
-		return balanceMsg(resp.Balance)
 	}
 }
 
-func getTablesCmd(ctx context.Context, lobbyClient pokerrpc.LobbyServiceClient) tea.Cmd {
+func (d *CommandDispatcher) getTablesCmd() tea.Cmd {
 	return func() tea.Msg {
-		resp, err := lobbyClient.GetTables(ctx, &pokerrpc.GetTablesRequest{})
+		tables, err := d.pc.GetTables(d.ctx)
 		if err != nil {
 			return errorMsg(err)
 		}
-		return tablesMsg(resp.Tables)
+		return tablesMsg(tables)
 	}
 }
 
-func joinTableCmd(ctx context.Context, clientID string, tableID string, lobbyClient pokerrpc.LobbyServiceClient) tea.Cmd {
+func (d *CommandDispatcher) joinTableCmd(tableID string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := lobbyClient.JoinTable(ctx, &pokerrpc.JoinTableRequest{
-			PlayerId: clientID,
+		err := d.pc.JoinTable(d.ctx, tableID)
+		if err != nil {
+			return errorMsg(err)
+		}
+
+		// Return as player joined notification
+		return notificationMsg(&pokerrpc.Notification{
+			Type:     pokerrpc.NotificationType_PLAYER_JOINED,
+			PlayerId: d.clientID,
 			TableId:  tableID,
+			Message:  "Successfully joined table",
 		})
-		if err != nil {
-			return errorMsg(err)
-		}
-		return tableJoinedMsg{}
 	}
 }
 
-func leaveTableCmd(ctx context.Context, clientID string, tableID string, lobbyClient pokerrpc.LobbyServiceClient) tea.Cmd {
+func (d *CommandDispatcher) leaveTableCmd() tea.Cmd {
 	return func() tea.Msg {
-		_, err := lobbyClient.LeaveTable(ctx, &pokerrpc.LeaveTableRequest{
-			PlayerId: clientID,
+		currentTableID := d.pc.GetCurrentTableID()
+		err := d.pc.LeaveTable(d.ctx)
+		if err != nil {
+			return errorMsg(err)
+		}
+
+		// Return as player left notification
+		return notificationMsg(&pokerrpc.Notification{
+			Type:     pokerrpc.NotificationType_PLAYER_LEFT,
+			PlayerId: d.clientID,
+			TableId:  currentTableID,
+			Message:  "Successfully left table",
+		})
+	}
+}
+
+func (d *CommandDispatcher) createTableCmd(config client.TableCreateConfig) tea.Cmd {
+	return func() tea.Msg {
+		tableID, err := d.pc.CreateTable(d.ctx, config)
+		if err != nil {
+			return errorMsg(err)
+		}
+
+		// Return as table created notification
+		return notificationMsg(&pokerrpc.Notification{
+			Type:     pokerrpc.NotificationType_TABLE_CREATED,
+			PlayerId: d.clientID,
 			TableId:  tableID,
+			Message:  "Table created successfully",
 		})
-		if err != nil {
-			return errorMsg(err)
-		}
-		return tableLeftMsg{}
 	}
 }
 
-func createTableCmd(ctx context.Context, clientID string, smallBlind, bigBlind int64, minPlayers, maxPlayers int32, buyIn, minBalance int64, lobbyClient pokerrpc.LobbyServiceClient) tea.Cmd {
+func (d *CommandDispatcher) setPlayerReadyCmd() tea.Cmd {
 	return func() tea.Msg {
-		resp, err := lobbyClient.CreateTable(ctx, &pokerrpc.CreateTableRequest{
-			PlayerId:   clientID,
-			SmallBlind: smallBlind,
-			BigBlind:   bigBlind,
-			MinPlayers: minPlayers,
-			MaxPlayers: maxPlayers,
-			BuyIn:      buyIn,
-			MinBalance: minBalance,
-		})
+		err := d.pc.SetPlayerReady(d.ctx)
 		if err != nil {
 			return errorMsg(err)
 		}
-		return tableCreatedMsg(resp.TableId)
+
+		// Return as player ready notification
+		currentTableID := d.pc.GetCurrentTableID()
+		notification := &pokerrpc.Notification{
+			Type:     pokerrpc.NotificationType_PLAYER_READY,
+			PlayerId: d.clientID,
+			TableId:  currentTableID,
+			Ready:    true,
+			Message:  "Player set to ready",
+		}
+
+		return notificationMsg(notification)
 	}
 }
 
-func setPlayerReadyCmd(ctx context.Context, clientID string, tableID string, lobbyClient pokerrpc.LobbyServiceClient) tea.Cmd {
+func (d *CommandDispatcher) setPlayerUnreadyCmd() tea.Cmd {
 	return func() tea.Msg {
-		_, err := lobbyClient.SetPlayerReady(ctx, &pokerrpc.SetPlayerReadyRequest{
-			PlayerId: clientID,
-			TableId:  tableID,
-		})
+		err := d.pc.SetPlayerUnready(d.ctx)
 		if err != nil {
 			return errorMsg(err)
 		}
-		return playerReadyMsg{}
-	}
-}
 
-func setPlayerUnreadyCmd(ctx context.Context, clientID string, tableID string, lobbyClient pokerrpc.LobbyServiceClient) tea.Cmd {
-	return func() tea.Msg {
-		_, err := lobbyClient.SetPlayerUnready(ctx, &pokerrpc.SetPlayerUnreadyRequest{
-			PlayerId: clientID,
-			TableId:  tableID,
+		// Return as player unready notification
+		currentTableID := d.pc.GetCurrentTableID()
+		return notificationMsg(&pokerrpc.Notification{
+			Type:     pokerrpc.NotificationType_PLAYER_UNREADY,
+			PlayerId: d.clientID,
+			TableId:  currentTableID,
+			Ready:    false,
+			Message:  "Player set to unready",
 		})
-		if err != nil {
-			return errorMsg(err)
-		}
-		return playerUnreadyMsg{}
 	}
 }
 
-func checkGameStateCmd(ctx context.Context, clientID, tableID string, pokerClient pokerrpc.PokerServiceClient) tea.Cmd {
+func (d *CommandDispatcher) checkGameStateCmd() tea.Cmd {
 	return func() tea.Msg {
-		resp, err := pokerClient.GetGameState(ctx, &pokerrpc.GetGameStateRequest{
-			TableId: tableID,
+		currentTableID := d.pc.GetCurrentTableID()
+		resp, err := d.pc.PokerService.GetGameState(d.ctx, &pokerrpc.GetGameStateRequest{
+			TableId: currentTableID,
 		})
 		if err != nil {
 			// Check if this is a "table not found" error
 			if strings.Contains(err.Error(), "table not found") {
-				return tableNotFoundMsg{}
+				return notificationMsg(&pokerrpc.Notification{
+					Type:    pokerrpc.NotificationType_TABLE_REMOVED,
+					TableId: currentTableID,
+					Message: "Table no longer exists",
+				})
 			}
 			return errorMsg(err)
 		}
@@ -132,6 +176,72 @@ func checkGameStateCmd(ctx context.Context, clientID, tableID string, pokerClien
 	}
 }
 
+func (d *CommandDispatcher) checkCmd() tea.Cmd {
+	return func() tea.Msg {
+		currentTableID := d.pc.GetCurrentTableID()
+		_, err := d.pc.PokerService.Check(d.ctx, &pokerrpc.CheckRequest{
+			PlayerId: d.clientID,
+			TableId:  currentTableID,
+		})
+		if err != nil {
+			return errorMsg(err)
+		}
+
+		// Return as new round notification (check action)
+		return notificationMsg(&pokerrpc.Notification{
+			Type:     pokerrpc.NotificationType_NEW_ROUND,
+			PlayerId: d.clientID,
+			TableId:  currentTableID,
+			Message:  "Player checked",
+		})
+	}
+}
+
+func (d *CommandDispatcher) foldCmd() tea.Cmd {
+	return func() tea.Msg {
+		currentTableID := d.pc.GetCurrentTableID()
+		_, err := d.pc.PokerService.Fold(d.ctx, &pokerrpc.FoldRequest{
+			PlayerId: d.clientID,
+			TableId:  currentTableID,
+		})
+		if err != nil {
+			return errorMsg(err)
+		}
+
+		// Return as player folded notification
+		return notificationMsg(&pokerrpc.Notification{
+			Type:     pokerrpc.NotificationType_PLAYER_FOLDED,
+			PlayerId: d.clientID,
+			TableId:  currentTableID,
+			Message:  "Player folded",
+		})
+	}
+}
+
+func (d *CommandDispatcher) betCmd(amount int64) tea.Cmd {
+	return func() tea.Msg {
+		currentTableID := d.pc.GetCurrentTableID()
+		_, err := d.pc.PokerService.MakeBet(d.ctx, &pokerrpc.MakeBetRequest{
+			PlayerId: d.clientID,
+			TableId:  currentTableID,
+			Amount:   amount,
+		})
+		if err != nil {
+			return errorMsg(err)
+		}
+
+		// Return as bet made notification
+		return notificationMsg(&pokerrpc.Notification{
+			Type:     pokerrpc.NotificationType_BET_MADE,
+			PlayerId: d.clientID,
+			TableId:  currentTableID,
+			Amount:   amount,
+			Message:  "Bet placed",
+		})
+	}
+}
+
+// Utility functions
 func gameUpdateTicker() tea.Cmd {
 	return tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
 		return tickMsg{}
@@ -154,80 +264,4 @@ func max(a, b int) int {
 
 func isPlayerTurn(currentPlayerID, clientID string) bool {
 	return currentPlayerID == clientID
-}
-
-func checkCmd(ctx context.Context, clientID, tableID string, pokerClient pokerrpc.PokerServiceClient) tea.Cmd {
-	return func() tea.Msg {
-		_, err := pokerClient.Check(ctx, &pokerrpc.CheckRequest{
-			PlayerId: clientID,
-			TableId:  tableID,
-		})
-		if err != nil {
-			return errorMsg(err)
-		}
-		return gameUpdateMsg(nil)
-	}
-}
-
-func foldCmd(ctx context.Context, clientID, tableID string, pokerClient pokerrpc.PokerServiceClient) tea.Cmd {
-	return func() tea.Msg {
-		_, err := pokerClient.Fold(ctx, &pokerrpc.FoldRequest{
-			PlayerId: clientID,
-			TableId:  tableID,
-		})
-		if err != nil {
-			return errorMsg(err)
-		}
-		return gameUpdateMsg(nil)
-	}
-}
-
-func betCmd(ctx context.Context, clientID, tableID string, amount int64, pokerClient pokerrpc.PokerServiceClient) tea.Cmd {
-	return func() tea.Msg {
-		_, err := pokerClient.MakeBet(ctx, &pokerrpc.MakeBetRequest{
-			PlayerId: clientID,
-			TableId:  tableID,
-			Amount:   amount,
-		})
-		if err != nil {
-			return errorMsg(err)
-		}
-		return gameUpdateMsg(nil)
-	}
-}
-
-func updateMenuOptionsForGameState(m *Model) {
-	if m.state == stateMainMenu {
-		m.menuOptions = []menuOption{
-			optionListTables,
-			optionCreateTable,
-			optionJoinTable,
-			optionCheckBalance,
-			optionQuit,
-		}
-		if m.tableID != "" {
-			m.menuOptions = append([]menuOption{"Return to Table"}, m.menuOptions...)
-		}
-	} else if m.state == stateGameLobby {
-		m.menuOptions = []menuOption{
-			optionSetReady,
-			optionSetUnready,
-			optionLeaveTable,
-			optionCheckBalance,
-			optionQuit,
-		}
-	} else if m.state == stateActiveGame {
-		if isPlayerTurn(m.currentPlayerID, m.clientID) {
-			m.menuOptions = []menuOption{
-				optionCheck,
-				optionBet,
-				optionFold,
-				optionLeaveTable,
-			}
-		} else {
-			m.menuOptions = []menuOption{
-				optionLeaveTable,
-			}
-		}
-	}
 }
