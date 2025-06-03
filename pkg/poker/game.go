@@ -12,7 +12,6 @@ import (
 // GameConfig holds configuration for a new game
 type GameConfig struct {
 	NumPlayers int
-	MaxRounds  int
 	Seed       int64 // Optional seed for deterministic games
 }
 
@@ -81,7 +80,6 @@ func NewGame(cfg GameConfig) *Game {
 		round:           0,
 		betRound:        0,
 		errorSimulation: false,
-		maxRounds:       cfg.MaxRounds,
 		phase:           pokerrpc.GamePhase_WAITING,
 	}
 }
@@ -98,11 +96,6 @@ func (g *Game) Run() {
 func statePreDeal(g *Game) stateFn {
 	// Reset game state for a new hand
 	g.round++
-
-	// Check if we've reached the maximum number of rounds
-	if g.round > g.maxRounds {
-		return stateEnd
-	}
 
 	// Reset the deck, community cards, pot, etc.
 	g.deck.Shuffle()
@@ -461,4 +454,11 @@ func (g *Game) GetCommunityCards() []Card {
 	cards := make([]Card, len(g.communityCards))
 	copy(cards, g.communityCards)
 	return cards
+}
+
+// GetPlayers returns the game players slice
+func (g *Game) GetPlayers() []*Player {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.players
 }

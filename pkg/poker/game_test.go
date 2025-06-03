@@ -8,7 +8,6 @@ import (
 func TestNewGame(t *testing.T) {
 	cfg := GameConfig{
 		NumPlayers: 2,
-		MaxRounds:  1,
 		Seed:       42, // Use a fixed seed for deterministic testing
 	}
 
@@ -53,7 +52,6 @@ func TestNewGamePanicsOnInvalidPlayers(t *testing.T) {
 
 	cfg := GameConfig{
 		NumPlayers: 1,
-		MaxRounds:  1,
 	}
 	NewGame(cfg)
 }
@@ -61,7 +59,6 @@ func TestNewGamePanicsOnInvalidPlayers(t *testing.T) {
 func TestDealCards(t *testing.T) {
 	cfg := GameConfig{
 		NumPlayers: 2,
-		MaxRounds:  1,
 		Seed:       42,
 	}
 
@@ -88,7 +85,6 @@ func TestDealCards(t *testing.T) {
 func TestCommunityCards(t *testing.T) {
 	cfg := GameConfig{
 		NumPlayers: 2,
-		MaxRounds:  1,
 		Seed:       42,
 	}
 
@@ -126,7 +122,6 @@ func TestShowdown(t *testing.T) {
 	// Create a game with 2 players
 	cfg := GameConfig{
 		NumPlayers: 2,
-		MaxRounds:  1,
 		Seed:       42,
 	}
 
@@ -193,7 +188,6 @@ func TestTieBreakerShowdown(t *testing.T) {
 	// Create a game with 3 players
 	cfg := GameConfig{
 		NumPlayers: 3,
-		MaxRounds:  1,
 		Seed:       42,
 	}
 

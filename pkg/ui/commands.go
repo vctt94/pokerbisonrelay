@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/vctt94/poker-bisonrelay/pkg/client"
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
+	"google.golang.org/grpc/metadata"
 )
 
 // Event-driven message types matching proto notifications
@@ -158,7 +159,11 @@ func (d *CommandDispatcher) setPlayerUnreadyCmd() tea.Cmd {
 func (d *CommandDispatcher) checkGameStateCmd() tea.Cmd {
 	return func() tea.Msg {
 		currentTableID := d.pc.GetCurrentTableID()
-		resp, err := d.pc.PokerService.GetGameState(d.ctx, &pokerrpc.GetGameStateRequest{
+
+		// Add player ID to the context metadata
+		ctx := metadata.AppendToOutgoingContext(d.ctx, "player-id", d.clientID)
+
+		resp, err := d.pc.PokerService.GetGameState(ctx, &pokerrpc.GetGameStateRequest{
 			TableId: currentTableID,
 		})
 		if err != nil {

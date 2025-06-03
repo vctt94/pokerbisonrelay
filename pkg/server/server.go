@@ -9,6 +9,7 @@ import (
 	"github.com/vctt94/poker-bisonrelay/pkg/poker"
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -55,7 +56,7 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 		SmallBlind: req.SmallBlind,
 		BigBlind:   req.BigBlind,
 		MinBalance: req.MinBalance,
-		TimeBank:   5 * time.Second,
+		TimeBank:   30 * time.Second,
 	}
 
 	// Create new table
@@ -336,8 +337,8 @@ func (s *Server) StartGameStream(req *pokerrpc.StartGameStreamRequest, stream po
 		return status.Error(codes.NotFound, "table not found")
 	}
 
-	// Subscribe to game updates
-	updates := table.Subscribe(stream.Context())
+	// Subscribe to game updates with the requesting player ID
+	updates := table.Subscribe(stream.Context(), req.PlayerId)
 
 	for update := range updates {
 		if err := stream.Send(update); err != nil {
@@ -383,17 +384,22 @@ func (s *Server) Fold(ctx context.Context, req *pokerrpc.FoldRequest) (*pokerrpc
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
 
-	player := table.GetPlayer(req.PlayerId)
-	if player == nil {
-		return nil, status.Error(codes.NotFound, "player not found at table")
+	// Check if game is running
+	if !table.IsGameStarted() {
+		return nil, status.Error(codes.FailedPrecondition, "game not started")
 	}
 
-	// Mark player as folded
-	player.HasFolded = true
-	player.LastAction = time.Now()
+	// Verify it's the player's turn
+	currentPlayerID := table.GetCurrentPlayerID()
+	if currentPlayerID != req.PlayerId {
+		return nil, status.Error(codes.FailedPrecondition, "not your turn")
+	}
 
-	// Check if the folding action completes the current betting round and thus advances the phase.
-	table.MaybeAdvancePhase()
+	// Handle the fold action
+	err := table.HandleFold(req.PlayerId)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to process fold: "+err.Error())
+	}
 
 	return &pokerrpc.FoldResponse{
 		Success: true,
@@ -410,15 +416,54 @@ func (s *Server) Check(ctx context.Context, req *pokerrpc.CheckRequest) (*pokerr
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
 
-	err := table.MakeBet(req.PlayerId, 0)
+	// Check if game is running
+	if !table.IsGameStarted() {
+		return nil, status.Error(codes.FailedPrecondition, "game not started")
+	}
+
+	// Verify it's the player's turn
+	currentPlayerID := table.GetCurrentPlayerID()
+	if currentPlayerID != req.PlayerId {
+		return nil, status.Error(codes.FailedPrecondition, "not your turn")
+	}
+
+	// Check action is essentially a bet of 0 - call MakeBet with current bet amount
+	// This ensures the check is properly integrated with the betting logic
+	currentBet := table.GetCurrentBet()
+	err := table.MakeBet(req.PlayerId, currentBet)
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, status.Error(codes.Internal, "failed to process check: "+err.Error())
 	}
 
 	return &pokerrpc.CheckResponse{
 		Success: true,
 		Message: "Player checked",
 	}, nil
+}
+
+// buildPlayerForUpdate creates a Player proto message with appropriate card visibility
+func (s *Server) buildPlayerForUpdate(p *poker.Player, requestingPlayerID string, game *poker.Game) *pokerrpc.Player {
+	player := &pokerrpc.Player{
+		Id:         p.ID,
+		Balance:    p.Balance,
+		IsReady:    p.IsReady,
+		Folded:     p.HasFolded,
+		CurrentBet: p.HasBet,
+	}
+
+	// Only include hand cards if this is the requesting player's own data
+	// or if the game is in showdown phase
+	if (p.ID == requestingPlayerID) || (game != nil && game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN) {
+		player.Hand = make([]*pokerrpc.Card, len(p.Hand))
+		for i, card := range p.Hand {
+			player.Hand[i] = &pokerrpc.Card{
+				Suit:  card.GetSuit(),
+				Value: card.GetValue(),
+			}
+		}
+	}
+
+	return player
 }
 
 func (s *Server) GetGameState(ctx context.Context, req *pokerrpc.GetGameStateRequest) (*pokerrpc.GetGameStateResponse, error) {
@@ -433,20 +478,58 @@ func (s *Server) GetGameState(ctx context.Context, req *pokerrpc.GetGameStateReq
 	// Process any player timeouts before building the state.
 	table.HandleTimeouts()
 
+	// Extract requesting player ID from context metadata
+	requestingPlayerID := ""
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if playerIDs := md.Get("player-id"); len(playerIDs) > 0 {
+			requestingPlayerID = playerIDs[0]
+		}
+	}
+
+	game := table.GetGame()
 	players := make([]*pokerrpc.Player, 0, len(table.GetPlayers()))
 	for _, p := range table.GetPlayers() {
-		players = append(players, &pokerrpc.Player{
-			Id:      p.ID,
-			Balance: p.Balance,
-			IsReady: p.IsReady,
-			Folded:  p.HasFolded,
-		})
+		// Create player update with complete information
+		player := &pokerrpc.Player{
+			Id:         p.ID,
+			Balance:    p.Balance,
+			IsReady:    p.IsReady,
+			Folded:     p.HasFolded,
+			CurrentBet: p.HasBet,
+		}
+
+		// Find the corresponding game player to get the hand cards
+		var gamePlayer *poker.Player
+		if game != nil {
+			for _, gp := range game.GetPlayers() {
+				if gp.ID == p.ID {
+					gamePlayer = gp
+					break
+				}
+			}
+		}
+
+		// Only include hand cards if this is the requesting player's own data
+		// or if the game is in showdown phase
+		if (p.ID == requestingPlayerID) || (game != nil && game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN) {
+			if gamePlayer != nil {
+				player.Hand = make([]*pokerrpc.Card, len(gamePlayer.Hand))
+				for i, card := range gamePlayer.Hand {
+					player.Hand[i] = &pokerrpc.Card{
+						Suit:  card.GetSuit(),
+						Value: card.GetValue(),
+					}
+				}
+			}
+		}
+
+		players = append(players, player)
 	}
 
 	// Build community cards slice
 	communityCards := make([]*pokerrpc.Card, 0)
-	if tGame := table.GetGame(); tGame != nil {
-		for _, c := range tGame.GetCommunityCards() {
+	if game != nil {
+		for _, c := range game.GetCommunityCards() {
 			communityCards = append(communityCards, &pokerrpc.Card{
 				Suit:  c.GetSuit(),
 				Value: c.GetValue(),
@@ -461,6 +544,7 @@ func (s *Server) GetGameState(ctx context.Context, req *pokerrpc.GetGameStateReq
 			Players:         players,
 			CommunityCards:  communityCards,
 			CurrentBet:      table.GetCurrentBet(),
+			CurrentPlayer:   table.GetCurrentPlayerID(),
 			Pot:             table.GetPot(),
 			GameStarted:     table.IsGameStarted(),
 			PlayersRequired: int32(table.GetMinPlayers()),
