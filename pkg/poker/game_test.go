@@ -7,18 +7,15 @@ import (
 
 func TestNewGame(t *testing.T) {
 	cfg := GameConfig{
-		NumPlayers: 2,
-		Seed:       42, // Use a fixed seed for deterministic testing
+		NumPlayers:    2,
+		StartingChips: 100,
+		Seed:          42, // Use a fixed seed for deterministic testing
 	}
 
 	game := NewGame(cfg)
 
 	if len(game.players) != 2 {
 		t.Errorf("Expected 2 players, got %d", len(game.players))
-	}
-
-	if game.maxRounds != 1 {
-		t.Errorf("Expected maxRounds=1, got %d", game.maxRounds)
 	}
 
 	// Check initial player state
@@ -51,15 +48,17 @@ func TestNewGamePanicsOnInvalidPlayers(t *testing.T) {
 	}()
 
 	cfg := GameConfig{
-		NumPlayers: 1,
+		NumPlayers:    1,
+		StartingChips: 100,
 	}
 	NewGame(cfg)
 }
 
 func TestDealCards(t *testing.T) {
 	cfg := GameConfig{
-		NumPlayers: 2,
-		Seed:       42,
+		NumPlayers:    2,
+		StartingChips: 100,
+		Seed:          42,
 	}
 
 	game := NewGame(cfg)

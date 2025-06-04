@@ -64,6 +64,7 @@ type PokerUI struct {
 	requiredPlayers   string
 	buyIn             string
 	minBalance        string
+	startingChips     string
 	selectedFormField int // Track which form field is selected
 
 	// For join table
@@ -114,6 +115,7 @@ func NewPokerUI(ctx context.Context, client *client.PokerClient) *PokerUI {
 		requiredPlayers: "2",
 		buyIn:           "100",
 		minBalance:      "100",
+		startingChips:   "1000",
 	}
 
 	// Create component handlers

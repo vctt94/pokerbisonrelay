@@ -12,15 +12,16 @@ import (
 
 // TableConfig holds configuration for a new poker table
 type TableConfig struct {
-	ID         string
-	HostID     string
-	BuyIn      int64
-	MinPlayers int
-	MaxPlayers int
-	SmallBlind int64
-	BigBlind   int64
-	MinBalance int64
-	TimeBank   time.Duration
+	ID            string
+	HostID        string
+	BuyIn         int64
+	MinPlayers    int
+	MaxPlayers    int
+	SmallBlind    int64
+	BigBlind      int64
+	MinBalance    int64
+	StartingChips int64 // Fixed number of chips each player starts with in game
+	TimeBank      time.Duration
 }
 
 // Table represents a poker table
@@ -136,10 +137,11 @@ func (t *Table) StartGame() error {
 	i := 0
 	for _, p := range t.players {
 		// Create game player from table player
+		// Use StartingChips for in-game balance, not external balance
 		gamePlayer := Player{
 			ID:        p.ID,
 			Name:      p.Name,
-			Balance:   p.Balance,
+			Balance:   t.config.StartingChips, // Use fixed starting chips
 			TableSeat: i,
 			HasFolded: false,
 			HasBet:    0,
@@ -150,7 +152,8 @@ func (t *Table) StartGame() error {
 	}
 
 	t.game = NewGame(GameConfig{
-		NumPlayers: len(players),
+		NumPlayers:    len(players),
+		StartingChips: t.config.StartingChips,
 	})
 
 	// Set up game players

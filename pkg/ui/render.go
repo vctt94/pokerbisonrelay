@@ -117,6 +117,7 @@ func (r *Renderer) RenderCreateTable() string {
 		{"👥 Required Players", r.ui.requiredPlayers},
 		{"🎫 Buy In", r.ui.buyIn},
 		{"💵 Min Balance", r.ui.minBalance},
+		{"🎰 Starting Chips", r.ui.startingChips},
 	}
 
 	for i, field := range fields {
@@ -224,42 +225,41 @@ func (r *Renderer) RenderActiveGame() string {
 	var s string
 
 	// Game title
-	s += TitleStyle.Render(fmt.Sprintf("🃏 Active Game - Table %s 🃏", r.ui.pc.GetCurrentTableID())) + "\n\n"
+	s += TitleStyle.Render(fmt.Sprintf("🃏 Table %s 🃏", r.ui.pc.GetCurrentTableID())) + "\n"
 
-	// COMMUNITY CARDS - Most prominent section
+	// COMMUNITY CARDS
 	s += r.renderCommunityCardsSection() + "\n"
 
-	// YOUR CARDS - Second most important
-	s += r.renderYourCardsSection() + "\n"
+	// YOUR CARDS
+	s += r.renderYourCardsAndGameInfo() + "\n"
 
-	// Game info - balance, pot, phase
-	s += r.renderGameInfo() + "\n"
-
-	// Game status and turn indicator
-	s += r.renderGameStatusHeader() + "\n"
-
-	// Compact player information
+	// Player information
 	s += r.renderPlayersCompact() + "\n"
 
 	// Action buttons for current player or waiting/leave options
 	actionButtons := r.renderActionButtons()
 	if actionButtons != "" {
-		s += actionButtons + "\n"
+		s += actionButtons
 	} else {
 		// Show appropriate options when not player's turn
 		if r.ui.gamePhase == pokerrpc.GamePhase_SHOWDOWN {
-			s += HelpStyle.Render("🏆 Showdown - Revealing hands...") + "\n"
+			s += HelpStyle.Render("🏆 Showdown") + " | "
 		} else if r.ui.currentPlayerID == "" {
-			s += HelpStyle.Render("⏳ Waiting for game to start...") + "\n"
+			s += HelpStyle.Render("⏳ Starting") + " | "
 		} else if !isPlayerTurn(r.ui.currentPlayerID, r.ui.clientID) {
-			s += r.renderWaitingMessage() + "\n"
+			// Find the current player's name for display
+			currentPlayerName := r.ui.currentPlayerID
+			if len(currentPlayerName) > 8 {
+				currentPlayerName = currentPlayerName[:8] + "..."
+			}
+			s += HelpStyle.Render(fmt.Sprintf("⏰ %s acting", currentPlayerName)) + " | "
 		}
 
 		// Always show leave table option when not actively playing
-		s += BlurredStyle.Render("  🚪 Leave Table") + "\n"
+		s += BlurredStyle.Render("🚪 Leave Table")
 	}
 
-	s += "\n" + HelpStyle.Render("Use arrow keys to navigate, Enter to select, 'q' to go back")
+	s += "\n" + HelpStyle.Render("Arrow keys to navigate, Enter to select, 'q' to go back")
 	return s
 }
 
@@ -273,7 +273,6 @@ func (r *Renderer) renderCommunityCardsSection() string {
 		Bold(true).
 		Background(lipgloss.Color("22")).
 		Padding(0, 2).
-		Margin(0, 0, 1, 0).
 		Render("🃏 COMMUNITY CARDS") + "\n"
 
 	// Cards display
@@ -308,14 +307,13 @@ func (r *Renderer) renderCommunityCardsSection() string {
 	cardsDisplay := strings.Join(cardElements, " ")
 	s += lipgloss.NewStyle().
 		Align(lipgloss.Center).
-		Margin(0, 0, 1, 0).
 		Render(cardsDisplay) + "\n"
 
 	// Phase indicator
 	var phaseText string
 	switch r.ui.gamePhase {
 	case pokerrpc.GamePhase_WAITING:
-		phaseText = "⏳ Waiting for game to start"
+		phaseText = "⏳ Waiting"
 	case pokerrpc.GamePhase_PRE_FLOP:
 		phaseText = "🎯 PRE-FLOP"
 	case pokerrpc.GamePhase_FLOP:
@@ -343,16 +341,16 @@ func (r *Renderer) renderCommunityCardsSection() string {
 	return s
 }
 
-// renderYourCardsSection creates a clear display of the player's cards
-func (r *Renderer) renderYourCardsSection() string {
+// renderYourCardsAndGameInfo creates a compact display combining player cards and game info
+func (r *Renderer) renderYourCardsAndGameInfo() string {
 	var s string
 
+	// Your cards header - compact
 	s += lipgloss.NewStyle().
 		Foreground(lipgloss.Color("39")).
 		Bold(true).
 		Background(lipgloss.Color("17")).
 		Padding(0, 2).
-		Margin(1, 0, 0, 0).
 		Render("🂠 YOUR CARDS") + "\n"
 
 	var cardElements []string
@@ -388,68 +386,20 @@ func (r *Renderer) renderYourCardsSection() string {
 	cardsDisplay := strings.Join(cardElements, " ")
 	s += lipgloss.NewStyle().
 		Align(lipgloss.Center).
-		Margin(0, 0, 1, 0).
 		Render(cardsDisplay)
 
-	return s
-}
-
-// renderGameInfo displays balance, pot, and game phase information
-func (r *Renderer) renderGameInfo() string {
-	balanceText := "💰 Balance: (loading...)"
-	if balance, err := r.ui.pc.GetBalance(r.ui.ctx); err == nil {
-		balanceText = fmt.Sprintf("💰 Balance: %d", balance)
-	}
-
-	potDisplay := fmt.Sprintf("💰 POT: %d", r.ui.pot)
+	// Game info on same line after cards - only showing POT and bet info, no account balance
+	potDisplay := fmt.Sprintf("POT: %d", r.ui.pot)
 	if r.ui.currentBet > 0 {
-		potDisplay += fmt.Sprintf(" | Current Bet: %d", r.ui.currentBet)
+		potDisplay += fmt.Sprintf(" | Bet: %d", r.ui.currentBet)
 	}
 
-	gameInfo := balanceText + " | " + potDisplay
-	return lipgloss.NewStyle().
+	gameInfo := fmt.Sprintf("💰 %s", potDisplay)
+	s += " | " + lipgloss.NewStyle().
 		Foreground(lipgloss.Color("140")).
-		Margin(1, 0).
 		Render(gameInfo)
-}
 
-// renderGameStatusHeader shows whose turn it is and game status
-func (r *Renderer) renderGameStatusHeader() string {
-	var statusMsg string
-
-	// Determine game status
-	if r.ui.currentPlayerID == "" {
-		statusMsg = "⏳ Waiting for game to start..."
-	} else if isPlayerTurn(r.ui.currentPlayerID, r.ui.clientID) {
-		statusMsg = "🎯 YOUR TURN - Choose your action below"
-	} else {
-		// Find the current player's name for display
-		currentPlayerName := r.ui.currentPlayerID
-		if len(currentPlayerName) > 12 {
-			currentPlayerName = currentPlayerName[:12] + "..."
-		}
-		statusMsg = fmt.Sprintf("⏰ Waiting for %s to act...", currentPlayerName)
-	}
-
-	return TitleStyle.Render(statusMsg)
-}
-
-// renderWaitingMessage shows appropriate waiting message
-func (r *Renderer) renderWaitingMessage() string {
-	var waitingMsg string
-
-	if r.ui.currentPlayerID == "" {
-		waitingMsg = "⏳ Game is starting..."
-	} else {
-		// Find the current player's name for display
-		currentPlayerName := r.ui.currentPlayerID
-		if len(currentPlayerName) > 12 {
-			currentPlayerName = currentPlayerName[:12] + "..."
-		}
-		waitingMsg = fmt.Sprintf("⏰ Waiting for %s to make their move...", currentPlayerName)
-	}
-
-	return HelpStyle.Render(waitingMsg)
+	return s
 }
 
 // renderPlayersAroundTable creates a visual representation of players around a poker table
@@ -543,7 +493,7 @@ func (r *Renderer) formatPlayerInfo(player *pokerrpc.Player) string {
 	return strings.Join(info, "\n")
 }
 
-// renderActionButtons creates interactive action buttons for the current player
+// renderActionButtons creates interactive action buttons
 func (r *Renderer) renderActionButtons() string {
 	// Check if it's player's turn and they're in an active game phase
 	if !isPlayerTurn(r.ui.currentPlayerID, r.ui.clientID) {
@@ -560,7 +510,7 @@ func (r *Renderer) renderActionButtons() string {
 	}
 
 	var result string
-	result += TitleStyle.Render("🎯 YOUR TURN - Choose your action 🎯") + "\n\n"
+	result += TitleStyle.Render("🎯 YOUR TURN - Choose your action 🎯") + "\n"
 
 	// Use the actual menuOptions from the UI state instead of hardcoded actions
 	for i, option := range r.ui.menuOptions {
@@ -640,18 +590,18 @@ func isRedSuit(suit string) bool {
 // renderPlayersCompact creates a compact single-line representation of players for when action buttons are shown
 func (r *Renderer) renderPlayersCompact() string {
 	if len(r.ui.players) == 0 {
-		return HelpStyle.Render("👥 No players at table")
+		return HelpStyle.Render("👥 No players")
 	}
 
 	var result strings.Builder
-	result.WriteString("👥 Players: ")
+	result.WriteString("👥 ")
 
 	var playerInfos []string
-	for i, player := range r.ui.players {
-		// Player name (truncated)
+	for _, player := range r.ui.players {
+		// Player name (truncated more)
 		playerName := player.Id
-		if len(playerName) > 10 {
-			playerName = playerName[:10] + "..."
+		if len(playerName) > 6 {
+			playerName = playerName[:6] + "…"
 		}
 
 		// Create status indicators with colors
@@ -673,7 +623,7 @@ func (r *Renderer) renderPlayersCompact() string {
 		}
 
 		// Format player info with styling
-		playerInfo := fmt.Sprintf("%s S%d:%s(💰%d)", statusIcon, i+1, playerName, player.Balance)
+		playerInfo := fmt.Sprintf("%s%s(💰%d)", statusIcon, playerName, player.Balance)
 
 		// Add current bet if they have one
 		if player.CurrentBet > 0 {
@@ -689,11 +639,5 @@ func (r *Renderer) renderPlayersCompact() string {
 
 	result.WriteString(strings.Join(playerInfos, " "))
 
-	// Add a subtle border and margin to separate from other elements
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		Padding(0, 1).
-		Margin(1, 0).
-		Render(result.String())
+	return result.String()
 }

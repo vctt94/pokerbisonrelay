@@ -16,6 +16,8 @@ import (
 	"github.com/vctt94/poker-bisonrelay/pkg/server"
 )
 
+const STARTING_CHIPS = 1000
+
 // State holds the state of the poker bot
 type State struct {
 	db     server.Database
@@ -72,7 +74,7 @@ func (s *State) HandlePM(ctx context.Context, bot *kit.Bot, pm *types.ReceivedPM
 
 func (s *State) handleCreateTable(ctx context.Context, bot *kit.Bot, pm *types.ReceivedPM, tokens []string, playerID string) {
 	if len(tokens) < 2 {
-		bot.SendPM(ctx, pm.Nick, "Usage: create <buy-in amount in DCR>")
+		bot.SendPM(ctx, pm.Nick, "Usage: create <buy-in amount in DCR> [starting-chips]")
 		return
 	}
 
@@ -87,6 +89,21 @@ func (s *State) handleCreateTable(ctx context.Context, bot *kit.Bot, pm *types.R
 	if err != nil {
 		bot.SendPM(ctx, pm.Nick, "Invalid DCR amount. Please enter a valid number.")
 		return
+	}
+
+	// Parse starting chips (optional, default to 1000)
+	startingChips := int64(STARTING_CHIPS)
+	if len(tokens) >= 3 {
+		parsed, err := strconv.ParseInt(tokens[2], 10, 64)
+		if err != nil {
+			bot.SendPM(ctx, pm.Nick, "Invalid starting chips amount. Please enter a valid number.")
+			return
+		}
+		if parsed <= 0 {
+			bot.SendPM(ctx, pm.Nick, "Starting chips must be greater than 0.")
+			return
+		}
+		startingChips = parsed
 	}
 
 	// Check player balance
@@ -104,14 +121,15 @@ func (s *State) handleCreateTable(ctx context.Context, bot *kit.Bot, pm *types.R
 	// Create new table
 	tableID := fmt.Sprintf("table-%d", time.Now().Unix())
 	table := poker.NewTable(poker.TableConfig{
-		ID:         tableID,
-		HostID:     playerID,
-		BuyIn:      int64(buyIn),
-		MinPlayers: 2,
-		MaxPlayers: 6,
-		SmallBlind: int64(buyIn) / 100, // 1% of buy-in
-		BigBlind:   int64(buyIn) / 50,  // 2% of buy-in
-		TimeBank:   30 * time.Second,
+		ID:            tableID,
+		HostID:        playerID,
+		BuyIn:         int64(buyIn),
+		MinPlayers:    2,
+		MaxPlayers:    6,
+		SmallBlind:    int64(buyIn) / 100, // 1% of buy-in
+		BigBlind:      int64(buyIn) / 50,  // 2% of buy-in
+		StartingChips: startingChips,      // Fixed starting chips for all players
+		TimeBank:      30 * time.Second,
 	})
 
 	// Add creator to table
@@ -126,8 +144,8 @@ func (s *State) handleCreateTable(ctx context.Context, bot *kit.Bot, pm *types.R
 	s.tables[tableID] = table
 	s.mu.Unlock()
 
-	bot.SendPM(ctx, pm.Nick, fmt.Sprintf("Table %s created with buy-in of %.8f DCR. Use 'join %s' to join.",
-		tableID, buyIn.ToCoin(), tableID))
+	bot.SendPM(ctx, pm.Nick, fmt.Sprintf("Table %s created with buy-in of %.8f DCR and %d starting chips. Use 'join %s' to join.",
+		tableID, buyIn.ToCoin(), startingChips, tableID))
 }
 
 func (s *State) handleJoinTable(ctx context.Context, bot *kit.Bot, pm *types.ReceivedPM, tokens []string, playerID string) {
@@ -205,7 +223,7 @@ func (s *State) handleListTables(ctx context.Context, bot *kit.Bot, pm *types.Re
 func (s *State) handleHelp(ctx context.Context, bot *kit.Bot, pm *types.ReceivedPM) {
 	helpMsg := `Available commands:
 - balance: Check your current balance
-- create <amount>: Create a new poker table with specified buy-in
+- create <amount> [starting-chips]: Create a new poker table with specified buy-in and optional starting chips (default: 1000)
 - join <table-id>: Join an existing poker table
 - tables: List all active tables
 - help: Show this help message`

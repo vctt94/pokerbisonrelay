@@ -151,12 +151,13 @@ func TestPokerService(t *testing.T) {
 	t.Run("CreateTable", func(t *testing.T) {
 		// Test with insufficient balance
 		_, err := server.CreateTable(ctx, &pokerrpc.CreateTableRequest{
-			PlayerId:   player1ID,
-			SmallBlind: 10,
-			BigBlind:   20,
-			MinPlayers: 2,
-			MaxPlayers: 6,
-			BuyIn:      1000,
+			PlayerId:      player1ID,
+			SmallBlind:    10,
+			BigBlind:      20,
+			MinPlayers:    2,
+			MaxPlayers:    6,
+			BuyIn:         1000,
+			StartingChips: 1000,
 		})
 		assert.Error(t, err)
 
@@ -170,12 +171,13 @@ func TestPokerService(t *testing.T) {
 
 		// Test successful table creation
 		resp, err := server.CreateTable(ctx, &pokerrpc.CreateTableRequest{
-			PlayerId:   player1ID,
-			SmallBlind: 10,
-			BigBlind:   20,
-			MinPlayers: 2,
-			MaxPlayers: 6,
-			BuyIn:      1000,
+			PlayerId:      player1ID,
+			SmallBlind:    10,
+			BigBlind:      20,
+			MinPlayers:    2,
+			MaxPlayers:    6,
+			BuyIn:         1000,
+			StartingChips: 1000,
 		})
 		require.NoError(t, err)
 		assert.NotEmpty(t, resp.TableId)
@@ -321,13 +323,14 @@ func TestPokerGameFlow(t *testing.T) {
 
 	// Player1 creates a table
 	createTableResp, err := lobbyClient.CreateTable(context.Background(), &pokerrpc.CreateTableRequest{
-		PlayerId:   player1ID,
-		BuyIn:      100,
-		MinPlayers: 2,
-		MaxPlayers: 2,
-		SmallBlind: 5,
-		BigBlind:   10,
-		MinBalance: 100,
+		PlayerId:      player1ID,
+		BuyIn:         100,
+		MinPlayers:    2,
+		MaxPlayers:    2,
+		SmallBlind:    5,
+		BigBlind:      10,
+		MinBalance:    100,
+		StartingChips: 500,
 	})
 	if err != nil {
 		t.Fatalf("failed to create table: %v", err)
@@ -451,13 +454,14 @@ func TestHostLeavesTableClosure(t *testing.T) {
 
 	// Host creates a table
 	createTableResp, err := server.CreateTable(ctx, &pokerrpc.CreateTableRequest{
-		PlayerId:   hostID,
-		BuyIn:      100,
-		MinPlayers: 2,
-		MaxPlayers: 3,
-		SmallBlind: 5,
-		BigBlind:   10,
-		MinBalance: 100,
+		PlayerId:      hostID,
+		BuyIn:         100,
+		MinPlayers:    2,
+		MaxPlayers:    3,
+		SmallBlind:    5,
+		BigBlind:      10,
+		MinBalance:    100,
+		StartingChips: 500,
 	})
 	require.NoError(t, err)
 	tableID := createTableResp.TableId
@@ -534,18 +538,19 @@ func TestNonHostLeavesTable(t *testing.T) {
 
 	// Host creates a table
 	createTableResp, err := server.CreateTable(ctx, &pokerrpc.CreateTableRequest{
-		PlayerId:   hostID,
-		BuyIn:      100,
-		MinPlayers: 2,
-		MaxPlayers: 2,
-		SmallBlind: 5,
-		BigBlind:   10,
-		MinBalance: 100,
+		PlayerId:      hostID,
+		BuyIn:         100,
+		MinPlayers:    2,
+		MaxPlayers:    2,
+		SmallBlind:    5,
+		BigBlind:      10,
+		MinBalance:    100,
+		StartingChips: 500,
 	})
 	require.NoError(t, err)
 	tableID := createTableResp.TableId
 
-	// Player joins the table
+	// Player1 and Player2 join the table
 	_, err = server.JoinTable(ctx, &pokerrpc.JoinTableRequest{
 		PlayerId: playerID,
 		TableId:  tableID,

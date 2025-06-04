@@ -48,15 +48,16 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 
 	// Create table config
 	cfg := poker.TableConfig{
-		ID:         fmt.Sprintf("table-%d", time.Now().UnixNano()),
-		HostID:     req.PlayerId,
-		BuyIn:      req.BuyIn,
-		MinPlayers: int(req.MinPlayers),
-		MaxPlayers: int(req.MaxPlayers),
-		SmallBlind: req.SmallBlind,
-		BigBlind:   req.BigBlind,
-		MinBalance: req.MinBalance,
-		TimeBank:   30 * time.Second,
+		ID:            fmt.Sprintf("table-%d", time.Now().UnixNano()),
+		HostID:        req.PlayerId,
+		BuyIn:         req.BuyIn,
+		MinPlayers:    int(req.MinPlayers),
+		MaxPlayers:    int(req.MaxPlayers),
+		SmallBlind:    req.SmallBlind,
+		BigBlind:      req.BigBlind,
+		MinBalance:    req.MinBalance,
+		StartingChips: req.StartingChips,
+		TimeBank:      30 * time.Second,
 	}
 
 	// Create new table

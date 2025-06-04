@@ -28,12 +28,13 @@ import (
 
 // TableCreateConfig holds configuration for creating a new table
 type TableCreateConfig struct {
-	SmallBlind int64
-	BigBlind   int64
-	MinPlayers int32
-	MaxPlayers int32
-	BuyIn      int64
-	MinBalance int64
+	SmallBlind    int64
+	BigBlind      int64
+	MinPlayers    int32
+	MaxPlayers    int32
+	BuyIn         int64
+	MinBalance    int64
+	StartingChips int64
 }
 
 // PokerClient represents a poker client with notification handling
@@ -456,16 +457,17 @@ func (pc *PokerClient) JoinTable(ctx context.Context, tableID string) error {
 
 // CreateTable creates a new poker table and tracks the table ID
 func (pc *PokerClient) createTable(ctx context.Context,
-	smallBlind, bigBlind int64, maxPlayers, minPlayers int32, minBalance, buyIn int64,
+	smallBlind, bigBlind int64, maxPlayers, minPlayers int32, minBalance, buyIn, startingChips int64,
 ) (string, error) {
 	resp, err := pc.LobbyService.CreateTable(ctx, &pokerrpc.CreateTableRequest{
-		PlayerId:   pc.ID,
-		SmallBlind: smallBlind,
-		BigBlind:   bigBlind,
-		MaxPlayers: maxPlayers,
-		MinPlayers: minPlayers,
-		MinBalance: minBalance,
-		BuyIn:      buyIn,
+		PlayerId:      pc.ID,
+		SmallBlind:    smallBlind,
+		BigBlind:      bigBlind,
+		MaxPlayers:    maxPlayers,
+		MinPlayers:    minPlayers,
+		MinBalance:    minBalance,
+		BuyIn:         buyIn,
+		StartingChips: startingChips,
 	})
 	if err != nil {
 		return "", err
@@ -480,7 +482,7 @@ func (pc *PokerClient) createTable(ctx context.Context,
 
 // CreateTable creates a new poker table using a configuration struct
 func (pc *PokerClient) CreateTable(ctx context.Context, config TableCreateConfig) (string, error) {
-	return pc.createTable(ctx, config.SmallBlind, config.BigBlind, config.MaxPlayers, config.MinPlayers, config.MinBalance, config.BuyIn)
+	return pc.createTable(ctx, config.SmallBlind, config.BigBlind, config.MaxPlayers, config.MinPlayers, config.MinBalance, config.BuyIn, config.StartingChips)
 }
 
 // LeaveTable leaves the current table and clears the table ID

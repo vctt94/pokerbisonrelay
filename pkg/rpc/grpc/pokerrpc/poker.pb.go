@@ -1117,6 +1117,7 @@ type CreateTableRequest struct {
 	MinPlayers    int32                  `protobuf:"varint,5,opt,name=min_players,json=minPlayers,proto3" json:"min_players,omitempty"`
 	MinBalance    int64                  `protobuf:"varint,6,opt,name=min_balance,json=minBalance,proto3" json:"min_balance,omitempty"`
 	BuyIn         int64                  `protobuf:"varint,7,opt,name=buy_in,json=buyIn,proto3" json:"buy_in,omitempty"`
+	StartingChips int64                  `protobuf:"varint,8,opt,name=starting_chips,json=startingChips,proto3" json:"starting_chips,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1196,6 +1197,13 @@ func (x *CreateTableRequest) GetMinBalance() int64 {
 func (x *CreateTableRequest) GetBuyIn() int64 {
 	if x != nil {
 		return x.BuyIn
+	}
+	return 0
+}
+
+func (x *CreateTableRequest) GetStartingChips() int64 {
+	if x != nil {
+		return x.StartingChips
 	}
 	return 0
 }
@@ -2738,7 +2746,7 @@ const file_poker_proto_rawDesc = "" +
 	"\tplayer_id\x18\x01 \x01(\tR\bplayerId\x12/\n" +
 	"\thand_rank\x18\x02 \x01(\x0e2\x12.pokerrpc.HandRankR\bhandRank\x12+\n" +
 	"\tbest_hand\x18\x03 \x03(\v2\x0e.pokerrpc.CardR\bbestHand\x12\x1a\n" +
-	"\bwinnings\x18\x04 \x01(\x03R\bwinnings\"\xe9\x01\n" +
+	"\bwinnings\x18\x04 \x01(\x03R\bwinnings\"\x90\x02\n" +
 	"\x12CreateTableRequest\x12\x1b\n" +
 	"\tplayer_id\x18\x01 \x01(\tR\bplayerId\x12\x1f\n" +
 	"\vsmall_blind\x18\x02 \x01(\x03R\n" +
@@ -2750,7 +2758,8 @@ const file_poker_proto_rawDesc = "" +
 	"minPlayers\x12\x1f\n" +
 	"\vmin_balance\x18\x06 \x01(\x03R\n" +
 	"minBalance\x12\x15\n" +
-	"\x06buy_in\x18\a \x01(\x03R\x05buyIn\"0\n" +
+	"\x06buy_in\x18\a \x01(\x03R\x05buyIn\x12%\n" +
+	"\x0estarting_chips\x18\b \x01(\x03R\rstartingChips\"0\n" +
 	"\x13CreateTableResponse\x12\x19\n" +
 	"\btable_id\x18\x01 \x01(\tR\atableId\"J\n" +
 	"\x10JoinTableRequest\x12\x1b\n" +

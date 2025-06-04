@@ -11,8 +11,9 @@ import (
 
 // GameConfig holds configuration for a new game
 type GameConfig struct {
-	NumPlayers int
-	Seed       int64 // Optional seed for deterministic games
+	NumPlayers    int
+	StartingChips int64 // Fixed number of chips each player starts with
+	Seed          int64 // Optional seed for deterministic games
 }
 
 // Game holds the context and data for our poker game
@@ -55,7 +56,7 @@ func NewGame(cfg GameConfig) *Game {
 	for i := range players {
 		players[i] = &Player{
 			Name:      fmt.Sprintf("Player%d", i+1),
-			Balance:   100, // Starting chips
+			Balance:   cfg.StartingChips,
 			HasFolded: false,
 			HasBet:    0,
 		}

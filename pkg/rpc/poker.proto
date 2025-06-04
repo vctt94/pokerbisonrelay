@@ -182,6 +182,7 @@ message CreateTableRequest {
   int32 min_players = 5;
   int64 min_balance = 6;
   int64 buy_in = 7;
+  int64 starting_chips = 8;
 }
 
 message CreateTableResponse {

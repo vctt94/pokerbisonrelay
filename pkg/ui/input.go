@@ -106,7 +106,7 @@ func (ih *InputHandler) handleCreateTableInput(msg tea.KeyMsg) tea.Cmd {
 			ih.ui.selectedFormField--
 		}
 	case "down", "j":
-		if ih.ui.selectedFormField < 4 {
+		if ih.ui.selectedFormField < 5 {
 			ih.ui.selectedFormField++
 		}
 	case "enter":
@@ -116,14 +116,16 @@ func (ih *InputHandler) handleCreateTableInput(msg tea.KeyMsg) tea.Cmd {
 		requiredPlayers, _ := strconv.ParseInt(ih.ui.requiredPlayers, 10, 32)
 		buyIn, _ := strconv.ParseInt(ih.ui.buyIn, 10, 64)
 		minBalance, _ := strconv.ParseInt(ih.ui.minBalance, 10, 64)
+		startingChips, _ := strconv.ParseInt(ih.ui.startingChips, 10, 64)
 
 		config := client.TableCreateConfig{
-			SmallBlind: smallBlind,
-			BigBlind:   bigBlind,
-			MinPlayers: int32(requiredPlayers),
-			MaxPlayers: int32(requiredPlayers), // Using same value for min and max for now
-			BuyIn:      buyIn,
-			MinBalance: minBalance,
+			SmallBlind:    smallBlind,
+			BigBlind:      bigBlind,
+			MinPlayers:    int32(requiredPlayers),
+			MaxPlayers:    int32(requiredPlayers), // Using same value for min and max for now
+			BuyIn:         buyIn,
+			MinBalance:    minBalance,
+			StartingChips: startingChips,
 		}
 		return ih.ui.dispatcher.createTableCmd(config)
 	case "backspace":
@@ -160,6 +162,10 @@ func (ih *InputHandler) handleCreateTableBackspace() tea.Cmd {
 		if len(ih.ui.minBalance) > 0 {
 			ih.ui.minBalance = ih.ui.minBalance[:len(ih.ui.minBalance)-1]
 		}
+	case 5: // Starting Chips
+		if len(ih.ui.startingChips) > 0 {
+			ih.ui.startingChips = ih.ui.startingChips[:len(ih.ui.startingChips)-1]
+		}
 	}
 	return nil
 }
@@ -177,6 +183,8 @@ func (ih *InputHandler) handleCreateTableNumberInput(char string) tea.Cmd {
 		ih.ui.buyIn += char
 	case 4: // Min Balance
 		ih.ui.minBalance += char
+	case 5: // Starting Chips
+		ih.ui.startingChips += char
 	}
 	return nil
 }
