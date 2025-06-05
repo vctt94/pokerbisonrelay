@@ -33,7 +33,8 @@ func (r *Renderer) RenderMainMenu() string {
 	}
 	s += "\n"
 
-	for i, option := range r.ui.menuOptions {
+	options := r.ui.getMainMenuOptions()
+	for i, option := range options {
 		if i == r.ui.selectedItem {
 			s += FocusedStyle.Render(fmt.Sprintf("> %s", option)) + "\n"
 		} else {
@@ -196,7 +197,8 @@ func (r *Renderer) RenderGameLobby() string {
 		s += "Loading table information...\n\n"
 	}
 
-	for i, option := range r.ui.menuOptions {
+	options := r.ui.getGameLobbyOptions()
+	for i, option := range options {
 		if i == r.ui.selectedItem {
 			s += FocusedStyle.Render(fmt.Sprintf("> %s", option)) + "\n"
 		} else {
@@ -530,20 +532,21 @@ func (r *Renderer) renderActionButtons() string {
 		Render("⚡ YOUR TURN - CHOOSE ACTION") + "\n\n"
 
 	// Clean action buttons with minimal icons
-	for i, option := range r.ui.menuOptions {
+	options := r.ui.getActiveGameOptions()
+	for i, option := range options {
 		var buttonText string
 
 		switch option {
-		case optionCheck:
+		case "Check":
 			buttonText = "✅ Check"
-		case optionBet:
+		case "Bet":
 			buttonText = "💸 Bet/Raise"
-		case optionFold:
+		case "Fold":
 			buttonText = "❌ Fold"
-		case optionLeaveTable:
+		case "Leave Table":
 			buttonText = "🚪 Leave Table"
 		default:
-			buttonText = string(option)
+			buttonText = option
 		}
 
 		if i == r.ui.selectedItem {

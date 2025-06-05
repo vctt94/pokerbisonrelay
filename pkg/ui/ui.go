@@ -4,41 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/vctt94/poker-bisonrelay/pkg/client"
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
-type menuOption string
-
-const (
-	optionListTables   menuOption = "List Tables"
-	optionCreateTable  menuOption = "Create Table"
-	optionJoinTable    menuOption = "Join Table"
-	optionLeaveTable   menuOption = "Leave Table"
-	optionCheckBalance menuOption = "Check Balance"
-	optionSetReady     menuOption = "Set Ready"
-	optionSetUnready   menuOption = "Set Unready"
-	optionQuit         menuOption = "Quit"
-	// Poker actions
-	optionCheck menuOption = "Check"
-	optionBet   menuOption = "Bet"
-	optionFold  menuOption = "Fold"
-)
-
-// screenState represents the current screen in the UI
-type screenState int
-
-const (
-	stateMainMenu screenState = iota
-	stateTableList
-	stateCreateTable
-	stateJoinTable
-	stateGameLobby
-	stateActiveGame // New state for when the game is actively running
-	stateBetInput   // New state for entering bet amount
-)
+// stateFn represents a state function that processes input and returns the next state
+type stateFn func(*PokerUI, tea.Msg) (stateFn, tea.Cmd)
 
 // PokerUI contains all the state for our poker client UI
 type PokerUI struct {
@@ -46,11 +20,11 @@ type PokerUI struct {
 	ctx          context.Context
 	clientID     string
 	pc           *client.PokerClient
-	state        screenState
+	currentState stateFn
+	currentView  string // Add this to track current view type
 	err          error
 	selectedItem int
 	tables       []*pokerrpc.Table
-	menuOptions  []menuOption
 
 	// Temporary message
 	message string
@@ -87,12 +61,8 @@ type PokerUI struct {
 	betAmount string
 
 	// Component handlers
-	dispatcher   *CommandDispatcher
-	inputHandler *InputHandler
-	renderer     *Renderer
-
-	// New fields
-	myTurn bool
+	dispatcher *CommandDispatcher
+	renderer   *Renderer
 
 	// current account balance
 	balance int64
@@ -100,28 +70,18 @@ type PokerUI struct {
 
 // NewPokerUI creates a new poker UI model
 func NewPokerUI(ctx context.Context, client *client.PokerClient) *PokerUI {
-	// Initial menu options
-	menuOptions := []menuOption{
-		optionListTables,
-		optionCreateTable,
-		optionJoinTable,
-		optionCheckBalance,
-		optionQuit,
-	}
-
 	ui := &PokerUI{
 		ctx:      ctx,
 		clientID: client.ID,
 		pc:       client,
 
-		state:           stateMainMenu,
-		menuOptions:     menuOptions,
 		smallBlind:      "10",
 		bigBlind:        "20",
 		requiredPlayers: "2",
 		buyIn:           "100",
 		minBalance:      "100",
 		startingChips:   "1000",
+		currentView:     "mainMenu",
 	}
 
 	// Create component handlers
@@ -130,8 +90,11 @@ func NewPokerUI(ctx context.Context, client *client.PokerClient) *PokerUI {
 		clientID: client.ID,
 		pc:       client,
 	}
-	ui.inputHandler = &InputHandler{ui: ui}
+
 	ui.renderer = &Renderer{ui: ui}
+
+	// Set initial state
+	ui.currentState = ui.stateMainMenu
 
 	return ui
 }
@@ -158,91 +121,447 @@ func (m *PokerUI) GetCurrentTableBigBlind() int64 {
 }
 
 func (m *PokerUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-
+	// Handle global messages first
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		// Handle input through the input handler
-		cmd = m.inputHandler.HandleKeyMsg(msg)
-
 	case tablesMsg:
 		m.tables = []*pokerrpc.Table(msg)
-		m.state = stateTableList
 		m.selectedTable = 0
 		m.err = nil
+		m.currentState = m.stateTableList
+		m.currentView = "tableList"
+		return m, nil
 
 	case notificationMsg:
 		notif := (*pokerrpc.Notification)(msg)
 		m.message = notif.Message
 		m.err = nil
-		// Update cached balance if this is a balance notification
 		if notif.Type == pokerrpc.NotificationType_BALANCE_UPDATED {
 			m.balance = notif.NewBalance
 		}
-		// Process the notification to handle state transitions
-		cmd = m.handleNotification(notif)
+		cmd := m.handleNotification(notif)
+		return m, cmd
 
 	case *pokerrpc.Notification:
-		// Handle direct notification messages from client
 		notif := msg
 		m.message = notif.Message
 		m.err = nil
-		// Update cached balance if this is a balance notification
 		if notif.Type == pokerrpc.NotificationType_BALANCE_UPDATED {
 			m.balance = notif.NewBalance
 		}
-		// Process the notification to handle state transitions
-		cmd = m.handleNotification(notif)
+		cmd := m.handleNotification(notif)
+		return m, cmd
 
 	case client.GameUpdateMsg:
 		gameUpdate := (*pokerrpc.GameUpdate)(msg)
-
-		// Update current player ID
-		m.currentPlayerID = gameUpdate.CurrentPlayer
-
-		// Handle state updates from the game
-		m.gamePhase = gameUpdate.Phase
-		m.players = gameUpdate.Players
-		m.communityCards = gameUpdate.CommunityCards
-		m.pot = gameUpdate.Pot
-		m.currentBet = gameUpdate.CurrentBet
-
-		// Count joined players
-		m.playersJoined = int32(len(m.players))
-		// Set required players from game update
-		m.playersRequired = gameUpdate.PlayersRequired
-
-		// Update current turn based on game update
-		if m.currentPlayerID == m.clientID && (gameUpdate.Phase == pokerrpc.GamePhase_PRE_FLOP ||
-			gameUpdate.Phase == pokerrpc.GamePhase_FLOP ||
-			gameUpdate.Phase == pokerrpc.GamePhase_TURN ||
-			gameUpdate.Phase == pokerrpc.GamePhase_RIVER ||
-			gameUpdate.Phase == pokerrpc.GamePhase_SHOWDOWN) {
-			m.myTurn = true
-		} else {
-			m.myTurn = false
-		}
-
-		// Determine current UI state based on game phase
-		switch gameUpdate.Phase {
-		case pokerrpc.GamePhase_WAITING:
-			m.state = stateGameLobby
-		default:
-			m.state = stateActiveGame
-		}
-
-		// Update menu options for the current state
-		m.updateMenuOptionsForGameState()
-
-		m.err = nil
+		m.updateGameState(gameUpdate)
+		return m, nil
 
 	case errorMsg:
 		m.err = error(msg)
 		m.message = ""
-
+		return m, nil
 	}
 
+	// Delegate to current state function
+	nextState, cmd := m.currentState(m, msg)
+	m.currentState = nextState
 	return m, cmd
+}
+
+// State functions
+
+func (m *PokerUI) stateMainMenu(ui *PokerUI, msg tea.Msg) (stateFn, tea.Cmd) {
+	m.currentView = "mainMenu"
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "up", "k":
+			if m.selectedItem > 0 {
+				m.selectedItem--
+			}
+		case "down", "j":
+			options := m.getMainMenuOptions()
+			if m.selectedItem < len(options)-1 {
+				m.selectedItem++
+			}
+		case "enter", " ":
+			options := m.getMainMenuOptions()
+			if m.selectedItem < len(options) {
+				return m.handleMainMenuSelection(options[m.selectedItem])
+			}
+		case "q", "ctrl+c":
+			return m.stateMainMenu, tea.Quit
+		}
+	}
+	return m.stateMainMenu, nil
+}
+
+func (m *PokerUI) stateTableList(ui *PokerUI, msg tea.Msg) (stateFn, tea.Cmd) {
+	m.currentView = "tableList"
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "up", "k":
+			if m.selectedTable > 0 {
+				m.selectedTable--
+			}
+		case "down", "j":
+			if m.selectedTable < len(m.tables)-1 {
+				m.selectedTable++
+			}
+		case "enter", " ":
+			if len(m.tables) > 0 && m.selectedTable < len(m.tables) {
+				table := m.tables[m.selectedTable]
+				return m.stateTableList, m.dispatcher.joinTableCmd(table.Id)
+			}
+		case "r":
+			return m.stateTableList, m.dispatcher.getTablesCmd()
+		case "q":
+			m.selectedItem = 0
+			m.currentView = "mainMenu"
+			return m.stateMainMenu, nil
+		case "ctrl+c":
+			return m.stateTableList, tea.Quit
+		}
+	}
+	return m.stateTableList, nil
+}
+
+func (m *PokerUI) stateCreateTable(ui *PokerUI, msg tea.Msg) (stateFn, tea.Cmd) {
+	m.currentView = "createTable"
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "up", "k":
+			if m.selectedFormField > 0 {
+				m.selectedFormField--
+			}
+		case "down", "j":
+			if m.selectedFormField < 5 { // 6 fields total (0-5)
+				m.selectedFormField++
+			}
+		case "enter", " ":
+			// Parse form values and create table config
+			smallBlind, _ := strconv.ParseInt(m.smallBlind, 10, 64)
+			bigBlind, _ := strconv.ParseInt(m.bigBlind, 10, 64)
+			requiredPlayers, _ := strconv.ParseInt(m.requiredPlayers, 10, 32)
+			buyIn, _ := strconv.ParseInt(m.buyIn, 10, 64)
+			minBalance, _ := strconv.ParseInt(m.minBalance, 10, 64)
+			startingChips, _ := strconv.ParseInt(m.startingChips, 10, 64)
+
+			config := client.TableCreateConfig{
+				SmallBlind:    smallBlind,
+				BigBlind:      bigBlind,
+				MinPlayers:    int32(requiredPlayers),
+				MaxPlayers:    int32(requiredPlayers), // Using same value for min and max for now
+				BuyIn:         buyIn,
+				MinBalance:    minBalance,
+				StartingChips: startingChips,
+			}
+			return m.stateCreateTable, m.dispatcher.createTableCmd(config)
+		case "q":
+			m.selectedItem = 0
+			m.currentView = "mainMenu"
+			return m.stateMainMenu, nil
+		case "ctrl+c":
+			return m.stateCreateTable, tea.Quit
+		default:
+			// Handle text input for the selected field
+			m.updateFormField(msg.String())
+		}
+	}
+	return m.stateCreateTable, nil
+}
+
+func (m *PokerUI) stateJoinTable(ui *PokerUI, msg tea.Msg) (stateFn, tea.Cmd) {
+	m.currentView = "joinTable"
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "enter", " ":
+			return m.stateJoinTable, m.dispatcher.joinTableCmd(m.tableIdInput)
+		case "q":
+			m.selectedItem = 0
+			m.tableIdInput = ""
+			m.currentView = "mainMenu"
+			return m.stateMainMenu, nil
+		case "ctrl+c":
+			return m.stateJoinTable, tea.Quit
+		case "backspace":
+			if len(m.tableIdInput) > 0 {
+				m.tableIdInput = m.tableIdInput[:len(m.tableIdInput)-1]
+			}
+		default:
+			if len(msg.String()) == 1 {
+				m.tableIdInput += msg.String()
+			}
+		}
+	}
+	return m.stateJoinTable, nil
+}
+
+func (m *PokerUI) stateGameLobby(ui *PokerUI, msg tea.Msg) (stateFn, tea.Cmd) {
+	m.currentView = "gameLobby"
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "up", "k":
+			if m.selectedItem > 0 {
+				m.selectedItem--
+			}
+		case "down", "j":
+			options := m.getGameLobbyOptions()
+			if m.selectedItem < len(options)-1 {
+				m.selectedItem++
+			}
+		case "enter", " ":
+			options := m.getGameLobbyOptions()
+			if m.selectedItem < len(options) {
+				return m.handleGameLobbySelection(options[m.selectedItem])
+			}
+		case "q":
+			return m.stateGameLobby, m.dispatcher.leaveTableCmd()
+		case "ctrl+c":
+			return m.stateGameLobby, tea.Quit
+		}
+	}
+	return m.stateGameLobby, nil
+}
+
+func (m *PokerUI) stateActiveGame(ui *PokerUI, msg tea.Msg) (stateFn, tea.Cmd) {
+	m.currentView = "activeGame"
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "up", "k":
+			if m.selectedItem > 0 {
+				m.selectedItem--
+			}
+		case "down", "j":
+			options := m.getActiveGameOptions()
+			if m.selectedItem < len(options)-1 {
+				m.selectedItem++
+			}
+		case "enter", " ":
+			options := m.getActiveGameOptions()
+			if m.selectedItem < len(options) {
+				return m.handleActiveGameSelection(options[m.selectedItem])
+			}
+		case "q":
+			return m.stateActiveGame, m.dispatcher.leaveTableCmd()
+		case "ctrl+c":
+			return m.stateActiveGame, tea.Quit
+		}
+	}
+	return m.stateActiveGame, nil
+}
+
+func (m *PokerUI) stateBetInput(ui *PokerUI, msg tea.Msg) (stateFn, tea.Cmd) {
+	m.currentView = "betInput"
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "enter", " ":
+			// Parse bet amount and call betCmd
+			amount, err := strconv.ParseInt(m.betAmount, 10, 64)
+			if err != nil {
+				return m.stateBetInput, nil // Stay in bet input if invalid amount
+			}
+			return m.stateActiveGame, m.dispatcher.betCmd(amount)
+		case "q":
+			m.betAmount = ""
+			m.currentView = "activeGame"
+			return m.stateActiveGame, nil
+		case "ctrl+c":
+			return m.stateBetInput, tea.Quit
+		case "backspace":
+			if len(m.betAmount) > 0 {
+				m.betAmount = m.betAmount[:len(m.betAmount)-1]
+			}
+		default:
+			if len(msg.String()) == 1 && msg.String() >= "0" && msg.String() <= "9" {
+				m.betAmount += msg.String()
+			}
+		}
+	}
+	return m.stateBetInput, nil
+}
+
+// Helper functions for menu options
+
+func (m *PokerUI) getMainMenuOptions() []string {
+	options := []string{
+		"List Tables",
+		"Create Table",
+		"Join Table",
+		"Check Balance",
+		"Quit",
+	}
+	currentTableID := m.pc.GetCurrentTableID()
+	if currentTableID != "" {
+		options = append([]string{"Return to Table"}, options...)
+	}
+	return options
+}
+
+func (m *PokerUI) getGameLobbyOptions() []string {
+	return []string{
+		"Set Ready",
+		"Set Unready",
+		"Leave Table",
+		"Check Balance",
+		"Quit",
+	}
+}
+
+func (m *PokerUI) getActiveGameOptions() []string {
+	if isPlayerTurn(m.currentPlayerID, m.clientID) {
+		return []string{
+			"Check",
+			"Bet",
+			"Fold",
+			"Leave Table",
+		}
+	}
+	return []string{"Leave Table"}
+}
+
+// Selection handlers
+
+func (m *PokerUI) handleMainMenuSelection(option string) (stateFn, tea.Cmd) {
+	switch option {
+	case "List Tables":
+		return m.stateMainMenu, m.dispatcher.getTablesCmd()
+	case "Create Table":
+		m.selectedFormField = 0
+		m.currentView = "createTable"
+		return m.stateCreateTable, nil
+	case "Join Table":
+		m.tableIdInput = ""
+		m.currentView = "joinTable"
+		return m.stateJoinTable, nil
+	case "Check Balance":
+		return m.stateMainMenu, m.dispatcher.getBalanceCmd()
+	case "Return to Table":
+		currentTableID := m.pc.GetCurrentTableID()
+		if currentTableID != "" {
+			m.currentView = "gameLobby"
+			return m.stateGameLobby, nil
+		}
+		return m.stateMainMenu, nil
+	case "Quit":
+		return m.stateMainMenu, tea.Quit
+	}
+	return m.stateMainMenu, nil
+}
+
+func (m *PokerUI) handleGameLobbySelection(option string) (stateFn, tea.Cmd) {
+	switch option {
+	case "Set Ready":
+		return m.stateGameLobby, m.dispatcher.setPlayerReadyCmd()
+	case "Set Unready":
+		return m.stateGameLobby, m.dispatcher.setPlayerUnreadyCmd()
+	case "Leave Table":
+		return m.stateGameLobby, m.dispatcher.leaveTableCmd()
+	case "Check Balance":
+		return m.stateGameLobby, m.dispatcher.getBalanceCmd()
+	case "Quit":
+		return m.stateGameLobby, tea.Quit
+	}
+	return m.stateGameLobby, nil
+}
+
+func (m *PokerUI) handleActiveGameSelection(option string) (stateFn, tea.Cmd) {
+	switch option {
+	case "Check":
+		return m.stateActiveGame, m.dispatcher.checkCmd()
+	case "Bet":
+		m.betAmount = ""
+		m.currentView = "betInput"
+		return m.stateBetInput, nil
+	case "Fold":
+		return m.stateActiveGame, m.dispatcher.foldCmd()
+	case "Leave Table":
+		return m.stateActiveGame, m.dispatcher.leaveTableCmd()
+	}
+	return m.stateActiveGame, nil
+}
+
+// Helper functions
+
+func (m *PokerUI) updateFormField(input string) {
+	if len(input) == 1 && input >= "0" && input <= "9" {
+		switch m.selectedFormField {
+		case 0:
+			m.smallBlind += input
+		case 1:
+			m.bigBlind += input
+		case 2:
+			m.requiredPlayers += input
+		case 3:
+			m.buyIn += input
+		case 4:
+			m.minBalance += input
+		case 5:
+			m.startingChips += input
+		}
+	} else if input == "backspace" {
+		switch m.selectedFormField {
+		case 0:
+			if len(m.smallBlind) > 0 {
+				m.smallBlind = m.smallBlind[:len(m.smallBlind)-1]
+			}
+		case 1:
+			if len(m.bigBlind) > 0 {
+				m.bigBlind = m.bigBlind[:len(m.bigBlind)-1]
+			}
+		case 2:
+			if len(m.requiredPlayers) > 0 {
+				m.requiredPlayers = m.requiredPlayers[:len(m.requiredPlayers)-1]
+			}
+		case 3:
+			if len(m.buyIn) > 0 {
+				m.buyIn = m.buyIn[:len(m.buyIn)-1]
+			}
+		case 4:
+			if len(m.minBalance) > 0 {
+				m.minBalance = m.minBalance[:len(m.minBalance)-1]
+			}
+		case 5:
+			if len(m.startingChips) > 0 {
+				m.startingChips = m.startingChips[:len(m.startingChips)-1]
+			}
+		}
+	}
+}
+
+func (m *PokerUI) updateGameState(gameUpdate *pokerrpc.GameUpdate) {
+	// Update current player ID
+	m.currentPlayerID = gameUpdate.CurrentPlayer
+
+	// Handle state updates from the game
+	m.gamePhase = gameUpdate.Phase
+	m.players = gameUpdate.Players
+	m.communityCards = gameUpdate.CommunityCards
+	m.pot = gameUpdate.Pot
+	m.currentBet = gameUpdate.CurrentBet
+
+	// Count joined players
+	m.playersJoined = int32(len(m.players))
+	// Set required players from game update
+	m.playersRequired = gameUpdate.PlayersRequired
+
+	// Determine current UI state based on game phase
+	switch gameUpdate.Phase {
+	case pokerrpc.GamePhase_WAITING:
+		m.currentState = m.stateGameLobby
+		m.currentView = "gameLobby"
+	default:
+		m.currentState = m.stateActiveGame
+		m.currentView = "activeGame"
+	}
+
+	m.err = nil
 }
 
 // handleNotification processes notifications from the backend
@@ -255,13 +574,12 @@ func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cm
 
 	case pokerrpc.NotificationType_PLAYER_JOINED:
 		if notification.PlayerId == m.clientID {
-			m.state = stateGameLobby
+			m.currentState = m.stateGameLobby
+			m.currentView = "gameLobby"
 			m.message = fmt.Sprintf("Joined table %s", notification.TableId)
-			// Store the big blind value if table data is available
 			if notification.Table != nil {
 				m.currentTableBigBlind = notification.Table.BigBlind
 			}
-			m.updateMenuOptionsForGameState()
 			return nil
 		}
 
@@ -274,13 +592,12 @@ func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cm
 
 	case pokerrpc.NotificationType_TABLE_CREATED:
 		if notification.PlayerId == m.clientID {
-			m.state = stateGameLobby
+			m.currentState = m.stateGameLobby
+			m.currentView = "gameLobby"
 			m.message = fmt.Sprintf("Created table %s", notification.TableId)
-			// Store the big blind value if table data is available
 			if notification.Table != nil {
 				m.currentTableBigBlind = notification.Table.BigBlind
 			}
-			m.updateMenuOptionsForGameState()
 			return nil
 		}
 
@@ -292,71 +609,17 @@ func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cm
 			return nil
 		}
 
-	case pokerrpc.NotificationType_SMALL_BLIND_POSTED:
-		m.message = fmt.Sprintf("Small blind posted: %d chips by %s", notification.Amount, notification.PlayerId)
-		return nil
-
-	case pokerrpc.NotificationType_BIG_BLIND_POSTED:
-		m.message = fmt.Sprintf("Big blind posted: %d chips by %s", notification.Amount, notification.PlayerId)
-		return nil
-
-	case pokerrpc.NotificationType_PLAYER_READY:
-		if notification.PlayerId == m.clientID {
-			m.message = "You are now ready"
-		} else {
-			m.message = fmt.Sprintf("%s is now ready", notification.PlayerId)
-		}
-		return nil
-
-	case pokerrpc.NotificationType_PLAYER_UNREADY:
-		if notification.PlayerId == m.clientID {
-			m.message = "You are now unready"
-		} else {
-			m.message = fmt.Sprintf("%s is no longer ready", notification.PlayerId)
-		}
-		return nil
-
-	case pokerrpc.NotificationType_ALL_PLAYERS_READY:
-		m.message = "All players are ready! Game starting soon..."
-		return nil
-
 	case pokerrpc.NotificationType_GAME_STARTED:
-		m.state = stateActiveGame
+		m.currentState = m.stateActiveGame
+		m.currentView = "activeGame"
 		m.message = "Game started!"
-		m.updateMenuOptionsForGameState()
 		return nil
 
 	case pokerrpc.NotificationType_GAME_ENDED:
-		m.state = stateGameLobby
+		m.currentState = m.stateGameLobby
+		m.currentView = "gameLobby"
 		m.message = "Game ended"
-		m.updateMenuOptionsForGameState()
 		return m.dispatcher.getBalanceCmd()
-
-	case pokerrpc.NotificationType_BET_MADE:
-		if notification.PlayerId == m.clientID {
-			m.message = fmt.Sprintf("Bet placed: %d", notification.Amount)
-			return nil
-		}
-
-	case pokerrpc.NotificationType_PLAYER_FOLDED:
-		if notification.PlayerId == m.clientID {
-			m.message = "You folded"
-			return nil
-		}
-
-	case pokerrpc.NotificationType_NEW_ROUND:
-		if notification.PlayerId == m.clientID {
-			m.message = "Action completed"
-			return nil
-		}
-
-	case pokerrpc.NotificationType_SHOWDOWN_RESULT:
-		m.message = "Showdown complete"
-		return nil
-
-	case pokerrpc.NotificationType_TIP_RECEIVED:
-		m.message = fmt.Sprintf("Tip received: %d", notification.Amount)
-		return nil
 
 	default:
 		m.message = notification.Message
@@ -379,26 +642,21 @@ func (m *PokerUI) View() string {
 		s += ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err)) + "\n\n"
 	}
 
-	switch m.state {
-	case stateMainMenu:
+	// Determine which view to render based on current view
+	switch m.currentView {
+	case "mainMenu":
 		s += m.renderer.RenderMainMenu()
-
-	case stateTableList:
+	case "tableList":
 		s += m.renderer.RenderTableList()
-
-	case stateCreateTable:
+	case "createTable":
 		s += m.renderer.RenderCreateTable()
-
-	case stateJoinTable:
+	case "joinTable":
 		s += m.renderer.RenderJoinTable()
-
-	case stateGameLobby:
+	case "gameLobby":
 		s += m.renderer.RenderGameLobby()
-
-	case stateActiveGame:
+	case "activeGame":
 		s += m.renderer.RenderActiveGame()
-
-	case stateBetInput:
+	case "betInput":
 		s += m.renderer.RenderBetInput()
 	}
 
@@ -433,12 +691,12 @@ func Run(ctx context.Context, client *client.PokerClient) {
 
 // resetToMainMenu resets the model to the main menu state, clearing all table and game data
 func (m *PokerUI) resetToMainMenu() {
-	m.state = stateMainMenu
+	m.currentState = m.stateMainMenu
+	m.currentView = "mainMenu"
 	m.message = ""
 	m.err = nil
 	m.resetGameState()
-	m.selectedItem = 0 // Explicitly reset when changing to main menu
-	m.updateMenuOptionsForGameState()
+	m.selectedItem = 0
 }
 
 // resetGameState resets all game-related fields while keeping table connection
@@ -451,62 +709,4 @@ func (m *PokerUI) resetGameState() {
 	m.currentPlayerID = ""
 	m.playersRequired = 0
 	m.playersJoined = 0
-}
-
-// updateMenuOptionsForGameState updates the menu options based on the current game state
-func (m *PokerUI) updateMenuOptionsForGameState() {
-	if m.state == stateMainMenu {
-		// Only reset selectedItem if we're actually changing to main menu
-		// or if the menu options structure changes significantly
-		oldOptions := m.menuOptions
-		m.menuOptions = []menuOption{
-			optionListTables,
-			optionCreateTable,
-			optionJoinTable,
-			optionCheckBalance,
-			optionQuit,
-		}
-		currentTableID := m.pc.GetCurrentTableID()
-		if currentTableID != "" {
-			m.menuOptions = append([]menuOption{"Return to Table"}, m.menuOptions...)
-		}
-
-		// Only reset selectedItem if menu structure changed or it's out of bounds
-		if len(oldOptions) != len(m.menuOptions) || m.selectedItem >= len(m.menuOptions) {
-			m.selectedItem = 0
-		}
-	} else if m.state == stateGameLobby {
-		oldOptions := m.menuOptions
-		m.menuOptions = []menuOption{
-			optionSetReady,
-			optionSetUnready,
-			optionLeaveTable,
-			optionCheckBalance,
-			optionQuit,
-		}
-
-		// Only reset selectedItem if menu structure changed or it's out of bounds
-		if len(oldOptions) != len(m.menuOptions) || m.selectedItem >= len(m.menuOptions) {
-			m.selectedItem = 0
-		}
-	} else if m.state == stateActiveGame {
-		oldOptions := m.menuOptions
-		if isPlayerTurn(m.currentPlayerID, m.clientID) {
-			m.menuOptions = []menuOption{
-				optionCheck,
-				optionBet,
-				optionFold,
-				optionLeaveTable,
-			}
-		} else {
-			m.menuOptions = []menuOption{
-				optionLeaveTable,
-			}
-		}
-
-		// Only reset selectedItem if menu structure changed or it's out of bounds
-		if len(oldOptions) != len(m.menuOptions) || m.selectedItem >= len(m.menuOptions) {
-			m.selectedItem = 0
-		}
-	}
 }
