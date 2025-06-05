@@ -53,7 +53,8 @@ func (ih *InputHandler) handleMainMenuInput(msg tea.KeyMsg) tea.Cmd {
 			// Return to the game lobby or active game based on current table state
 			currentTableID := ih.ui.pc.GetCurrentTableID()
 			if currentTableID != "" {
-				return ih.ui.dispatcher.checkGameStateCmd()
+				ih.ui.state = stateGameLobby
+				ih.ui.updateMenuOptionsForGameState()
 			}
 		case optionListTables:
 			return ih.ui.dispatcher.getTablesCmd()

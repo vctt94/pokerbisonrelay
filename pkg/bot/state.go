@@ -123,19 +123,26 @@ func (s *State) handleCreateTable(ctx context.Context, bot *kit.Bot, pm *types.R
 	table := poker.NewTable(poker.TableConfig{
 		ID:            tableID,
 		HostID:        playerID,
-		BuyIn:         int64(buyIn),
+		BuyIn:         int64(buyIn), // DCR buy-in amount (in atoms)
 		MinPlayers:    2,
 		MaxPlayers:    6,
-		SmallBlind:    int64(buyIn) / 100, // 1% of buy-in
-		BigBlind:      int64(buyIn) / 50,  // 2% of buy-in
-		StartingChips: startingChips,      // Fixed starting chips for all players
-		TimeBank:      30 * time.Second,
+		SmallBlind:    10,            // Fixed chip amount for small blind
+		BigBlind:      20,            // Fixed chip amount for big blind
+		StartingChips: startingChips, // Poker chips given to each player
+		TimeBank:      6 * time.Second,
 	})
 
-	// Add creator to table
-	err = table.AddPlayer(playerID, balance)
+	// Add creator to table with starting chips (DCR buy-in handled separately)
+	err = table.AddPlayer(playerID, startingChips)
 	if err != nil {
 		bot.SendPM(ctx, pm.Nick, "Error creating table: "+err.Error())
+		return
+	}
+
+	// Deduct DCR buy-in from creator's account balance
+	err = s.db.UpdatePlayerBalance(playerID, -int64(buyIn), "table buy-in", "created table")
+	if err != nil {
+		bot.SendPM(ctx, pm.Nick, "Error deducting buy-in: "+err.Error())
 		return
 	}
 
@@ -164,17 +171,34 @@ func (s *State) handleJoinTable(ctx context.Context, bot *kit.Bot, pm *types.Rec
 		return
 	}
 
-	// Check player balance
-	balance, err := s.db.GetPlayerBalance(playerID)
+	// Check player DCR balance
+	dcrBalance, err := s.db.GetPlayerBalance(playerID)
 	if err != nil {
 		bot.SendPM(ctx, pm.Nick, "Error checking balance: "+err.Error())
 		return
 	}
 
-	// Add player to table
-	err = table.AddPlayer(playerID, balance)
+	config := table.GetConfig()
+
+	// Check if player has enough DCR for the buy-in
+	if dcrBalance < config.BuyIn {
+		bot.SendPM(ctx, pm.Nick, "Insufficient DCR balance for buy-in.")
+		return
+	}
+
+	// Add player to table with starting chips (not DCR balance)
+	err = table.AddPlayer(playerID, config.StartingChips)
 	if err != nil {
 		bot.SendPM(ctx, pm.Nick, "Error joining table: "+err.Error())
+		return
+	}
+
+	// Deduct DCR buy-in from player's account balance
+	err = s.db.UpdatePlayerBalance(playerID, -config.BuyIn, "table buy-in", "joined table")
+	if err != nil {
+		// If balance update fails, remove player from table
+		table.RemovePlayer(playerID)
+		bot.SendPM(ctx, pm.Nick, "Error deducting buy-in: "+err.Error())
 		return
 	}
 

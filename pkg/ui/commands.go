@@ -2,25 +2,21 @@ package ui
 
 import (
 	"context"
-	"strings"
-	"time"
+	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/vctt94/poker-bisonrelay/pkg/client"
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
-	"google.golang.org/grpc/metadata"
 )
 
-// Event-driven message types matching proto notifications
+// Message types
 type notificationMsg *pokerrpc.Notification
 type errorMsg error
-type tickMsg struct{}
 
-// Legacy message types for specific data (can be refactored to use notifications)
+// UI data message types
 type tablesMsg []*pokerrpc.Table
-type gameUpdateMsg *pokerrpc.GameUpdate
 
-// CommandDispatcher dispatches commands from the UI to backend services
+// CommandDispatcher handles UI commands and interactions with the poker client
 type CommandDispatcher struct {
 	ctx      context.Context
 	clientID string
@@ -156,47 +152,18 @@ func (d *CommandDispatcher) setPlayerUnreadyCmd() tea.Cmd {
 	}
 }
 
-func (d *CommandDispatcher) checkGameStateCmd() tea.Cmd {
-	return func() tea.Msg {
-		currentTableID := d.pc.GetCurrentTableID()
-
-		// Add player ID to the context metadata
-		ctx := metadata.AppendToOutgoingContext(d.ctx, "player-id", d.clientID)
-
-		resp, err := d.pc.PokerService.GetGameState(ctx, &pokerrpc.GetGameStateRequest{
-			TableId: currentTableID,
-		})
-		if err != nil {
-			// Check if this is a "table not found" error
-			if strings.Contains(err.Error(), "table not found") {
-				return notificationMsg(&pokerrpc.Notification{
-					Type:    pokerrpc.NotificationType_TABLE_REMOVED,
-					TableId: currentTableID,
-					Message: "Table no longer exists",
-				})
-			}
-			return errorMsg(err)
-		}
-		return gameUpdateMsg(resp.GameState)
-	}
-}
-
 func (d *CommandDispatcher) checkCmd() tea.Cmd {
 	return func() tea.Msg {
-		currentTableID := d.pc.GetCurrentTableID()
-		_, err := d.pc.PokerService.Check(d.ctx, &pokerrpc.CheckRequest{
-			PlayerId: d.clientID,
-			TableId:  currentTableID,
-		})
+		err := d.pc.Check(d.ctx)
 		if err != nil {
 			return errorMsg(err)
 		}
 
-		// Return as new round notification (check action)
+		// Return as check notification
 		return notificationMsg(&pokerrpc.Notification{
-			Type:     pokerrpc.NotificationType_NEW_ROUND,
+			Type:     pokerrpc.NotificationType_BET_MADE,
 			PlayerId: d.clientID,
-			TableId:  currentTableID,
+			TableId:  d.pc.GetCurrentTableID(),
 			Message:  "Player checked",
 		})
 	}
@@ -204,11 +171,7 @@ func (d *CommandDispatcher) checkCmd() tea.Cmd {
 
 func (d *CommandDispatcher) foldCmd() tea.Cmd {
 	return func() tea.Msg {
-		currentTableID := d.pc.GetCurrentTableID()
-		_, err := d.pc.PokerService.Fold(d.ctx, &pokerrpc.FoldRequest{
-			PlayerId: d.clientID,
-			TableId:  currentTableID,
-		})
+		err := d.pc.Fold(d.ctx)
 		if err != nil {
 			return errorMsg(err)
 		}
@@ -217,20 +180,50 @@ func (d *CommandDispatcher) foldCmd() tea.Cmd {
 		return notificationMsg(&pokerrpc.Notification{
 			Type:     pokerrpc.NotificationType_PLAYER_FOLDED,
 			PlayerId: d.clientID,
-			TableId:  currentTableID,
+			TableId:  d.pc.GetCurrentTableID(),
 			Message:  "Player folded",
+		})
+	}
+}
+
+func (d *CommandDispatcher) callCmd() tea.Cmd {
+	return func() tea.Msg {
+		err := d.pc.Call(d.ctx, 0)
+		if err != nil {
+			return errorMsg(err)
+		}
+
+		// Return as call notification
+		return notificationMsg(&pokerrpc.Notification{
+			Type:     pokerrpc.NotificationType_BET_MADE,
+			PlayerId: d.clientID,
+			TableId:  d.pc.GetCurrentTableID(),
+			Message:  "Player called",
+		})
+	}
+}
+
+func (d *CommandDispatcher) raiseCmd(amount int64) tea.Cmd {
+	return func() tea.Msg {
+		err := d.pc.Raise(d.ctx, amount)
+		if err != nil {
+			return errorMsg(err)
+		}
+
+		// Return as raise notification
+		return notificationMsg(&pokerrpc.Notification{
+			Type:     pokerrpc.NotificationType_BET_MADE,
+			PlayerId: d.clientID,
+			TableId:  d.pc.GetCurrentTableID(),
+			Amount:   amount,
+			Message:  fmt.Sprintf("Player raised to %d", amount),
 		})
 	}
 }
 
 func (d *CommandDispatcher) betCmd(amount int64) tea.Cmd {
 	return func() tea.Msg {
-		currentTableID := d.pc.GetCurrentTableID()
-		_, err := d.pc.PokerService.MakeBet(d.ctx, &pokerrpc.MakeBetRequest{
-			PlayerId: d.clientID,
-			TableId:  currentTableID,
-			Amount:   amount,
-		})
+		err := d.pc.Bet(d.ctx, amount)
 		if err != nil {
 			return errorMsg(err)
 		}
@@ -239,7 +232,7 @@ func (d *CommandDispatcher) betCmd(amount int64) tea.Cmd {
 		return notificationMsg(&pokerrpc.Notification{
 			Type:     pokerrpc.NotificationType_BET_MADE,
 			PlayerId: d.clientID,
-			TableId:  currentTableID,
+			TableId:  d.pc.GetCurrentTableID(),
 			Amount:   amount,
 			Message:  "Bet placed",
 		})
@@ -247,12 +240,6 @@ func (d *CommandDispatcher) betCmd(amount int64) tea.Cmd {
 }
 
 // Utility functions
-func gameUpdateTicker() tea.Cmd {
-	return tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
-		return tickMsg{}
-	})
-}
-
 func min(a, b int) int {
 	if a < b {
 		return a

@@ -13,6 +13,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// NotificationStream represents a client's notification stream
+type NotificationStream struct {
+	playerID string
+	stream   pokerrpc.LobbyService_StartNotificationStreamServer
+	done     chan struct{}
+}
+
 // Server implements both PokerService and LobbyService
 type Server struct {
 	pokerrpc.UnimplementedPokerServiceServer
@@ -20,13 +27,18 @@ type Server struct {
 	db     Database
 	tables map[string]*poker.Table
 	mu     sync.RWMutex
+
+	// Notification streaming
+	notificationStreams map[string]*NotificationStream
+	notificationMu      sync.RWMutex
 }
 
 // NewServer creates a new poker server
 func NewServer(db Database) *Server {
 	return &Server{
-		db:     db,
-		tables: make(map[string]*poker.Table),
+		db:                  db,
+		tables:              make(map[string]*poker.Table),
+		notificationStreams: make(map[string]*NotificationStream),
 	}
 }
 
@@ -36,35 +48,58 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check if player has enough balance
-	balance, err := s.db.GetPlayerBalance(req.PlayerId)
+	// Check if player has enough DCR balance for the buy-in (buy-in is in DCR atoms)
+	dcrBalance, err := s.db.GetPlayerBalance(req.PlayerId)
 	if err != nil {
 		return nil, err
 	}
 
-	if balance < req.BuyIn {
-		return nil, status.Error(codes.FailedPrecondition, "insufficient balance for buy-in")
+	// req.BuyIn is the DCR amount required to join the table (in atoms)
+	// This is what gets deducted from the player's DCR account balance
+	if dcrBalance < req.BuyIn {
+		return nil, status.Error(codes.FailedPrecondition, "insufficient DCR balance for buy-in")
+	}
+
+	// Calculate starting chips (use request value or default to buy-in)
+	startingChips := req.StartingChips
+	if startingChips == 0 {
+		startingChips = 1000 // Default fallback
+	}
+
+	// Calculate timebank duration (use request value or default to 30 seconds)
+	timeBankDuration := time.Duration(req.TimeBankSeconds) * time.Second
+	if req.TimeBankSeconds == 0 {
+		timeBankDuration = 30 * time.Second // Default 30 seconds
 	}
 
 	// Create table config
 	cfg := poker.TableConfig{
 		ID:            fmt.Sprintf("table-%d", time.Now().UnixNano()),
 		HostID:        req.PlayerId,
-		BuyIn:         req.BuyIn,
+		BuyIn:         req.BuyIn, // DCR amount (in atoms) to join table
 		MinPlayers:    int(req.MinPlayers),
 		MaxPlayers:    int(req.MaxPlayers),
-		SmallBlind:    req.SmallBlind,
-		BigBlind:      req.BigBlind,
-		MinBalance:    req.MinBalance,
-		StartingChips: req.StartingChips,
-		TimeBank:      30 * time.Second,
+		SmallBlind:    req.SmallBlind, // Poker chips
+		BigBlind:      req.BigBlind,   // Poker chips
+		MinBalance:    req.MinBalance, // Minimum DCR balance required
+		StartingChips: startingChips,  // Poker chips given to each player
+		TimeBank:      timeBankDuration,
 	}
 
 	// Create new table
 	table := poker.NewTable(cfg)
 
-	// Add creator as first player
-	err = table.AddPlayer(req.PlayerId, balance)
+	// Set the blind posted callback
+	table.SetBlindPostedCallback(s.sendBlindNotification)
+
+	// Add creator as first player with starting chips (not DCR balance)
+	err = table.AddPlayer(req.PlayerId, startingChips)
+	if err != nil {
+		return nil, err
+	}
+
+	// Deduct buy-in from creator's DCR account balance
+	err = s.db.UpdatePlayerBalance(req.PlayerId, -req.BuyIn, "table buy-in", "created table")
 	if err != nil {
 		return nil, err
 	}
@@ -83,24 +118,30 @@ func (s *Server) JoinTable(ctx context.Context, req *pokerrpc.JoinTableRequest) 
 		return &pokerrpc.JoinTableResponse{Success: false, Message: "Table not found"}, nil
 	}
 
-	// Check if player has enough balance
-	balance, err := s.db.GetPlayerBalance(req.PlayerId)
+	// Check if player has enough DCR balance for the buy-in
+	dcrBalance, err := s.db.GetPlayerBalance(req.PlayerId)
 	if err != nil {
 		return nil, err
 	}
 
-	if balance < table.GetConfig().MinBalance {
-		return &pokerrpc.JoinTableResponse{Success: false, Message: "Insufficient balance"}, nil
+	config := table.GetConfig()
+
+	// Check if player has enough DCR for the buy-in
+	if dcrBalance < config.BuyIn {
+		return &pokerrpc.JoinTableResponse{
+			Success: false,
+			Message: "Insufficient DCR balance for buy-in",
+		}, nil
 	}
 
-	// Add player to table
-	err = table.AddPlayer(req.PlayerId, balance)
+	// Add player to table with starting chips (not DCR balance)
+	err = table.AddPlayer(req.PlayerId, config.StartingChips)
 	if err != nil {
 		return &pokerrpc.JoinTableResponse{Success: false, Message: err.Error()}, nil
 	}
 
-	// Update player's balance in the database
-	err = s.db.UpdatePlayerBalance(req.PlayerId, -table.GetConfig().BuyIn, "table buy-in", "joined table")
+	// Deduct buy-in from player's DCR account balance
+	err = s.db.UpdatePlayerBalance(req.PlayerId, -config.BuyIn, "table buy-in", "joined table")
 	if err != nil {
 		// If balance update fails, remove player from table
 		table.RemovePlayer(req.PlayerId)
@@ -110,7 +151,7 @@ func (s *Server) JoinTable(ctx context.Context, req *pokerrpc.JoinTableRequest) 
 	return &pokerrpc.JoinTableResponse{
 		Success:    true,
 		Message:    "Successfully joined table",
-		NewBalance: balance - table.GetConfig().BuyIn,
+		NewBalance: dcrBalance - config.BuyIn, // Return new DCR balance
 	}, nil
 }
 
@@ -359,10 +400,34 @@ func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*po
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
 
+	// Check if game is running
+	if !table.IsGameStarted() {
+		return nil, status.Error(codes.FailedPrecondition, "game not started")
+	}
+
+	// Verify it's the player's turn
+	currentPlayerID := table.GetCurrentPlayerID()
+	if currentPlayerID != req.PlayerId {
+		return nil, status.Error(codes.FailedPrecondition, "not your turn")
+	}
+
 	err := table.MakeBet(req.PlayerId, req.Amount)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+
+	// Advance to next player and check phase progression
+	table.AdvanceToNextPlayer()
+	table.MaybeAdvancePhase()
+
+	// Broadcast bet notification to all players at the table
+	s.broadcastNotificationToTable(req.TableId, &pokerrpc.Notification{
+		Type:     pokerrpc.NotificationType_BET_MADE,
+		PlayerId: req.PlayerId,
+		TableId:  req.TableId,
+		Amount:   req.Amount,
+		Message:  fmt.Sprintf("Player %s bet %d chips", req.PlayerId, req.Amount),
+	})
 
 	balance, err := s.db.GetPlayerBalance(req.PlayerId)
 	if err != nil {
@@ -402,12 +467,25 @@ func (s *Server) Fold(ctx context.Context, req *pokerrpc.FoldRequest) (*pokerrpc
 		return nil, status.Error(codes.Internal, "failed to process fold: "+err.Error())
 	}
 
+	// Advance to next player and check phase progression
+	table.AdvanceToNextPlayer()
+	table.MaybeAdvancePhase()
+
+	// Broadcast fold notification to all players at the table
+	s.broadcastNotificationToTable(req.TableId, &pokerrpc.Notification{
+		Type:     pokerrpc.NotificationType_PLAYER_FOLDED,
+		PlayerId: req.PlayerId,
+		TableId:  req.TableId,
+		Message:  fmt.Sprintf("Player %s folded", req.PlayerId),
+	})
+
 	return &pokerrpc.FoldResponse{
 		Success: true,
 		Message: "Player folded",
 	}, nil
 }
 
+// Check implements the Check RPC method
 func (s *Server) Check(ctx context.Context, req *pokerrpc.CheckRequest) (*pokerrpc.CheckResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -428,13 +506,24 @@ func (s *Server) Check(ctx context.Context, req *pokerrpc.CheckRequest) (*pokerr
 		return nil, status.Error(codes.FailedPrecondition, "not your turn")
 	}
 
-	// Check action is essentially a bet of 0 - call MakeBet with current bet amount
-	// This ensures the check is properly integrated with the betting logic
+	// Check action - player needs to pass without betting
 	currentBet := table.GetCurrentBet()
-	err := table.MakeBet(req.PlayerId, currentBet)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to process check: "+err.Error())
+	if currentBet > 0 {
+		return nil, status.Error(codes.FailedPrecondition, "cannot check when there's a bet to call")
 	}
+
+	// Advance to next player and check phase progression
+	table.AdvanceToNextPlayer()
+	table.MaybeAdvancePhase()
+
+	// Broadcast check notification to all players at the table
+	s.broadcastNotificationToTable(req.TableId, &pokerrpc.Notification{
+		Type:     pokerrpc.NotificationType_BET_MADE,
+		PlayerId: req.PlayerId,
+		TableId:  req.TableId,
+		Amount:   0,
+		Message:  fmt.Sprintf("Player %s checked", req.PlayerId),
+	})
 
 	return &pokerrpc.CheckResponse{
 		Success: true,
@@ -488,8 +577,11 @@ func (s *Server) GetGameState(ctx context.Context, req *pokerrpc.GetGameStateReq
 	}
 
 	game := table.GetGame()
-	players := make([]*pokerrpc.Player, 0, len(table.GetPlayers()))
-	for _, p := range table.GetPlayers() {
+
+	// Use table players as the single source of truth
+	tablePlayers := table.GetPlayers()
+	players := make([]*pokerrpc.Player, 0, len(tablePlayers))
+	for _, p := range tablePlayers {
 		// Create player update with complete information
 		player := &pokerrpc.Player{
 			Id:         p.ID,
@@ -499,27 +591,14 @@ func (s *Server) GetGameState(ctx context.Context, req *pokerrpc.GetGameStateReq
 			CurrentBet: p.HasBet,
 		}
 
-		// Find the corresponding game player to get the hand cards
-		var gamePlayer *poker.Player
-		if game != nil {
-			for _, gp := range game.GetPlayers() {
-				if gp.ID == p.ID {
-					gamePlayer = gp
-					break
-				}
-			}
-		}
-
 		// Only include hand cards if this is the requesting player's own data
 		// or if the game is in showdown phase
 		if (p.ID == requestingPlayerID) || (game != nil && game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN) {
-			if gamePlayer != nil {
-				player.Hand = make([]*pokerrpc.Card, len(gamePlayer.Hand))
-				for i, card := range gamePlayer.Hand {
-					player.Hand[i] = &pokerrpc.Card{
-						Suit:  card.GetSuit(),
-						Value: card.GetValue(),
-					}
+			player.Hand = make([]*pokerrpc.Card, len(p.Hand))
+			for i, card := range p.Hand {
+				player.Hand[i] = &pokerrpc.Card{
+					Suit:  card.GetSuit(),
+					Value: card.GetValue(),
 				}
 			}
 		}
@@ -540,16 +619,16 @@ func (s *Server) GetGameState(ctx context.Context, req *pokerrpc.GetGameStateReq
 
 	return &pokerrpc.GetGameStateResponse{
 		GameState: &pokerrpc.GameUpdate{
-			TableId:         table.GetConfig().ID,
+			TableId:         req.TableId,
 			Phase:           table.GetGamePhase(),
 			Players:         players,
 			CommunityCards:  communityCards,
+			Pot:             table.GetPot(),
 			CurrentBet:      table.GetCurrentBet(),
 			CurrentPlayer:   table.GetCurrentPlayerID(),
-			Pot:             table.GetPot(),
 			GameStarted:     table.IsGameStarted(),
 			PlayersRequired: int32(table.GetMinPlayers()),
-			PlayersJoined:   int32(len(table.GetPlayers())),
+			PlayersJoined:   int32(len(tablePlayers)),
 		},
 	}, nil
 }
@@ -590,11 +669,6 @@ func (s *Server) GetWinners(ctx context.Context, req *pokerrpc.GetWinnersRequest
 	}
 
 	pot := table.GetPot()
-	// Subtract any uncalled bet (currentBet) still in the middle if applicable.
-	currentBet := table.GetCurrentBet()
-	if currentBet > 0 && pot >= currentBet {
-		pot -= currentBet
-	}
 
 	winners := []*pokerrpc.Winner{}
 	if winnerID != "" {
@@ -617,6 +691,26 @@ func (s *Server) StartNotificationStream(req *pokerrpc.StartNotificationStreamRe
 		return status.Error(codes.InvalidArgument, "player ID is required")
 	}
 
+	// Create notification stream
+	notifStream := &NotificationStream{
+		playerID: playerID,
+		stream:   stream,
+		done:     make(chan struct{}),
+	}
+
+	// Register the stream
+	s.notificationMu.Lock()
+	s.notificationStreams[playerID] = notifStream
+	s.notificationMu.Unlock()
+
+	// Remove stream when done
+	defer func() {
+		s.notificationMu.Lock()
+		delete(s.notificationStreams, playerID)
+		s.notificationMu.Unlock()
+		close(notifStream.done)
+	}()
+
 	// Send an initial notification to ensure the stream is established
 	initialNotification := &pokerrpc.Notification{
 		Type:     pokerrpc.NotificationType_UNKNOWN,
@@ -628,8 +722,69 @@ func (s *Server) StartNotificationStream(req *pokerrpc.StartNotificationStreamRe
 	}
 
 	// Keep the stream open and wait for context cancellation
-	// Notifications will be sent through specific events rather than polling
 	ctx := stream.Context()
 	<-ctx.Done()
 	return nil
+}
+
+// broadcastNotification sends a notification to a specific player
+func (s *Server) sendNotificationToPlayer(playerID string, notification *pokerrpc.Notification) {
+	s.notificationMu.RLock()
+	notifStream, exists := s.notificationStreams[playerID]
+	s.notificationMu.RUnlock()
+
+	if !exists {
+		return // Player doesn't have an active notification stream
+	}
+
+	select {
+	case <-notifStream.done:
+		return // Stream is closed
+	default:
+		// Send notification, ignore errors as client might have disconnected
+		notifStream.stream.Send(notification)
+	}
+}
+
+// broadcastNotificationToTable sends a notification to all players at a table
+func (s *Server) broadcastNotificationToTable(tableID string, notification *pokerrpc.Notification) {
+	s.mu.RLock()
+	table, exists := s.tables[tableID]
+	s.mu.RUnlock()
+
+	if !exists {
+		return
+	}
+
+	players := table.GetPlayers()
+	for _, player := range players {
+		s.sendNotificationToPlayer(player.ID, notification)
+	}
+}
+
+// sendBlindNotification sends a notification when a blind is posted
+func (s *Server) sendBlindNotification(tableID, playerID string, amount int64, isSmallBlind bool) {
+	var notificationType pokerrpc.NotificationType
+	var message string
+
+	if isSmallBlind {
+		notificationType = pokerrpc.NotificationType_SMALL_BLIND_POSTED
+		message = fmt.Sprintf("Small blind posted: %d chips", amount)
+	} else {
+		notificationType = pokerrpc.NotificationType_BIG_BLIND_POSTED
+		message = fmt.Sprintf("Big blind posted: %d chips", amount)
+	}
+
+	notification := &pokerrpc.Notification{
+		Type:     notificationType,
+		Message:  message,
+		TableId:  tableID,
+		PlayerId: playerID,
+		Amount:   amount,
+	}
+
+	// Send notifications asynchronously to avoid deadlocks
+	go func() {
+		s.broadcastNotificationToTable(tableID, notification)
+	}()
 }

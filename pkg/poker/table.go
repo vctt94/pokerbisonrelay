@@ -14,21 +14,24 @@ import (
 type TableConfig struct {
 	ID            string
 	HostID        string
-	BuyIn         int64
+	BuyIn         int64 // DCR amount required to join table (in atoms)
 	MinPlayers    int
 	MaxPlayers    int
-	SmallBlind    int64
-	BigBlind      int64
-	MinBalance    int64
-	StartingChips int64 // Fixed number of chips each player starts with in game
+	SmallBlind    int64 // Poker chips amount for small blind
+	BigBlind      int64 // Poker chips amount for big blind
+	MinBalance    int64 // Minimum DCR account balance required (in atoms)
+	StartingChips int64 // Poker chips each player starts with in the game
 	TimeBank      time.Duration
 }
+
+// BlindPostedCallback is called when a blind is posted
+type BlindPostedCallback func(tableID, playerID string, amount int64, isSmallBlind bool)
 
 // Table represents a poker table
 type Table struct {
 	config          TableConfig
 	players         map[string]*Player
-	game            *Game
+	game            *Game // Game logic without separate player management
 	mu              sync.RWMutex
 	createdAt       time.Time
 	lastAction      time.Time
@@ -36,6 +39,8 @@ type Table struct {
 	allPlayersReady bool
 	// Track actions in current betting round
 	actionsInRound int
+	// Callback for when blinds are posted
+	blindPostedCallback BlindPostedCallback
 }
 
 // NewTable creates a new poker table
@@ -49,8 +54,16 @@ func NewTable(cfg TableConfig) *Table {
 	}
 }
 
-// AddPlayer adds a player to the table
-func (t *Table) AddPlayer(playerID string, balance int64) error {
+// SetBlindPostedCallback sets the callback for when blinds are posted
+func (t *Table) SetBlindPostedCallback(callback BlindPostedCallback) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.blindPostedCallback = callback
+}
+
+// AddPlayer adds a player to the table with the specified starting chips
+// startingChips: the amount of poker chips the player starts with (DCR buy-in validation done by caller)
+func (t *Table) AddPlayer(playerID string, startingChips int64) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -64,19 +77,22 @@ func (t *Table) AddPlayer(playerID string, balance int64) error {
 		return fmt.Errorf("player already at table")
 	}
 
-	// Check if player has enough balance
-	if balance < t.config.BuyIn {
-		return fmt.Errorf("insufficient balance for buy-in")
+	// Add player to table with unified state
+	player := &Player{
+		ID:              playerID,
+		Balance:         startingChips, // In-game chips for current/next hand
+		StartingBalance: startingChips,
+		AccountBalance:  0, // Not tracking DCR balance at table level
+		TableSeat:       len(t.players),
+		IsReady:         false,
+		HasFolded:       false,
+		IsAllIn:         false,
+		LastAction:      time.Now(),
 	}
 
-	// Add player to table
-	t.players[playerID] = &Player{
-		ID:         playerID,
-		Balance:    balance,
-		TableSeat:  len(t.players),
-		IsReady:    false,
-		LastAction: time.Now(),
-	}
+	// Initialize player with at-table state
+	player.transitionTo(playerStateAtTable)
+	t.players[playerID] = player
 
 	t.lastAction = time.Now()
 	return nil
@@ -132,66 +148,64 @@ func (t *Table) StartGame() error {
 		return fmt.Errorf("not enough players to start game")
 	}
 
-	// Create new game with proper player mapping
-	players := make([]Player, 0, len(t.players))
-	i := 0
+	// Reset all players for the new hand
+	activePlayers := make([]*Player, 0, len(t.players))
 	for _, p := range t.players {
-		// Create game player from table player
-		// Use StartingChips for in-game balance, not external balance
-		gamePlayer := Player{
-			ID:        p.ID,
-			Name:      p.Name,
-			Balance:   t.config.StartingChips, // Use fixed starting chips
-			TableSeat: i,
-			HasFolded: false,
-			HasBet:    0,
-			IsReady:   p.IsReady,
+		if p.IsAtTable() { // Only include players still at the table
+			p.ResetForNewHand(t.config.StartingChips)
+			activePlayers = append(activePlayers, p)
 		}
-		players = append(players, gamePlayer)
-		i++
 	}
 
+	// Sort players by TableSeat for consistent ordering
+	sort.Slice(activePlayers, func(i, j int) bool {
+		return activePlayers[i].TableSeat < activePlayers[j].TableSeat
+	})
+
+	// Create new game and populate it with references to our table players
 	t.game = NewGame(GameConfig{
-		NumPlayers:    len(players),
+		NumPlayers:    len(activePlayers),
 		StartingChips: t.config.StartingChips,
 	})
 
-	// Set up game players
-	t.game.players = make([]*Player, len(players))
-	for i := range players {
-		t.game.players[i] = &players[i]
-	}
+	// Populate game.players with references to the same Player objects from the table
+	// This creates a unified player state - no duplication, just shared references
+	copy(t.game.players, activePlayers)
 
-	// Deal initial cards to all players (2 cards each)
-	err := t.game.DealCards()
+	// Deal initial cards to all active players (2 cards each)
+	err := t.dealCardsToPlayers(activePlayers)
 	if err != nil {
 		return fmt.Errorf("failed to deal cards: %v", err)
 	}
 
-	// Initialize phase to PRE_FLOP so betting can begin immediately.
+	// Post blinds before setting phase to PRE_FLOP
+	err = t.postBlinds()
+	if err != nil {
+		return fmt.Errorf("failed to post blinds: %v", err)
+	}
+
+	// Initialize phase to PRE_FLOP so betting can begin immediately
 	t.game.phase = pokerrpc.GamePhase_PRE_FLOP
 
-	// Initialize the current player (first to act after dealer)
+	// Initialize the current player (first to act after blinds are posted)
 	t.initializeCurrentPlayer()
 
 	gameStartTime := time.Now()
 
-	// Reset all players' LastAction to a time in the past so they don't timeout
-	// before it's their turn, except for the current player
+	// Reset all players' LastAction for timeout management
 	earlyTime := gameStartTime.Add(-t.config.TimeBank)
 	for _, p := range t.players {
-		p.LastAction = earlyTime
-	}
-
-	// Set the current player's LastAction to now so their timeout timer starts
-	if t.game.currentPlayer >= 0 && t.game.currentPlayer < len(t.game.players) {
-		currentPlayerID := t.game.players[t.game.currentPlayer].ID
-		if currentPlayer, exists := t.players[currentPlayerID]; exists {
-			currentPlayer.LastAction = gameStartTime
+		if p.IsAtTable() {
+			p.LastAction = earlyTime
 		}
 	}
 
-	// Mark that the game has started so that external callers can query this
+	// Set the current player's LastAction to now so their timeout timer starts
+	if currentPlayer := t.getCurrentPlayerFromUnifiedState(); currentPlayer != nil {
+		currentPlayer.LastAction = gameStartTime
+	}
+
+	// Mark that the game has started
 	t.gameStarted = true
 
 	// Reset actions counter for new game
@@ -209,8 +223,8 @@ func (t *Table) GetStatus() string {
 	status := fmt.Sprintf("Table %s:\n", t.config.ID)
 	status += fmt.Sprintf("Players: %d/%d\n", len(t.players), t.config.MaxPlayers)
 	status += fmt.Sprintf("Buy-in: %.8f DCR\n", float64(t.config.BuyIn)/1e8)
-	status += fmt.Sprintf("Blinds: %.8f/%.8f DCR\n",
-		float64(t.config.SmallBlind)/1e8, float64(t.config.BigBlind)/1e8)
+	status += fmt.Sprintf("Starting Chips: %d chips\n", t.config.StartingChips)
+	status += fmt.Sprintf("Blinds: %d/%d chips\n", t.config.SmallBlind, t.config.BigBlind)
 
 	if t.game != nil {
 		status += "Game in progress\n"
@@ -232,7 +246,6 @@ func (t *Table) GetPlayers() []*Player {
 	}
 
 	// Sort by TableSeat to ensure consistent ordering
-	// This prevents players from appearing to move up/down in the UI
 	sort.Slice(players, func(i, j int) bool {
 		return players[i].TableSeat < players[j].TableSeat
 	})
@@ -247,53 +260,49 @@ func (t *Table) GetBigBlind() int64 {
 	return t.config.BigBlind
 }
 
-// MakeBet handles a player making a bet
+// MakeBet handles betting using the unified player state system
 func (t *Table) MakeBet(playerID string, amount int64) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	player, exists := t.players[playerID]
-	if !exists {
-		return fmt.Errorf("player not at table")
+	player := t.players[playerID]
+	if player == nil {
+		return fmt.Errorf("player not found")
 	}
 
-	// Amount represents the desired TOTAL amount the player wishes to have
-	// committed in this betting round. Compute the delta relative to what
-	// they have already put in (player.HasBet).
+	// Validate and make the bet
 	if amount < player.HasBet {
 		return fmt.Errorf("cannot decrease bet")
 	}
 
 	delta := amount - player.HasBet
-
-	// Make sure player has enough balance for the delta (only if there's a delta)
 	if delta > 0 && delta > player.Balance {
 		return fmt.Errorf("insufficient balance")
 	}
 
-	// Update player state
+	// Update the shared player object (this updates both table and game state automatically)
 	if delta > 0 {
 		player.Balance -= delta
-		player.HasBet = amount
 	}
+	player.HasBet = amount
 	player.LastAction = time.Now()
 
-	// Update game state when running
+	// Update game state
+	if player.Balance == 0 {
+		player.SetGameState("ALL_IN")
+	}
+
+	// Update game-level state
 	if t.gameStarted && t.game != nil {
-		// Keep track of largest bet so far in the round
 		if amount > t.game.currentBet {
 			t.game.currentBet = amount
 		}
-
-		// Add to pot only if there's actually money being put in
 		if delta > 0 {
 			t.game.AddToPot(delta)
 		}
-
 		// Increment actions counter for this betting round
 		t.actionsInRound++
-
-		// Advance to next player after action (including checks)
+		// Advance to next player after action
 		t.advanceToNextPlayerLocked()
 	}
 
@@ -368,7 +377,7 @@ func (t *Table) Subscribe(ctx context.Context, requestingPlayerID string) chan *
 
 				players := make([]*pokerrpc.Player, 0, len(t.players))
 				for _, p := range t.players {
-					// Create player update with complete information
+					// Create player update with complete information from the unified player state
 					player := &pokerrpc.Player{
 						Id:         p.ID,
 						Balance:    p.Balance,
@@ -377,27 +386,14 @@ func (t *Table) Subscribe(ctx context.Context, requestingPlayerID string) chan *
 						CurrentBet: p.HasBet,
 					}
 
-					// Find the corresponding game player to get the hand cards
-					var gamePlayer *Player
-					if t.game != nil && len(t.game.players) > 0 {
-						for _, gp := range t.game.players {
-							if gp.ID == p.ID {
-								gamePlayer = gp
-								break
-							}
-						}
-					}
-
 					// Only include hand cards if this is the requesting player's own data
 					// or if the game is in showdown phase
 					if (p.ID == requestingPlayerID) || (t.game != nil && t.game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN) {
-						if gamePlayer != nil {
-							player.Hand = make([]*pokerrpc.Card, len(gamePlayer.Hand))
-							for i, card := range gamePlayer.Hand {
-								player.Hand[i] = &pokerrpc.Card{
-									Suit:  card.GetSuit(),
-									Value: card.GetValue(),
-								}
+						player.Hand = make([]*pokerrpc.Card, len(p.Hand))
+						for i, card := range p.Hand {
+							player.Hand[i] = &pokerrpc.Card{
+								Suit:  card.GetSuit(),
+								Value: card.GetValue(),
 							}
 						}
 					}
@@ -463,7 +459,7 @@ func (t *Table) GetGamePhase() pokerrpc.GamePhase {
 	return t.game.GetPhase()
 }
 
-// HandleTimeouts iterates over players and auto-folds those whose timebank expired.
+// HandleTimeouts iterates over players and auto-checks-or-folds those whose timebank expired.
 func (t *Table) HandleTimeouts() {
 	// Only run when game is active and TimeBank is positive
 	if !t.gameStarted || t.config.TimeBank == 0 || t.game == nil {
@@ -485,19 +481,36 @@ func (t *Table) HandleTimeouts() {
 		return // No current player to timeout
 	}
 
-	// Find the current player in table players
-	currentPlayer, exists := t.players[currentPlayerID]
-	if !exists || currentPlayer.HasFolded {
+	// The current player is already in our unified player state
+	currentPlayer := t.game.players[t.game.currentPlayer]
+	if currentPlayer.HasFolded {
 		return
 	}
 
 	// Check if current player has timed out
 	if now.Sub(currentPlayer.LastAction) > t.config.TimeBank {
-		// Auto-fold the current player
-		currentPlayer.HasFolded = true
+		// Try to auto-check first, if not possible then auto-fold
+		currentBet := t.game.currentBet
 
-		// Advance to next player
-		t.advanceToNextPlayerLocked()
+		// A check is valid if the player's current bet equals the current bet
+		// (meaning they don't need to put any additional money in)
+		if currentPlayer.HasBet == currentBet {
+			// Auto-check: essentially a bet of the current amount
+			// This doesn't change the bet amounts but advances the action
+			currentPlayer.LastAction = now
+
+			// Increment actions counter for this betting round
+			t.actionsInRound++
+
+			// Advance to next player after check action
+			t.advanceToNextPlayerLocked()
+		} else {
+			// Auto-fold the current player
+			currentPlayer.HasFolded = true
+
+			// Advance to next player
+			t.advanceToNextPlayerLocked()
+		}
 
 		// Check if this action completes the betting round
 		t.maybeAdvancePhase()
@@ -521,6 +534,7 @@ func (t *Table) maybeAdvancePhase() {
 	// If zero or one active player, move to showdown
 	if activePlayers <= 1 {
 		t.game.phase = pokerrpc.GamePhase_SHOWDOWN
+		t.handleShowdown()
 		return
 	}
 
@@ -554,6 +568,8 @@ func (t *Table) maybeAdvancePhase() {
 		t.game.StateRiver()
 	case pokerrpc.GamePhase_RIVER:
 		t.game.phase = pokerrpc.GamePhase_SHOWDOWN
+		t.handleShowdown()
+		return
 	}
 
 	// Reset for new betting round
@@ -568,9 +584,8 @@ func (t *Table) maybeAdvancePhase() {
 
 	// Set the new current player's LastAction to now for the new betting round
 	if t.game.currentPlayer >= 0 && t.game.currentPlayer < len(t.game.players) {
-		currentPlayerID := t.game.players[t.game.currentPlayer].ID
-		if currentPlayer, exists := t.players[currentPlayerID]; exists && !currentPlayer.HasFolded {
-			currentPlayer.LastAction = time.Now()
+		if !t.game.players[t.game.currentPlayer].HasFolded {
+			t.game.players[t.game.currentPlayer].LastAction = time.Now()
 		}
 	}
 }
@@ -643,11 +658,10 @@ func (t *Table) advanceToNextPlayerLocked() {
 			break
 		}
 
-		// Map game player to table player to check if folded
-		gamePlayer := t.game.players[t.game.currentPlayer]
-		if tablePlayer, exists := t.players[gamePlayer.ID]; exists && !tablePlayer.HasFolded {
+		// Use the unified player state directly
+		if !t.game.players[t.game.currentPlayer].HasFolded {
 			// Set the new current player's LastAction to now so their timeout timer starts
-			tablePlayer.LastAction = time.Now()
+			t.game.players[t.game.currentPlayer].LastAction = time.Now()
 			break
 		}
 	}
@@ -659,15 +673,27 @@ func (t *Table) initializeCurrentPlayer() {
 		return
 	}
 
-	// Start with player after dealer (small blind position)
-	t.game.currentPlayer = (t.game.dealer + 1) % len(t.game.players)
+	numPlayers := len(t.game.players)
+
+	// In pre-flop, start with Under the Gun (player after big blind)
+	if t.game.phase == pokerrpc.GamePhase_PRE_FLOP {
+		if numPlayers == 2 {
+			// In heads-up, after blinds are posted, small blind acts first
+			t.game.currentPlayer = (t.game.dealer + 1) % numPlayers
+		} else {
+			// In multi-way, Under the Gun acts first (after big blind)
+			t.game.currentPlayer = (t.game.dealer + 3) % numPlayers
+		}
+	} else {
+		// In post-flop streets, start with player after dealer (small blind position)
+		t.game.currentPlayer = (t.game.dealer + 1) % numPlayers
+	}
 
 	// Ensure we start with an active player
 	startingPlayer := t.game.currentPlayer
 	for {
-		// Map game player to table player to check if folded
-		gamePlayer := t.game.players[t.game.currentPlayer]
-		if tablePlayer, exists := t.players[gamePlayer.ID]; exists && !tablePlayer.HasFolded {
+		// Use the unified player state directly
+		if !t.game.players[t.game.currentPlayer].HasFolded {
 			break
 		}
 
@@ -680,25 +706,24 @@ func (t *Table) initializeCurrentPlayer() {
 	}
 }
 
-// HandleFold handles a player folding their hand
+// HandleFold handles folding using the unified player state system
 func (t *Table) HandleFold(playerID string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	player, exists := t.players[playerID]
-	if !exists {
-		return fmt.Errorf("player not at table")
+	player := t.players[playerID]
+	if player == nil {
+		return fmt.Errorf("player not found")
 	}
 
-	// Mark player as folded
-	player.HasFolded = true
+	// Update the shared player object (this updates both table and game state automatically)
+	player.SetGameState("FOLDED")
 	player.LastAction = time.Now()
 
-	// Update game state when running
+	// Update game state
 	if t.gameStarted && t.game != nil {
 		// Increment actions counter for this betting round
 		t.actionsInRound++
-
 		// Advance to next player after fold action
 		t.advanceToNextPlayerLocked()
 	}
@@ -708,4 +733,289 @@ func (t *Table) HandleFold(playerID string) error {
 
 	t.lastAction = time.Now()
 	return nil
+}
+
+// postBlinds posts blinds before setting phase to PRE_FLOP
+func (t *Table) postBlinds() error {
+	if t.game == nil {
+		return fmt.Errorf("game not started")
+	}
+
+	numPlayers := len(t.game.players)
+	if numPlayers < 2 {
+		return fmt.Errorf("not enough players for blinds")
+	}
+
+	// Small blind position
+	var smallBlindIdx int
+	if numPlayers == 2 {
+		// In heads-up, dealer posts small blind
+		smallBlindIdx = t.game.dealer
+	} else {
+		// In multi-way, player after dealer posts small blind
+		smallBlindIdx = (t.game.dealer + 1) % numPlayers
+	}
+
+	smallBlindGamePlayer := t.game.players[smallBlindIdx]
+	smallBlind := t.config.SmallBlind
+	if smallBlind > smallBlindGamePlayer.Balance {
+		return fmt.Errorf("insufficient balance for small blind")
+	}
+
+	// Update the unified player object
+	smallBlindGamePlayer.Balance -= smallBlind
+	smallBlindGamePlayer.HasBet = smallBlind
+	t.game.AddToPotForPlayer(smallBlindIdx, smallBlind)
+
+	// Call the callback for small blind if set
+	if t.blindPostedCallback != nil {
+		t.blindPostedCallback(t.config.ID, smallBlindGamePlayer.ID, smallBlind, true)
+	}
+
+	// Big blind position
+	var bigBlindIdx int
+	if numPlayers == 2 {
+		// In heads-up, other player posts big blind
+		bigBlindIdx = (t.game.dealer + 1) % numPlayers
+	} else {
+		// In multi-way, two positions after dealer posts big blind
+		bigBlindIdx = (t.game.dealer + 2) % numPlayers
+	}
+	bigBlindGamePlayer := t.game.players[bigBlindIdx]
+	bigBlind := t.config.BigBlind
+	if bigBlind > bigBlindGamePlayer.Balance {
+		return fmt.Errorf("insufficient balance for big blind")
+	}
+
+	// Update the unified player object
+	bigBlindGamePlayer.Balance -= bigBlind
+	bigBlindGamePlayer.HasBet = bigBlind
+	t.game.AddToPotForPlayer(bigBlindIdx, bigBlind)
+
+	// Set the current bet to the big blind amount
+	t.game.currentBet = bigBlind
+
+	// Call the callback for big blind if set
+	if t.blindPostedCallback != nil {
+		t.blindPostedCallback(t.config.ID, bigBlindGamePlayer.ID, bigBlind, false)
+	}
+
+	return nil
+}
+
+// handleShowdown handles the showdown phase, distributes pots, and prepares for a new hand
+func (t *Table) handleShowdown() {
+	if t.game == nil {
+		return
+	}
+
+	// Count active (non-folded) players
+	activePlayers := make([]*Player, 0)
+	for _, player := range t.game.players {
+		if !player.HasFolded {
+			activePlayers = append(activePlayers, player)
+		}
+	}
+
+	// If only one player remains, they win automatically without hand evaluation
+	if len(activePlayers) <= 1 {
+		// Award the pot to the remaining player (if any)
+		if len(activePlayers) == 1 {
+			winnings := t.game.GetPot()
+			activePlayers[0].Balance += winnings
+		}
+	} else {
+		// Multiple players remain - need proper hand evaluation
+		// Only evaluate hands if we have enough cards (player hand + community cards >= 5)
+		validEvaluations := true
+
+		for _, player := range activePlayers {
+			totalCards := len(player.Hand) + len(t.game.communityCards)
+			if totalCards < 5 {
+				validEvaluations = false
+				break
+			}
+		}
+
+		if validEvaluations {
+			// Evaluate each active player's hand
+			for _, player := range activePlayers {
+				handValue := EvaluateHand(player.Hand, t.game.communityCards)
+				player.HandValue = &handValue
+				player.HandDescription = GetHandDescription(handValue)
+			}
+
+			// Check for any uncalled bets and return them
+			t.game.potManager.ReturnUncalledBet(t.game.players)
+
+			// Create side pots if needed
+			t.game.potManager.CreateSidePots(t.game.players)
+
+			// Distribute pots to winners
+			t.game.potManager.DistributePots(t.game.players)
+		} else {
+			// Can't properly evaluate hands - award pot to first active player
+			// This is a fallback for incomplete games
+			if len(activePlayers) > 0 {
+				winnings := t.game.GetPot()
+				activePlayers[0].Balance += winnings
+			}
+		}
+	}
+
+	// Since we're using unified player objects, balances are already updated
+	// No need to synchronize - the game.players ARE the table.players
+
+	// Count players still at the table with sufficient balance for the next hand
+	playersReadyForNextHand := 0
+	for _, p := range t.players {
+		if p.IsAtTable() && p.Balance >= t.config.BigBlind {
+			playersReadyForNextHand++
+		}
+	}
+
+	// Reset all players' hand-specific state
+	for _, p := range t.players {
+		p.HasFolded = false
+		p.HasBet = 0
+		p.Hand = nil
+		p.HandValue = nil
+		p.HandDescription = ""
+	}
+
+	t.actionsInRound = 0
+	t.lastAction = time.Now()
+
+	// Auto-start next hand if we have enough players
+	if playersReadyForNextHand >= t.config.MinPlayers {
+		// Start a new hand automatically
+		err := t.startNewHand()
+		if err != nil {
+			// If we can't start a new hand, stop the game
+			t.gameStarted = false
+			t.game = nil
+		}
+	} else {
+		// Not enough players - stop the game
+		t.gameStarted = false
+		t.game = nil
+	}
+}
+
+// startNewHand starts a new hand without requiring all players to be ready again
+func (t *Table) startNewHand() error {
+	// Check if we have enough players with sufficient balance
+	activePlayers := make([]*Player, 0, len(t.players))
+	for _, p := range t.players {
+		if p.IsAtTable() && p.Balance >= t.config.BigBlind { // Player must have at least big blind to play
+			activePlayers = append(activePlayers, p)
+		}
+	}
+
+	if len(activePlayers) < t.config.MinPlayers {
+		return fmt.Errorf("not enough players with sufficient balance to start new hand")
+	}
+
+	// Sort players by TableSeat for consistent ordering
+	sort.Slice(activePlayers, func(i, j int) bool {
+		return activePlayers[i].TableSeat < activePlayers[j].TableSeat
+	})
+
+	// Create new game and populate it with references to our table players
+	t.game = NewGame(GameConfig{
+		NumPlayers:    len(activePlayers),
+		StartingChips: t.config.StartingChips,
+	})
+
+	// Populate game.players with references to the same Player objects from the table
+	// This creates a unified player state - no duplication, just shared references
+	copy(t.game.players, activePlayers)
+
+	// Deal initial cards to all active players (2 cards each)
+	err := t.dealCardsToPlayers(activePlayers)
+	if err != nil {
+		return fmt.Errorf("failed to deal cards: %v", err)
+	}
+
+	// Post blinds before setting phase to PRE_FLOP
+	err = t.postBlinds()
+	if err != nil {
+		return fmt.Errorf("failed to post blinds: %v", err)
+	}
+
+	// Initialize phase to PRE_FLOP so betting can begin immediately
+	t.game.phase = pokerrpc.GamePhase_PRE_FLOP
+
+	// Initialize the current player (first to act after blinds are posted)
+	t.initializeCurrentPlayer()
+
+	gameStartTime := time.Now()
+
+	// Reset all players' LastAction for timeout management
+	earlyTime := gameStartTime.Add(-t.config.TimeBank)
+	for _, p := range t.players {
+		if p.IsAtTable() {
+			p.LastAction = earlyTime
+		}
+	}
+
+	// Set the current player's LastAction to now so their timeout timer starts
+	if t.game.currentPlayer >= 0 && t.game.currentPlayer < len(t.game.players) {
+		if !t.game.players[t.game.currentPlayer].HasFolded {
+			t.game.players[t.game.currentPlayer].LastAction = gameStartTime
+		}
+	}
+
+	return nil
+}
+
+// dealCardsToPlayers deals cards to active players using the unified player state
+func (t *Table) dealCardsToPlayers(activePlayers []*Player) error {
+	if t.game == nil || t.game.deck == nil {
+		return fmt.Errorf("game or deck not initialized")
+	}
+
+	// Deal 2 cards to each active player
+	for i := 0; i < 2; i++ {
+		for _, p := range activePlayers {
+			card, ok := t.game.deck.Draw()
+			if !ok {
+				return fmt.Errorf("failed to deal card to player %s: deck is empty", p.ID)
+			}
+			p.Hand = append(p.Hand, card)
+		}
+	}
+	return nil
+}
+
+// getCurrentPlayerFromUnifiedState returns the current active player from unified state
+func (t *Table) getCurrentPlayerFromUnifiedState() *Player {
+	if t.game == nil {
+		return nil
+	}
+
+	// Get active players in order
+	activePlayers := t.getActivePlayersInOrder()
+	if len(activePlayers) == 0 || t.game.currentPlayer < 0 || t.game.currentPlayer >= len(activePlayers) {
+		return nil
+	}
+
+	return activePlayers[t.game.currentPlayer]
+}
+
+// getActivePlayersInOrder returns active players sorted by table seat
+func (t *Table) getActivePlayersInOrder() []*Player {
+	activePlayers := make([]*Player, 0, len(t.players))
+	for _, p := range t.players {
+		if p.IsActiveInGame() {
+			activePlayers = append(activePlayers, p)
+		}
+	}
+
+	// Sort by TableSeat for consistent ordering
+	sort.Slice(activePlayers, func(i, j int) bool {
+		return activePlayers[i].TableSeat < activePlayers[j].TableSeat
+	})
+
+	return activePlayers
 }

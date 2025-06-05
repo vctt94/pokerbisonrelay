@@ -655,6 +655,28 @@ func checkHighCard(cards []Card, values []int) HandValue {
 	copy(sortedCards, cards)
 	sortCardsByValue(sortedCards)
 
+	// If we don't have enough cards, we can't properly evaluate
+	if len(sortedCards) < 5 {
+		// Return a minimal hand value for incomplete hands
+		highValue := 0
+		if len(sortedCards) > 0 {
+			highValue = valueToInt(sortedCards[0].value)
+		}
+
+		// Create kickers from available cards (excluding the high card)
+		kickers := make([]int, 0)
+		for i := 1; i < len(sortedCards) && i < 5; i++ {
+			kickers = append(kickers, valueToInt(sortedCards[i].value))
+		}
+
+		return HandValue{
+			Rank:      HighCard,
+			RankValue: highValue,
+			Kickers:   kickers,
+			BestHand:  sortedCards, // Use all available cards
+		}
+	}
+
 	// Take the 5 highest cards
 	bestHand := sortedCards[:5]
 

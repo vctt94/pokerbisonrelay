@@ -88,17 +88,27 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize notification manager
+	cfg.Notifications = client.NewNotificationManager()
+
 	// Create context
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Create poker client with configuration - use a default client ID for now
+	// Create poker client with configuration
 	pokerClient, err := client.NewPokerClient(ctx, cfg)
 	if err != nil {
 		fmt.Printf("Failed to create poker client: %v\n", err)
 		os.Exit(1)
 	}
 	defer pokerClient.Close()
+	log := pokerClient.BRClient.LogBackend.Logger("pokerclient")
+
+	// Start the notification stream
+	if err := pokerClient.StartNotifier(ctx); err != nil {
+		log.Infof("Failed to start notifications: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Start the UI with the client's components
 	ui.Run(ctx, pokerClient)

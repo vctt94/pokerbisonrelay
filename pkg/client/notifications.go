@@ -91,6 +91,27 @@ type OnShowdownResultNtfn func(string, []*pokerrpc.Winner, time.Time)
 
 func (_ OnShowdownResultNtfn) typ() string { return onShowdownResultNtfnType }
 
+const onPlayerCalledNtfnType = "onPlayerCalled"
+
+// OnPlayerCalledNtfn is the handler for player called notifications.
+type OnPlayerCalledNtfn func(string, int64, time.Time)
+
+func (_ OnPlayerCalledNtfn) typ() string { return onPlayerCalledNtfnType }
+
+const onPlayerRaisedNtfnType = "onPlayerRaised"
+
+// OnPlayerRaisedNtfn is the handler for player raised notifications.
+type OnPlayerRaisedNtfn func(string, int64, time.Time)
+
+func (_ OnPlayerRaisedNtfn) typ() string { return onPlayerRaisedNtfnType }
+
+const onPlayerCheckedNtfnType = "onPlayerChecked"
+
+// OnPlayerCheckedNtfn is the handler for player checked notifications.
+type OnPlayerCheckedNtfn func(string, time.Time)
+
+func (_ OnPlayerCheckedNtfn) typ() string { return onPlayerCheckedNtfnType }
+
 // UINotificationsConfig is the configuration for how UI notifications are
 // emitted.
 type UINotificationsConfig struct {
@@ -461,6 +482,21 @@ func (nmgr *NotificationManager) notifyShowdownResult(gameID string, winners []*
 		visit(func(h OnShowdownResultNtfn) { h(gameID, winners, ts) })
 }
 
+func (nmgr *NotificationManager) notifyPlayerCalled(playerID string, amount int64, ts time.Time) {
+	nmgr.handlers[onPlayerCalledNtfnType].(*handlersFor[OnPlayerCalledNtfn]).
+		visit(func(h OnPlayerCalledNtfn) { h(playerID, amount, ts) })
+}
+
+func (nmgr *NotificationManager) notifyPlayerRaised(playerID string, amount int64, ts time.Time) {
+	nmgr.handlers[onPlayerRaisedNtfnType].(*handlersFor[OnPlayerRaisedNtfn]).
+		visit(func(h OnPlayerRaisedNtfn) { h(playerID, amount, ts) })
+}
+
+func (nmgr *NotificationManager) notifyPlayerChecked(playerID string, ts time.Time) {
+	nmgr.handlers[onPlayerCheckedNtfnType].(*handlersFor[OnPlayerCheckedNtfn]).
+		visit(func(h OnPlayerCheckedNtfn) { h(playerID, ts) })
+}
+
 func NewNotificationManager() *NotificationManager {
 	nmgr := &NotificationManager{
 		uiConfig: UINotificationsConfig{
@@ -481,6 +517,9 @@ func NewNotificationManager() *NotificationManager {
 			onBalanceUpdatedNtfnType: &handlersFor[OnBalanceUpdatedNtfn]{},
 			onTipReceivedNtfnType:    &handlersFor[OnTipReceivedNtfn]{},
 			onShowdownResultNtfnType: &handlersFor[OnShowdownResultNtfn]{},
+			onPlayerCalledNtfnType:   &handlersFor[OnPlayerCalledNtfn]{},
+			onPlayerRaisedNtfnType:   &handlersFor[OnPlayerRaisedNtfn]{},
+			onPlayerCheckedNtfnType:  &handlersFor[OnPlayerCheckedNtfn]{},
 
 			onUINtfnType: &handlersFor[OnUINotification]{},
 		},

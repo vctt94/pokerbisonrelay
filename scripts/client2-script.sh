@@ -43,9 +43,8 @@ until nc -z localhost $BR_RPC_PORT; do
     echo 'waiting for WS on :$BR_RPC_PORT'; sleep 3
 done
 cd \"$POKERCLIENT_DIR\"
-go build -o client
 echo '--- poker client running (Ctrl-C to stop, ↑ to rebuild/run again) ---'
-./client --datadir \"$POKER_DATADIR\"
+go build -o client && ./client --datadir \"$POKER_DATADIR\"
 " C-m
 
 ###############################################################################

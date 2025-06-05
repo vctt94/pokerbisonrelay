@@ -83,22 +83,24 @@ func (GamePhase) EnumDescriptor() ([]byte, []int) {
 type NotificationType int32
 
 const (
-	NotificationType_UNKNOWN           NotificationType = 0
-	NotificationType_PLAYER_JOINED     NotificationType = 1
-	NotificationType_PLAYER_LEFT       NotificationType = 2
-	NotificationType_GAME_STARTED      NotificationType = 3
-	NotificationType_GAME_ENDED        NotificationType = 4
-	NotificationType_BET_MADE          NotificationType = 5
-	NotificationType_PLAYER_FOLDED     NotificationType = 6
-	NotificationType_NEW_ROUND         NotificationType = 7
-	NotificationType_SHOWDOWN_RESULT   NotificationType = 8
-	NotificationType_TIP_RECEIVED      NotificationType = 9
-	NotificationType_BALANCE_UPDATED   NotificationType = 10
-	NotificationType_TABLE_CREATED     NotificationType = 11
-	NotificationType_TABLE_REMOVED     NotificationType = 12
-	NotificationType_PLAYER_READY      NotificationType = 13
-	NotificationType_PLAYER_UNREADY    NotificationType = 14
-	NotificationType_ALL_PLAYERS_READY NotificationType = 15
+	NotificationType_UNKNOWN            NotificationType = 0
+	NotificationType_PLAYER_JOINED      NotificationType = 1
+	NotificationType_PLAYER_LEFT        NotificationType = 2
+	NotificationType_GAME_STARTED       NotificationType = 3
+	NotificationType_GAME_ENDED         NotificationType = 4
+	NotificationType_BET_MADE           NotificationType = 5
+	NotificationType_PLAYER_FOLDED      NotificationType = 6
+	NotificationType_NEW_ROUND          NotificationType = 7
+	NotificationType_SHOWDOWN_RESULT    NotificationType = 8
+	NotificationType_TIP_RECEIVED       NotificationType = 9
+	NotificationType_BALANCE_UPDATED    NotificationType = 10
+	NotificationType_TABLE_CREATED      NotificationType = 11
+	NotificationType_TABLE_REMOVED      NotificationType = 12
+	NotificationType_PLAYER_READY       NotificationType = 13
+	NotificationType_PLAYER_UNREADY     NotificationType = 14
+	NotificationType_ALL_PLAYERS_READY  NotificationType = 15
+	NotificationType_SMALL_BLIND_POSTED NotificationType = 16
+	NotificationType_BIG_BLIND_POSTED   NotificationType = 17
 )
 
 // Enum value maps for NotificationType.
@@ -120,24 +122,28 @@ var (
 		13: "PLAYER_READY",
 		14: "PLAYER_UNREADY",
 		15: "ALL_PLAYERS_READY",
+		16: "SMALL_BLIND_POSTED",
+		17: "BIG_BLIND_POSTED",
 	}
 	NotificationType_value = map[string]int32{
-		"UNKNOWN":           0,
-		"PLAYER_JOINED":     1,
-		"PLAYER_LEFT":       2,
-		"GAME_STARTED":      3,
-		"GAME_ENDED":        4,
-		"BET_MADE":          5,
-		"PLAYER_FOLDED":     6,
-		"NEW_ROUND":         7,
-		"SHOWDOWN_RESULT":   8,
-		"TIP_RECEIVED":      9,
-		"BALANCE_UPDATED":   10,
-		"TABLE_CREATED":     11,
-		"TABLE_REMOVED":     12,
-		"PLAYER_READY":      13,
-		"PLAYER_UNREADY":    14,
-		"ALL_PLAYERS_READY": 15,
+		"UNKNOWN":            0,
+		"PLAYER_JOINED":      1,
+		"PLAYER_LEFT":        2,
+		"GAME_STARTED":       3,
+		"GAME_ENDED":         4,
+		"BET_MADE":           5,
+		"PLAYER_FOLDED":      6,
+		"NEW_ROUND":          7,
+		"SHOWDOWN_RESULT":    8,
+		"TIP_RECEIVED":       9,
+		"BALANCE_UPDATED":    10,
+		"TABLE_CREATED":      11,
+		"TABLE_REMOVED":      12,
+		"PLAYER_READY":       13,
+		"PLAYER_UNREADY":     14,
+		"ALL_PLAYERS_READY":  15,
+		"SMALL_BLIND_POSTED": 16,
+		"BIG_BLIND_POSTED":   17,
 	}
 )
 
@@ -297,11 +303,11 @@ type GameUpdate struct {
 	Phase           GamePhase              `protobuf:"varint,2,opt,name=phase,proto3,enum=pokerrpc.GamePhase" json:"phase,omitempty"`
 	Players         []*Player              `protobuf:"bytes,3,rep,name=players,proto3" json:"players,omitempty"`
 	CommunityCards  []*Card                `protobuf:"bytes,4,rep,name=community_cards,json=communityCards,proto3" json:"community_cards,omitempty"`
-	Pot             int64                  `protobuf:"varint,5,opt,name=pot,proto3" json:"pot,omitempty"`
-	CurrentBet      int64                  `protobuf:"varint,6,opt,name=current_bet,json=currentBet,proto3" json:"current_bet,omitempty"`
+	Pot             int64                  `protobuf:"varint,5,opt,name=pot,proto3" json:"pot,omitempty"`                                 // Total poker chips in the pot
+	CurrentBet      int64                  `protobuf:"varint,6,opt,name=current_bet,json=currentBet,proto3" json:"current_bet,omitempty"` // Current poker chips bet amount in this round
 	CurrentPlayer   string                 `protobuf:"bytes,7,opt,name=current_player,json=currentPlayer,proto3" json:"current_player,omitempty"`
-	MinRaise        int64                  `protobuf:"varint,8,opt,name=min_raise,json=minRaise,proto3" json:"min_raise,omitempty"`
-	MaxRaise        int64                  `protobuf:"varint,9,opt,name=max_raise,json=maxRaise,proto3" json:"max_raise,omitempty"`
+	MinRaise        int64                  `protobuf:"varint,8,opt,name=min_raise,json=minRaise,proto3" json:"min_raise,omitempty"` // Minimum poker chips raise amount
+	MaxRaise        int64                  `protobuf:"varint,9,opt,name=max_raise,json=maxRaise,proto3" json:"max_raise,omitempty"` // Maximum poker chips raise amount
 	GameStarted     bool                   `protobuf:"varint,10,opt,name=game_started,json=gameStarted,proto3" json:"game_started,omitempty"`
 	PlayersRequired int32                  `protobuf:"varint,11,opt,name=players_required,json=playersRequired,proto3" json:"players_required,omitempty"`
 	PlayersJoined   int32                  `protobuf:"varint,12,opt,name=players_joined,json=playersJoined,proto3" json:"players_joined,omitempty"`
@@ -427,7 +433,7 @@ type MakeBetRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PlayerId      string                 `protobuf:"bytes,1,opt,name=player_id,json=playerId,proto3" json:"player_id,omitempty"`
 	TableId       string                 `protobuf:"bytes,2,opt,name=table_id,json=tableId,proto3" json:"table_id,omitempty"`
-	Amount        int64                  `protobuf:"varint,3,opt,name=amount,proto3" json:"amount,omitempty"`
+	Amount        int64                  `protobuf:"varint,3,opt,name=amount,proto3" json:"amount,omitempty"` // Poker chips amount to bet
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -487,7 +493,7 @@ type MakeBetResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
 	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
-	NewBalance    int64                  `protobuf:"varint,3,opt,name=new_balance,json=newBalance,proto3" json:"new_balance,omitempty"`
+	NewBalance    int64                  `protobuf:"varint,3,opt,name=new_balance,json=newBalance,proto3" json:"new_balance,omitempty"` // Player's new DCR account balance (in atoms)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1109,17 +1115,18 @@ func (x *Winner) GetWinnings() int64 {
 
 // Lobby Messages
 type CreateTableRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PlayerId      string                 `protobuf:"bytes,1,opt,name=player_id,json=playerId,proto3" json:"player_id,omitempty"`
-	SmallBlind    int64                  `protobuf:"varint,2,opt,name=small_blind,json=smallBlind,proto3" json:"small_blind,omitempty"`
-	BigBlind      int64                  `protobuf:"varint,3,opt,name=big_blind,json=bigBlind,proto3" json:"big_blind,omitempty"`
-	MaxPlayers    int32                  `protobuf:"varint,4,opt,name=max_players,json=maxPlayers,proto3" json:"max_players,omitempty"`
-	MinPlayers    int32                  `protobuf:"varint,5,opt,name=min_players,json=minPlayers,proto3" json:"min_players,omitempty"`
-	MinBalance    int64                  `protobuf:"varint,6,opt,name=min_balance,json=minBalance,proto3" json:"min_balance,omitempty"`
-	BuyIn         int64                  `protobuf:"varint,7,opt,name=buy_in,json=buyIn,proto3" json:"buy_in,omitempty"`
-	StartingChips int64                  `protobuf:"varint,8,opt,name=starting_chips,json=startingChips,proto3" json:"starting_chips,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	PlayerId        string                 `protobuf:"bytes,1,opt,name=player_id,json=playerId,proto3" json:"player_id,omitempty"`
+	SmallBlind      int64                  `protobuf:"varint,2,opt,name=small_blind,json=smallBlind,proto3" json:"small_blind,omitempty"` // Poker chips amount for small blind
+	BigBlind        int64                  `protobuf:"varint,3,opt,name=big_blind,json=bigBlind,proto3" json:"big_blind,omitempty"`       // Poker chips amount for big blind
+	MaxPlayers      int32                  `protobuf:"varint,4,opt,name=max_players,json=maxPlayers,proto3" json:"max_players,omitempty"`
+	MinPlayers      int32                  `protobuf:"varint,5,opt,name=min_players,json=minPlayers,proto3" json:"min_players,omitempty"`
+	MinBalance      int64                  `protobuf:"varint,6,opt,name=min_balance,json=minBalance,proto3" json:"min_balance,omitempty"`                  // Minimum DCR balance required (in atoms)
+	BuyIn           int64                  `protobuf:"varint,7,opt,name=buy_in,json=buyIn,proto3" json:"buy_in,omitempty"`                                 // DCR amount to join table (in atoms)
+	StartingChips   int64                  `protobuf:"varint,8,opt,name=starting_chips,json=startingChips,proto3" json:"starting_chips,omitempty"`         // Poker chips each player starts with
+	TimeBankSeconds int32                  `protobuf:"varint,9,opt,name=time_bank_seconds,json=timeBankSeconds,proto3" json:"time_bank_seconds,omitempty"` // Player timeout in seconds (default: 30)
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *CreateTableRequest) Reset() {
@@ -1204,6 +1211,13 @@ func (x *CreateTableRequest) GetBuyIn() int64 {
 func (x *CreateTableRequest) GetStartingChips() int64 {
 	if x != nil {
 		return x.StartingChips
+	}
+	return 0
+}
+
+func (x *CreateTableRequest) GetTimeBankSeconds() int32 {
+	if x != nil {
+		return x.TimeBankSeconds
 	}
 	return 0
 }
@@ -1553,13 +1567,13 @@ type Table struct {
 	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	HostId          string                 `protobuf:"bytes,2,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
 	Players         []*Player              `protobuf:"bytes,3,rep,name=players,proto3" json:"players,omitempty"`
-	SmallBlind      int64                  `protobuf:"varint,4,opt,name=small_blind,json=smallBlind,proto3" json:"small_blind,omitempty"`
-	BigBlind        int64                  `protobuf:"varint,5,opt,name=big_blind,json=bigBlind,proto3" json:"big_blind,omitempty"`
+	SmallBlind      int64                  `protobuf:"varint,4,opt,name=small_blind,json=smallBlind,proto3" json:"small_blind,omitempty"` // Poker chips amount for small blind
+	BigBlind        int64                  `protobuf:"varint,5,opt,name=big_blind,json=bigBlind,proto3" json:"big_blind,omitempty"`       // Poker chips amount for big blind
 	MaxPlayers      int32                  `protobuf:"varint,6,opt,name=max_players,json=maxPlayers,proto3" json:"max_players,omitempty"`
 	MinPlayers      int32                  `protobuf:"varint,7,opt,name=min_players,json=minPlayers,proto3" json:"min_players,omitempty"`
 	CurrentPlayers  int32                  `protobuf:"varint,8,opt,name=current_players,json=currentPlayers,proto3" json:"current_players,omitempty"`
-	MinBalance      int64                  `protobuf:"varint,9,opt,name=min_balance,json=minBalance,proto3" json:"min_balance,omitempty"`
-	BuyIn           int64                  `protobuf:"varint,10,opt,name=buy_in,json=buyIn,proto3" json:"buy_in,omitempty"`
+	MinBalance      int64                  `protobuf:"varint,9,opt,name=min_balance,json=minBalance,proto3" json:"min_balance,omitempty"` // Minimum DCR balance required (in atoms)
+	BuyIn           int64                  `protobuf:"varint,10,opt,name=buy_in,json=buyIn,proto3" json:"buy_in,omitempty"`               // DCR amount to join table (in atoms)
 	Phase           GamePhase              `protobuf:"varint,11,opt,name=phase,proto3,enum=pokerrpc.GamePhase" json:"phase,omitempty"`
 	GameStarted     bool                   `protobuf:"varint,12,opt,name=game_started,json=gameStarted,proto3" json:"game_started,omitempty"`
 	AllPlayersReady bool                   `protobuf:"varint,13,opt,name=all_players_ready,json=allPlayersReady,proto3" json:"all_players_ready,omitempty"`
@@ -1734,7 +1748,7 @@ func (x *GetBalanceRequest) GetPlayerId() string {
 
 type GetBalanceResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Balance       int64                  `protobuf:"varint,1,opt,name=balance,proto3" json:"balance,omitempty"`
+	Balance       int64                  `protobuf:"varint,1,opt,name=balance,proto3" json:"balance,omitempty"` // DCR account balance (in atoms)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1779,7 +1793,7 @@ func (x *GetBalanceResponse) GetBalance() int64 {
 type UpdateBalanceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PlayerId      string                 `protobuf:"bytes,1,opt,name=player_id,json=playerId,proto3" json:"player_id,omitempty"`
-	Amount        int64                  `protobuf:"varint,2,opt,name=amount,proto3" json:"amount,omitempty"`
+	Amount        int64                  `protobuf:"varint,2,opt,name=amount,proto3" json:"amount,omitempty"` // DCR amount to add/subtract (in atoms, can be negative)
 	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1838,7 +1852,7 @@ func (x *UpdateBalanceRequest) GetDescription() string {
 
 type UpdateBalanceResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	NewBalance    int64                  `protobuf:"varint,1,opt,name=new_balance,json=newBalance,proto3" json:"new_balance,omitempty"`
+	NewBalance    int64                  `protobuf:"varint,1,opt,name=new_balance,json=newBalance,proto3" json:"new_balance,omitempty"` // New DCR account balance (in atoms)
 	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1892,7 +1906,7 @@ type ProcessTipRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	FromPlayerId  string                 `protobuf:"bytes,1,opt,name=from_player_id,json=fromPlayerId,proto3" json:"from_player_id,omitempty"`
 	ToPlayerId    string                 `protobuf:"bytes,2,opt,name=to_player_id,json=toPlayerId,proto3" json:"to_player_id,omitempty"`
-	Amount        int64                  `protobuf:"varint,3,opt,name=amount,proto3" json:"amount,omitempty"`
+	Amount        int64                  `protobuf:"varint,3,opt,name=amount,proto3" json:"amount,omitempty"` // DCR amount to tip (in atoms)
 	Message       string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1960,7 +1974,7 @@ type ProcessTipResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
 	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
-	NewBalance    int64                  `protobuf:"varint,3,opt,name=new_balance,json=newBalance,proto3" json:"new_balance,omitempty"`
+	NewBalance    int64                  `protobuf:"varint,3,opt,name=new_balance,json=newBalance,proto3" json:"new_balance,omitempty"` // Recipient's new DCR account balance (in atoms)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2213,9 +2227,9 @@ type Player struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Balance       int64                  `protobuf:"varint,3,opt,name=balance,proto3" json:"balance,omitempty"`
+	Balance       int64                  `protobuf:"varint,3,opt,name=balance,proto3" json:"balance,omitempty"` // Poker chips balance (in-game currency)
 	Hand          []*Card                `protobuf:"bytes,4,rep,name=hand,proto3" json:"hand,omitempty"`
-	CurrentBet    int64                  `protobuf:"varint,5,opt,name=current_bet,json=currentBet,proto3" json:"current_bet,omitempty"`
+	CurrentBet    int64                  `protobuf:"varint,5,opt,name=current_bet,json=currentBet,proto3" json:"current_bet,omitempty"` // Current poker chips bet in this round
 	Folded        bool                   `protobuf:"varint,6,opt,name=folded,proto3" json:"folded,omitempty"`
 	IsTurn        bool                   `protobuf:"varint,7,opt,name=is_turn,json=isTurn,proto3" json:"is_turn,omitempty"`
 	IsAllIn       bool                   `protobuf:"varint,8,opt,name=is_all_in,json=isAllIn,proto3" json:"is_all_in,omitempty"`
@@ -2746,7 +2760,7 @@ const file_poker_proto_rawDesc = "" +
 	"\tplayer_id\x18\x01 \x01(\tR\bplayerId\x12/\n" +
 	"\thand_rank\x18\x02 \x01(\x0e2\x12.pokerrpc.HandRankR\bhandRank\x12+\n" +
 	"\tbest_hand\x18\x03 \x03(\v2\x0e.pokerrpc.CardR\bbestHand\x12\x1a\n" +
-	"\bwinnings\x18\x04 \x01(\x03R\bwinnings\"\x90\x02\n" +
+	"\bwinnings\x18\x04 \x01(\x03R\bwinnings\"\xbc\x02\n" +
 	"\x12CreateTableRequest\x12\x1b\n" +
 	"\tplayer_id\x18\x01 \x01(\tR\bplayerId\x12\x1f\n" +
 	"\vsmall_blind\x18\x02 \x01(\x03R\n" +
@@ -2759,7 +2773,8 @@ const file_poker_proto_rawDesc = "" +
 	"\vmin_balance\x18\x06 \x01(\x03R\n" +
 	"minBalance\x12\x15\n" +
 	"\x06buy_in\x18\a \x01(\x03R\x05buyIn\x12%\n" +
-	"\x0estarting_chips\x18\b \x01(\x03R\rstartingChips\"0\n" +
+	"\x0estarting_chips\x18\b \x01(\x03R\rstartingChips\x12*\n" +
+	"\x11time_bank_seconds\x18\t \x01(\x05R\x0ftimeBankSeconds\"0\n" +
 	"\x13CreateTableResponse\x12\x19\n" +
 	"\btable_id\x18\x01 \x01(\tR\atableId\"J\n" +
 	"\x10JoinTableRequest\x12\x1b\n" +
@@ -2879,7 +2894,7 @@ const file_poker_proto_rawDesc = "" +
 	"\x04FLOP\x10\x02\x12\b\n" +
 	"\x04TURN\x10\x03\x12\t\n" +
 	"\x05RIVER\x10\x04\x12\f\n" +
-	"\bSHOWDOWN\x10\x05*\xb4\x02\n" +
+	"\bSHOWDOWN\x10\x05*\xe2\x02\n" +
 	"\x10NotificationType\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x11\n" +
 	"\rPLAYER_JOINED\x10\x01\x12\x0f\n" +
@@ -2898,7 +2913,9 @@ const file_poker_proto_rawDesc = "" +
 	"\rTABLE_REMOVED\x10\f\x12\x10\n" +
 	"\fPLAYER_READY\x10\r\x12\x12\n" +
 	"\x0ePLAYER_UNREADY\x10\x0e\x12\x15\n" +
-	"\x11ALL_PLAYERS_READY\x10\x0f*\xa8\x01\n" +
+	"\x11ALL_PLAYERS_READY\x10\x0f\x12\x16\n" +
+	"\x12SMALL_BLIND_POSTED\x10\x10\x12\x14\n" +
+	"\x10BIG_BLIND_POSTED\x10\x11*\xa8\x01\n" +
 	"\bHandRank\x12\r\n" +
 	"\tHIGH_CARD\x10\x00\x12\b\n" +
 	"\x04PAIR\x10\x01\x12\f\n" +

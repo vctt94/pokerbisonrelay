@@ -19,11 +19,11 @@ func (r *Renderer) RenderMainMenu() string {
 	s += TitleStyle.Render("🃏 Poker Client - Main Menu 🃏") + "\n\n"
 	s += fmt.Sprintf("Client ID: %s\n", r.ui.clientID)
 
-	// Get current balance from poker client
+	// Get current balance from poker client and display in DCR
 	if balance, err := r.ui.pc.GetBalance(r.ui.ctx); err == nil {
-		s += fmt.Sprintf("💰 Balance: %d\n", balance)
+		s += fmt.Sprintf("💰 Account Balance: %.8f DCR\n", float64(balance)/1e8)
 	} else {
-		s += "💰 Balance: (loading...)\n"
+		s += "💰 Account Balance: (loading...)\n"
 	}
 
 	// Show current table info if player is at a table
@@ -154,11 +154,11 @@ func (r *Renderer) RenderGameLobby() string {
 	var s string
 	s += TitleStyle.Render(fmt.Sprintf("🎰 Game Lobby - Table %s 🎰", r.ui.pc.GetCurrentTableID())) + "\n\n"
 
-	// Get current balance from poker client
+	// Get current balance from poker client and display in DCR
 	if balance, err := r.ui.pc.GetBalance(r.ui.ctx); err == nil {
-		s += fmt.Sprintf("💰 Balance: %d\n\n", balance)
+		s += fmt.Sprintf("💰 Account Balance: %.8f DCR\n\n", float64(balance)/1e8)
 	} else {
-		s += "💰 Balance: (loading...)\n\n"
+		s += "💰 Account Balance: (loading...)\n\n"
 	}
 
 	// Show table information if we have game update data
@@ -167,7 +167,7 @@ func (r *Renderer) RenderGameLobby() string {
 		s += fmt.Sprintf("👥 Players: %d/%d (required to start)\n", r.ui.playersJoined, r.ui.playersRequired)
 		s += fmt.Sprintf("🎯 Game Phase: %s\n", r.ui.gamePhase.String())
 		if r.ui.pot > 0 {
-			s += fmt.Sprintf("💰 Pot: %d\n", r.ui.pot)
+			s += fmt.Sprintf("💰 Pot: %d chips\n", r.ui.pot)
 		}
 		s += "\n"
 
@@ -185,7 +185,7 @@ func (r *Renderer) RenderGameLobby() string {
 				currentPlayerIndicator = " (You)"
 			}
 
-			s += fmt.Sprintf("  %s: 💰 %d%s%s\n",
+			s += fmt.Sprintf("  %s: 🎮 %d chips%s%s\n",
 				player.Id, player.Balance, readyStatus, currentPlayerIndicator)
 		}
 		s += "\n"
@@ -389,9 +389,9 @@ func (r *Renderer) renderYourCardsAndGameInfo() string {
 		Render(cardsDisplay)
 
 	// Game info on same line after cards - only showing POT and bet info, no account balance
-	potDisplay := fmt.Sprintf("POT: %d", r.ui.pot)
+	potDisplay := fmt.Sprintf("POT: %d chips", r.ui.pot)
 	if r.ui.currentBet > 0 {
-		potDisplay += fmt.Sprintf(" | Bet: %d", r.ui.currentBet)
+		potDisplay += fmt.Sprintf(" | Bet: %d chips", r.ui.currentBet)
 	}
 
 	gameInfo := fmt.Sprintf("💰 %s", potDisplay)
@@ -448,12 +448,12 @@ func (r *Renderer) formatPlayerInfo(player *pokerrpc.Player) string {
 	}
 	info = append(info, fmt.Sprintf("👤 %s", playerName))
 
-	// Balance
-	info = append(info, fmt.Sprintf("💰 Balance: %d", player.Balance))
+	// Game chips balance
+	info = append(info, fmt.Sprintf("🎮 Chips: %d", player.Balance))
 
 	// Current bet
 	if player.CurrentBet > 0 {
-		info = append(info, fmt.Sprintf("🎯 Bet: %d", player.CurrentBet))
+		info = append(info, fmt.Sprintf("🎯 Bet: %d chips", player.CurrentBet))
 	}
 
 	// Status indicators - improved logic
@@ -623,7 +623,7 @@ func (r *Renderer) renderPlayersCompact() string {
 		}
 
 		// Format player info with styling
-		playerInfo := fmt.Sprintf("%s%s(💰%d)", statusIcon, playerName, player.Balance)
+		playerInfo := fmt.Sprintf("%s%s(🎮%d)", statusIcon, playerName, player.Balance)
 
 		// Add current bet if they have one
 		if player.CurrentBet > 0 {

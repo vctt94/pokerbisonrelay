@@ -151,7 +151,7 @@ func (m *PokerUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Process the notification to handle state transitions
 		cmd = m.handleNotification(notif)
 
-	case gameUpdateMsg:
+	case client.GameUpdateMsg:
 		gameUpdate := (*pokerrpc.GameUpdate)(msg)
 
 		// Update current player ID
@@ -197,16 +197,6 @@ func (m *PokerUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = error(msg)
 		m.message = ""
 
-	case tickMsg:
-		// Handle periodic updates - get fresh game state if at a table
-		currentTableID := m.pc.GetCurrentTableID()
-		if currentTableID != "" && (m.state == stateGameLobby || m.state == stateActiveGame) {
-			cmd = m.dispatcher.checkGameStateCmd()
-		}
-		// Schedule next tick - only if we're in a game state that needs frequent updates
-		if m.state == stateGameLobby || m.state == stateActiveGame {
-			cmd = tea.Batch(cmd, gameUpdateTicker())
-		}
 	}
 
 	return m, cmd
@@ -224,11 +214,7 @@ func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cm
 			m.state = stateGameLobby
 			m.message = fmt.Sprintf("Joined table %s", notification.TableId)
 			m.updateMenuOptionsForGameState()
-			// Start game state polling and ticker
-			return tea.Batch(
-				m.dispatcher.checkGameStateCmd(),
-				gameUpdateTicker(),
-			)
+			return nil
 		}
 
 	case pokerrpc.NotificationType_PLAYER_LEFT:
@@ -243,11 +229,7 @@ func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cm
 			m.state = stateGameLobby
 			m.message = fmt.Sprintf("Created table %s", notification.TableId)
 			m.updateMenuOptionsForGameState()
-			// Start game state polling and ticker
-			return tea.Batch(
-				m.dispatcher.checkGameStateCmd(),
-				gameUpdateTicker(),
-			)
+			return nil
 		}
 
 	case pokerrpc.NotificationType_TABLE_REMOVED:
@@ -258,14 +240,23 @@ func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cm
 			return nil
 		}
 
+	case pokerrpc.NotificationType_SMALL_BLIND_POSTED:
+		m.message = fmt.Sprintf("Small blind posted: %d chips by %s", notification.Amount, notification.PlayerId)
+		// Game updates are now received via stream
+		return nil
+
+	case pokerrpc.NotificationType_BIG_BLIND_POSTED:
+		m.message = fmt.Sprintf("Big blind posted: %d chips by %s", notification.Amount, notification.PlayerId)
+		// Game updates are now received via stream
+		return nil
+
 	case pokerrpc.NotificationType_PLAYER_READY:
 		if notification.PlayerId == m.clientID {
 			m.message = "You are now ready"
 		} else {
 			m.message = fmt.Sprintf("%s is now ready", notification.PlayerId)
 		}
-		// Immediately update game state to reflect the ready status change
-		return m.dispatcher.checkGameStateCmd()
+		return nil
 
 	case pokerrpc.NotificationType_PLAYER_UNREADY:
 		if notification.PlayerId == m.clientID {
@@ -273,8 +264,7 @@ func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cm
 		} else {
 			m.message = fmt.Sprintf("%s is no longer ready", notification.PlayerId)
 		}
-		// Immediately update game state to reflect the ready status change
-		return m.dispatcher.checkGameStateCmd()
+		return nil
 
 	case pokerrpc.NotificationType_ALL_PLAYERS_READY:
 		m.message = "All players are ready! Game starting soon..."
@@ -371,6 +361,21 @@ func Run(ctx context.Context, client *client.PokerClient) {
 	model := NewPokerUI(ctx, client)
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
+
+	// Start a goroutine to listen for updates from the poker client
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg := <-client.UpdatesCh:
+				p.Send(msg)
+			case err := <-client.ErrorsCh:
+				p.Send(errorMsg(err))
+			}
+		}
+	}()
+
 	if _, err := p.Run(); err != nil {
 		log.Fatalf("Error running UI: %v", err)
 	}

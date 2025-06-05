@@ -26,6 +26,9 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
+// Message types for UI communication
+type GameUpdateMsg *pokerrpc.GameUpdate
+
 // TableCreateConfig holds configuration for creating a new table
 type TableCreateConfig struct {
 	SmallBlind    int64
@@ -52,10 +55,14 @@ type PokerClient struct {
 	cfg          *PokerClientConfig
 	ntfns        *NotificationManager
 	log          slog.Logger
-	logger       *logging.LogBackend
+	logBackend   *logging.LogBackend
 	notifier     pokerrpc.LobbyService_StartNotificationStreamClient
 	UpdatesCh    chan tea.Msg
 	ErrorsCh     chan error
+
+	// Game streaming
+	gameStream   pokerrpc.PokerService_StartGameStreamClient
+	gameStreamMu sync.Mutex
 
 	// For reconnection handling
 	ctx          context.Context
@@ -66,6 +73,11 @@ type PokerClient struct {
 
 // NewPokerClient creates a new poker client with notification support
 func NewPokerClient(ctx context.Context, cfg *PokerClientConfig) (*PokerClient, error) {
+	// Validate that notifications are properly initialized
+	if cfg.Notifications == nil {
+		// initialize notification manager with NewNotificationManager
+		return nil, fmt.Errorf("notification manager cannot be nil - client startup aborted")
+	}
 
 	// Create the base client
 	client, err := newClient(ctx, cfg)
@@ -84,10 +96,17 @@ func NewPokerClient(ctx context.Context, cfg *PokerClientConfig) (*PokerClient, 
 		conn:         client.conn,
 		cfg:          cfg,
 		ntfns:        cfg.Notifications,
+		log:          client.log,
+		logBackend:   client.logBackend,
 		UpdatesCh:    make(chan tea.Msg, 100),
 		ErrorsCh:     make(chan error, 10),
 		ctx:          ctx,
 		cancelFunc:   cancel,
+	}
+
+	// Final validation that client is properly initialized
+	if err := pc.Validate(); err != nil {
+		return nil, fmt.Errorf("client validation failed: %v", err)
 	}
 
 	return pc, nil
@@ -112,11 +131,11 @@ func newClient(ctx context.Context, cfg *PokerClientConfig) (*PokerClient, error
 	log := brClient.LogBackend.Logger("PokerClient")
 
 	client := &PokerClient{
-		DataDir:  cfg.DataDir,
-		BRClient: brClient,
-		log:      log,
-		logger:   brClient.LogBackend,
-		cfg:      cfg,
+		DataDir:    cfg.DataDir,
+		BRClient:   brClient,
+		log:        log,
+		logBackend: brClient.LogBackend,
+		cfg:        cfg,
 	}
 
 	// Start the RPC client in a goroutine if brClient was created successfully
@@ -255,6 +274,11 @@ func (pc *PokerClient) initializeAccount(ctx context.Context) error {
 
 // StartNotifier starts the notification stream to receive server notifications
 func (pc *PokerClient) StartNotifier(ctx context.Context) error {
+	// Validate that client is properly initialized
+	if err := pc.Validate(); err != nil {
+		return fmt.Errorf("cannot start notifier: %v", err)
+	}
+
 	// Create notification stream
 	notificationStream, err := pc.LobbyService.StartNotificationStream(ctx, &pokerrpc.StartNotificationStreamRequest{
 		PlayerId: pc.ID,
@@ -286,6 +310,18 @@ func (pc *PokerClient) StartNotifier(ctx context.Context) error {
 
 					pc.ErrorsCh <- fmt.Errorf("notification stream error: %v", err)
 					return
+				}
+
+				// Check if notification is nil
+				if ntfn == nil {
+					pc.log.Debug("received nil notification")
+					continue
+				}
+
+				// Check if notification manager is initialized
+				if pc.ntfns == nil {
+					pc.log.Error("notification manager is nil, skipping notification handling")
+					continue
 				}
 
 				// Handle notifications based on NotificationType
@@ -321,6 +357,15 @@ func (pc *PokerClient) StartNotifier(ctx context.Context) error {
 						pc.Lock()
 						pc.BetAmt = ntfn.Amount
 						pc.Unlock()
+					}
+
+					// Check the message content to determine specific action type
+					if strings.Contains(ntfn.Message, "called") {
+						pc.ntfns.notifyPlayerCalled(ntfn.PlayerId, ntfn.Amount, ts)
+					} else if strings.Contains(ntfn.Message, "raised") {
+						pc.ntfns.notifyPlayerRaised(ntfn.PlayerId, ntfn.Amount, ts)
+					} else if strings.Contains(ntfn.Message, "checked") {
+						pc.ntfns.notifyPlayerChecked(ntfn.PlayerId, ts)
 					}
 
 				case pokerrpc.NotificationType_PLAYER_FOLDED:
@@ -367,6 +412,18 @@ func (pc *PokerClient) StartNotifier(ctx context.Context) error {
 				case pokerrpc.NotificationType_NEW_ROUND:
 					// Forward to UI
 					pc.UpdatesCh <- ntfn
+
+				case pokerrpc.NotificationType_SMALL_BLIND_POSTED:
+					if pc.ntfns != nil {
+						pc.ntfns.notifyBetMade(ntfn.PlayerId, ntfn.Amount, ts)
+					}
+					pc.log.Infof("Small blind posted: %d chips by %s", ntfn.Amount, ntfn.PlayerId)
+
+				case pokerrpc.NotificationType_BIG_BLIND_POSTED:
+					if pc.ntfns != nil {
+						pc.ntfns.notifyBetMade(ntfn.PlayerId, ntfn.Amount, ts)
+					}
+					pc.log.Infof("Big blind posted: %d chips by %s", ntfn.Amount, ntfn.PlayerId)
 
 				default:
 					pc.log.Debug("received unknown notification type", "type", ntfn.Type)
@@ -452,6 +509,12 @@ func (pc *PokerClient) JoinTable(ctx context.Context, tableID string) error {
 	pc.tableID = tableID
 	pc.Unlock()
 
+	// Start game stream for real-time updates
+	if err := pc.StartGameStream(ctx); err != nil {
+		pc.log.Warnf("Failed to start game stream: %v", err)
+		// Don't return error here since joining was successful
+	}
+
 	return nil
 }
 
@@ -482,7 +545,18 @@ func (pc *PokerClient) createTable(ctx context.Context,
 
 // CreateTable creates a new poker table using a configuration struct
 func (pc *PokerClient) CreateTable(ctx context.Context, config TableCreateConfig) (string, error) {
-	return pc.createTable(ctx, config.SmallBlind, config.BigBlind, config.MaxPlayers, config.MinPlayers, config.MinBalance, config.BuyIn, config.StartingChips)
+	tableID, err := pc.createTable(ctx, config.SmallBlind, config.BigBlind, config.MaxPlayers, config.MinPlayers, config.MinBalance, config.BuyIn, config.StartingChips)
+	if err != nil {
+		return "", err
+	}
+
+	// Start game stream for real-time updates
+	if err := pc.StartGameStream(ctx); err != nil {
+		pc.log.Warnf("Failed to start game stream: %v", err)
+		// Don't return error here since table creation was successful
+	}
+
+	return tableID, nil
 }
 
 // LeaveTable leaves the current table and clears the table ID
@@ -494,6 +568,9 @@ func (pc *PokerClient) LeaveTable(ctx context.Context) error {
 	if tableID == "" {
 		return fmt.Errorf("not currently in a table")
 	}
+
+	// Stop game stream first
+	pc.stopGameStream()
 
 	resp, err := pc.LobbyService.LeaveTable(ctx, &pokerrpc.LeaveTableRequest{
 		PlayerId: pc.ID,
@@ -623,12 +700,215 @@ func (pc *PokerClient) GetCurrentTableID() string {
 	return pc.tableID
 }
 
+// Action methods for poker gameplay
+
+// Fold folds the current hand
+func (pc *PokerClient) Fold(ctx context.Context) error {
+	currentTableID := pc.GetCurrentTableID()
+	if currentTableID == "" {
+		return fmt.Errorf("not at any table")
+	}
+
+	_, err := pc.PokerService.Fold(ctx, &pokerrpc.FoldRequest{
+		PlayerId: pc.ID,
+		TableId:  currentTableID,
+	})
+	return err
+}
+
+// Check checks (bet 0 when no one has bet)
+func (pc *PokerClient) Check(ctx context.Context) error {
+	currentTableID := pc.GetCurrentTableID()
+	if currentTableID == "" {
+		return fmt.Errorf("not at any table")
+	}
+
+	_, err := pc.PokerService.Check(ctx, &pokerrpc.CheckRequest{
+		PlayerId: pc.ID,
+		TableId:  currentTableID,
+	})
+	return err
+}
+
+// Call calls the current bet (matches the current bet amount)
+func (pc *PokerClient) Call(ctx context.Context, currentBet int64) error {
+	currentTableID := pc.GetCurrentTableID()
+	if currentTableID == "" {
+		return fmt.Errorf("not at any table")
+	}
+
+	_, err := pc.PokerService.MakeBet(ctx, &pokerrpc.MakeBetRequest{
+		PlayerId: pc.ID,
+		TableId:  currentTableID,
+		Amount:   currentBet,
+	})
+	return err
+}
+
+// Raise raises the bet to the specified amount
+func (pc *PokerClient) Raise(ctx context.Context, amount int64) error {
+	currentTableID := pc.GetCurrentTableID()
+	if currentTableID == "" {
+		return fmt.Errorf("not at any table")
+	}
+
+	_, err := pc.PokerService.MakeBet(ctx, &pokerrpc.MakeBetRequest{
+		PlayerId: pc.ID,
+		TableId:  currentTableID,
+		Amount:   amount,
+	})
+	return err
+}
+
+// Bet makes a bet of the specified amount
+func (pc *PokerClient) Bet(ctx context.Context, amount int64) error {
+	currentTableID := pc.GetCurrentTableID()
+	if currentTableID == "" {
+		return fmt.Errorf("not at any table")
+	}
+
+	_, err := pc.PokerService.MakeBet(ctx, &pokerrpc.MakeBetRequest{
+		PlayerId: pc.ID,
+		TableId:  currentTableID,
+		Amount:   amount,
+	})
+	return err
+}
+
 // Close closes the poker client and its connections
 func (pc *PokerClient) Close() error {
-	pc.cancelFunc()
+	if pc.cancelFunc != nil {
+		pc.cancelFunc()
+	}
+
+	// Stop game stream if active
+	pc.stopGameStream()
 
 	if pc.conn != nil {
 		return pc.conn.Close()
+	}
+	return nil
+}
+
+// StartGameStream starts receiving real-time game updates for the current table
+func (pc *PokerClient) StartGameStream(ctx context.Context) error {
+	pc.gameStreamMu.Lock()
+	defer pc.gameStreamMu.Unlock()
+
+	// Don't start if already streaming
+	if pc.gameStream != nil {
+		return nil
+	}
+
+	currentTableID := pc.GetCurrentTableID()
+	if currentTableID == "" {
+		return fmt.Errorf("not currently at a table")
+	}
+
+	// Start the game stream
+	stream, err := pc.PokerService.StartGameStream(ctx, &pokerrpc.StartGameStreamRequest{
+		PlayerId: pc.ID,
+		TableId:  currentTableID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to start game stream: %w", err)
+	}
+
+	pc.gameStream = stream
+
+	// Start goroutine to handle stream updates
+	go pc.handleGameStreamUpdates(ctx)
+
+	pc.log.Infof("Started game stream for table %s", currentTableID)
+	return nil
+}
+
+// stopGameStream stops the current game stream
+func (pc *PokerClient) stopGameStream() {
+	pc.gameStreamMu.Lock()
+	defer pc.gameStreamMu.Unlock()
+
+	if pc.gameStream != nil {
+		pc.gameStream.CloseSend()
+		pc.gameStream = nil
+		pc.log.Info("Stopped game stream")
+	}
+}
+
+// handleGameStreamUpdates processes incoming game updates from the stream
+func (pc *PokerClient) handleGameStreamUpdates(ctx context.Context) {
+	defer func() {
+		pc.gameStreamMu.Lock()
+		pc.gameStream = nil
+		pc.gameStreamMu.Unlock()
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			pc.gameStreamMu.Lock()
+			stream := pc.gameStream
+			pc.gameStreamMu.Unlock()
+
+			if stream == nil {
+				return
+			}
+
+			update, err := stream.Recv()
+			if err != nil {
+				if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "transport is closing") ||
+					strings.Contains(err.Error(), "connection is being forcefully terminated") {
+					pc.log.Info("Game stream closed")
+					return
+				}
+
+				pc.ErrorsCh <- fmt.Errorf("game stream error: %v", err)
+				return
+			}
+
+			// Convert to UI message type and send to updates channel
+			select {
+			case pc.UpdatesCh <- GameUpdateMsg(update):
+			case <-ctx.Done():
+				return
+			default:
+				// Channel is full, drop the update
+				pc.log.Warn("Updates channel full, dropping game update")
+			}
+		}
+	}
+}
+
+// Validate checks if the PokerClient is properly initialized and ready to use
+func (pc *PokerClient) Validate() error {
+	if pc == nil {
+		return fmt.Errorf("poker client is nil")
+	}
+	if pc.log == nil {
+		return fmt.Errorf("logger is not initialized")
+	}
+	if pc.logBackend == nil {
+		return fmt.Errorf("log backend is not initialized")
+	}
+	if pc.ntfns == nil {
+		return fmt.Errorf("notification manager is not initialized")
+	}
+	if pc.LobbyService == nil {
+		return fmt.Errorf("lobby service is not initialized")
+	}
+	if pc.PokerService == nil {
+		return fmt.Errorf("poker service is not initialized")
+	}
+	if pc.ID == "" {
+		return fmt.Errorf("client ID is not set")
+	}
+	if pc.UpdatesCh == nil {
+		return fmt.Errorf("updates channel is not initialized")
+	}
+	if pc.ErrorsCh == nil {
+		return fmt.Errorf("errors channel is not initialized")
 	}
 	return nil
 }

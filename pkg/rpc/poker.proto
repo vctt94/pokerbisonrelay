@@ -71,6 +71,8 @@ enum NotificationType {
   PLAYER_READY = 13;
   PLAYER_UNREADY = 14;
   ALL_PLAYERS_READY = 15;
+  SMALL_BLIND_POSTED = 16;
+  BIG_BLIND_POSTED = 17;
 }
 
 enum HandRank {
@@ -97,11 +99,11 @@ message GameUpdate {
   GamePhase phase = 2;
   repeated Player players = 3;
   repeated Card community_cards = 4;
-  int64 pot = 5;
-  int64 current_bet = 6;
+  int64 pot = 5;           // Total poker chips in the pot
+  int64 current_bet = 6;   // Current poker chips bet amount in this round
   string current_player = 7;
-  int64 min_raise = 8;
-  int64 max_raise = 9;
+  int64 min_raise = 8;     // Minimum poker chips raise amount
+  int64 max_raise = 9;     // Maximum poker chips raise amount
   bool game_started = 10;
   int32 players_required = 11;
   int32 players_joined = 12;
@@ -110,13 +112,13 @@ message GameUpdate {
 message MakeBetRequest {
   string player_id = 1;
   string table_id = 2;
-  int64 amount = 3;
+  int64 amount = 3;  // Poker chips amount to bet
 }
 
 message MakeBetResponse {
   bool success = 1;
   string message = 2;
-  int64 new_balance = 3;
+  int64 new_balance = 3; // Player's new DCR account balance (in atoms)
 }
 
 message FoldRequest {
@@ -176,13 +178,14 @@ message Winner {
 // Lobby Messages
 message CreateTableRequest {
   string player_id = 1;
-  int64 small_blind = 2;
-  int64 big_blind = 3;
+  int64 small_blind = 2;    // Poker chips amount for small blind
+  int64 big_blind = 3;      // Poker chips amount for big blind
   int32 max_players = 4;
   int32 min_players = 5;
-  int64 min_balance = 6;
-  int64 buy_in = 7;
-  int64 starting_chips = 8;
+  int64 min_balance = 6;    // Minimum DCR balance required (in atoms)
+  int64 buy_in = 7;         // DCR amount to join table (in atoms)
+  int64 starting_chips = 8; // Poker chips each player starts with
+  int32 time_bank_seconds = 9; // Player timeout in seconds (default: 30)
 }
 
 message CreateTableResponse {
@@ -220,13 +223,13 @@ message Table {
   string id = 1;
   string host_id = 2;
   repeated Player players = 3;
-  int64 small_blind = 4;
-  int64 big_blind = 5;
+  int64 small_blind = 4;     // Poker chips amount for small blind
+  int64 big_blind = 5;       // Poker chips amount for big blind
   int32 max_players = 6;
   int32 min_players = 7;
   int32 current_players = 8;
-  int64 min_balance = 9;
-  int64 buy_in = 10;
+  int64 min_balance = 9;     // Minimum DCR balance required (in atoms)
+  int64 buy_in = 10;         // DCR amount to join table (in atoms)
   GamePhase phase = 11;
   bool game_started = 12;
   bool all_players_ready = 13;
@@ -237,31 +240,31 @@ message GetBalanceRequest {
 }
 
 message GetBalanceResponse {
-  int64 balance = 1;
+  int64 balance = 1; // DCR account balance (in atoms)
 }
 
 message UpdateBalanceRequest {
   string player_id = 1;
-  int64 amount = 2;
+  int64 amount = 2;      // DCR amount to add/subtract (in atoms, can be negative)
   string description = 3;
 }
 
 message UpdateBalanceResponse {
-  int64 new_balance = 1;
+  int64 new_balance = 1; // New DCR account balance (in atoms)
   string message = 2;
 }
 
 message ProcessTipRequest {
   string from_player_id = 1;
   string to_player_id = 2;
-  int64 amount = 3;
+  int64 amount = 3;    // DCR amount to tip (in atoms)
   string message = 4;
 }
 
 message ProcessTipResponse {
   bool success = 1;
   string message = 2;
-  int64 new_balance = 3;
+  int64 new_balance = 3; // Recipient's new DCR account balance (in atoms)
 }
 
 message StartNotificationStreamRequest {
@@ -289,9 +292,9 @@ message Notification {
 message Player {
   string id = 1;
   string name = 2;
-  int64 balance = 3;
+  int64 balance = 3;      // Poker chips balance (in-game currency)
   repeated Card hand = 4;
-  int64 current_bet = 5;
+  int64 current_bet = 5;  // Current poker chips bet in this round
   bool folded = 6;
   bool is_turn = 7;
   bool is_all_in = 8;
