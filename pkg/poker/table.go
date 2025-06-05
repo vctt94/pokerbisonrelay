@@ -1,7 +1,6 @@
 package poker
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"sync"
@@ -24,8 +23,57 @@ type TableConfig struct {
 	TimeBank      time.Duration
 }
 
-// BlindPostedCallback is called when a blind is posted
-type BlindPostedCallback func(tableID, playerID string, amount int64, isSmallBlind bool)
+// NotificationSender is an interface for sending notifications
+type NotificationSender interface {
+	SendAllPlayersReady(tableID string)
+	SendGameStarted(tableID string)
+	SendPlayerReady(tableID, playerID string, ready bool)
+	SendBlindPosted(tableID, playerID string, amount int64, isSmallBlind bool)
+	BroadcastGameStateUpdate(tableID string)
+}
+
+// TableEventManager handles notifications and state updates for table events
+type TableEventManager struct {
+	notificationSender NotificationSender
+}
+
+// NewTableEventManager creates a new event manager
+func NewTableEventManager(notificationSender NotificationSender) *TableEventManager {
+	return &TableEventManager{
+		notificationSender: notificationSender,
+	}
+}
+
+// NotifyPlayerReady sends player ready notification
+func (tem *TableEventManager) NotifyPlayerReady(tableID, playerID string, ready bool) {
+	if tem.notificationSender != nil {
+		tem.notificationSender.SendPlayerReady(tableID, playerID, ready)
+		tem.notificationSender.BroadcastGameStateUpdate(tableID)
+	}
+}
+
+// NotifyAllPlayersReady sends all players ready notification
+func (tem *TableEventManager) NotifyAllPlayersReady(tableID string) {
+	if tem.notificationSender != nil {
+		tem.notificationSender.SendAllPlayersReady(tableID)
+		tem.notificationSender.BroadcastGameStateUpdate(tableID)
+	}
+}
+
+// NotifyGameStarted sends game started notification
+func (tem *TableEventManager) NotifyGameStarted(tableID string) {
+	if tem.notificationSender != nil {
+		tem.notificationSender.SendGameStarted(tableID)
+		tem.notificationSender.BroadcastGameStateUpdate(tableID)
+	}
+}
+
+// NotifyBlindPosted sends blind posted notification
+func (tem *TableEventManager) NotifyBlindPosted(tableID, playerID string, amount int64, isSmallBlind bool) {
+	if tem.notificationSender != nil {
+		tem.notificationSender.SendBlindPosted(tableID, playerID, amount, isSmallBlind)
+	}
+}
 
 // Table represents a poker table
 type Table struct {
@@ -39,8 +87,8 @@ type Table struct {
 	allPlayersReady bool
 	// Track actions in current betting round
 	actionsInRound int
-	// Callback for when blinds are posted
-	blindPostedCallback BlindPostedCallback
+	// Event manager for notifications
+	eventManager *TableEventManager
 }
 
 // NewTable creates a new poker table
@@ -51,14 +99,15 @@ func NewTable(cfg TableConfig) *Table {
 		createdAt:      time.Now(),
 		lastAction:     time.Now(),
 		actionsInRound: 0,
+		eventManager:   &TableEventManager{},
 	}
 }
 
-// SetBlindPostedCallback sets the callback for when blinds are posted
-func (t *Table) SetBlindPostedCallback(callback BlindPostedCallback) {
+// SetNotificationSender sets the notification sender for the table
+func (t *Table) SetNotificationSender(sender NotificationSender) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.blindPostedCallback = callback
+	t.eventManager.notificationSender = sender
 }
 
 // AddPlayer adds a player to the table with the specified starting chips
@@ -127,8 +176,22 @@ func (t *Table) CheckAllPlayersReady() bool {
 		}
 	}
 
+	// If all players are ready and this is the first time, send notification
+	wasReady := t.allPlayersReady
 	t.allPlayersReady = true
+
+	if !wasReady {
+		// Send ALL_PLAYERS_READY notification immediately
+		go t.eventManager.NotifyAllPlayersReady(t.config.ID)
+	}
+
 	return true
+}
+
+// TriggerPlayerReadyEvent sends a player ready notification immediately
+func (t *Table) TriggerPlayerReadyEvent(playerID string, ready bool) {
+	// Send notification immediately
+	go t.eventManager.NotifyPlayerReady(t.config.ID, playerID, ready)
 }
 
 // GetPlayer returns a player by ID
@@ -212,6 +275,10 @@ func (t *Table) StartGame() error {
 	t.actionsInRound = 0
 
 	t.lastAction = gameStartTime
+
+	// Send GAME_STARTED notification immediately
+	go t.eventManager.NotifyGameStarted(t.config.ID)
+
 	return nil
 }
 
@@ -357,95 +424,6 @@ func (t *Table) AreAllPlayersReady() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.allPlayersReady
-}
-
-// Subscribe creates a channel that sends regular game updates. The updates include
-// all player information, with cards visible only to the requesting player or during showdown.
-func (t *Table) Subscribe(ctx context.Context, requestingPlayerID string) chan *pokerrpc.GameUpdate {
-	updates := make(chan *pokerrpc.GameUpdate)
-	go func() {
-		defer close(updates)
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				t.mu.RLock()
-
-				players := make([]*pokerrpc.Player, 0, len(t.players))
-				for _, p := range t.players {
-					// Create player update with complete information from the unified player state
-					player := &pokerrpc.Player{
-						Id:         p.ID,
-						Balance:    p.Balance,
-						IsReady:    p.IsReady,
-						Folded:     p.HasFolded,
-						CurrentBet: p.HasBet,
-					}
-
-					// Only include hand cards if this is the requesting player's own data
-					// or if the game is in showdown phase
-					if (p.ID == requestingPlayerID) || (t.game != nil && t.game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN) {
-						player.Hand = make([]*pokerrpc.Card, len(p.Hand))
-						for i, card := range p.Hand {
-							player.Hand[i] = &pokerrpc.Card{
-								Suit:  card.GetSuit(),
-								Value: card.GetValue(),
-							}
-						}
-					}
-
-					players = append(players, player)
-				}
-
-				// Sort by player ID to ensure consistent ordering
-				// This prevents players from appearing to move up/down in the UI
-				sort.Slice(players, func(i, j int) bool {
-					return players[i].Id < players[j].Id
-				})
-
-				var currentPlayerID string
-				if t.gameStarted && t.game != nil {
-					currentPlayerID = t.GetCurrentPlayerID()
-				}
-
-				var communityCards []*pokerrpc.Card
-				if t.game != nil {
-					for _, c := range t.game.GetCommunityCards() {
-						communityCards = append(communityCards, &pokerrpc.Card{
-							Suit:  c.GetSuit(),
-							Value: c.GetValue(),
-						})
-					}
-				}
-
-				update := &pokerrpc.GameUpdate{
-					TableId:         t.config.ID,
-					Phase:           t.GetGamePhase(),
-					Players:         players,
-					CommunityCards:  communityCards,
-					Pot:             t.GetPot(),
-					CurrentBet:      t.GetCurrentBet(),
-					CurrentPlayer:   currentPlayerID,
-					GameStarted:     t.gameStarted,
-					PlayersRequired: int32(t.config.MinPlayers),
-					PlayersJoined:   int32(len(t.players)),
-				}
-
-				t.mu.RUnlock()
-
-				select {
-				case updates <- update:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-	}()
-	return updates
 }
 
 // GetGamePhase returns the current phase of the active game, or WAITING.
@@ -735,6 +713,40 @@ func (t *Table) HandleFold(playerID string) error {
 	return nil
 }
 
+// HandleCheck handles check actions using the unified player state system
+func (t *Table) HandleCheck(playerID string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	player := t.players[playerID]
+	if player == nil {
+		return fmt.Errorf("player not found")
+	}
+
+	// Check action - player can only check if their current bet equals the table's current bet
+	currentBet := t.game.currentBet
+	if player.HasBet < currentBet {
+		return fmt.Errorf("cannot check when there's a bet to call")
+	}
+
+	// Update player's last action time
+	player.LastAction = time.Now()
+
+	// Update game state
+	if t.gameStarted && t.game != nil {
+		// Increment actions counter for this betting round
+		t.actionsInRound++
+		// Advance to next player after check action
+		t.advanceToNextPlayerLocked()
+	}
+
+	// Possibly advance phase if betting round is complete
+	t.maybeAdvancePhase()
+
+	t.lastAction = time.Now()
+	return nil
+}
+
 // postBlinds posts blinds before setting phase to PRE_FLOP
 func (t *Table) postBlinds() error {
 	if t.game == nil {
@@ -767,10 +779,8 @@ func (t *Table) postBlinds() error {
 	smallBlindGamePlayer.HasBet = smallBlind
 	t.game.AddToPotForPlayer(smallBlindIdx, smallBlind)
 
-	// Call the callback for small blind if set
-	if t.blindPostedCallback != nil {
-		t.blindPostedCallback(t.config.ID, smallBlindGamePlayer.ID, smallBlind, true)
-	}
+	// Send small blind posted notification
+	go t.eventManager.NotifyBlindPosted(t.config.ID, smallBlindGamePlayer.ID, smallBlind, true)
 
 	// Big blind position
 	var bigBlindIdx int
@@ -795,10 +805,8 @@ func (t *Table) postBlinds() error {
 	// Set the current bet to the big blind amount
 	t.game.currentBet = bigBlind
 
-	// Call the callback for big blind if set
-	if t.blindPostedCallback != nil {
-		t.blindPostedCallback(t.config.ID, bigBlindGamePlayer.ID, bigBlind, false)
-	}
+	// Send big blind posted notification
+	go t.eventManager.NotifyBlindPosted(t.config.ID, bigBlindGamePlayer.ID, bigBlind, false)
 
 	return nil
 }

@@ -31,6 +31,10 @@ type Server struct {
 	// Notification streaming
 	notificationStreams map[string]*NotificationStream
 	notificationMu      sync.RWMutex
+
+	// Game streaming
+	gameStreams   map[string]map[string]pokerrpc.PokerService_StartGameStreamServer // tableID -> playerID -> stream
+	gameStreamsMu sync.RWMutex
 }
 
 // NewServer creates a new poker server
@@ -39,6 +43,7 @@ func NewServer(db Database) *Server {
 		db:                  db,
 		tables:              make(map[string]*poker.Table),
 		notificationStreams: make(map[string]*NotificationStream),
+		gameStreams:         make(map[string]map[string]pokerrpc.PokerService_StartGameStreamServer),
 	}
 }
 
@@ -89,8 +94,8 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 	// Create new table
 	table := poker.NewTable(cfg)
 
-	// Set the blind posted callback
-	table.SetBlindPostedCallback(s.sendBlindNotification)
+	// Set up event manager with notification sender
+	table.SetNotificationSender(s)
 
 	// Add creator as first player with starting chips (not DCR balance)
 	err = table.AddPlayer(req.PlayerId, startingChips)
@@ -313,11 +318,15 @@ func (s *Server) SetPlayerReady(ctx context.Context, req *pokerrpc.SetPlayerRead
 	}
 
 	player.IsReady = true
+
+	// Trigger player ready event so other players see the update immediately
+	table.TriggerPlayerReadyEvent(req.PlayerId, true)
+
 	allReady := table.CheckAllPlayersReady()
 
 	// If all players are ready and the game hasn't started yet, start the game
 	if allReady && !table.IsGameStarted() {
-		_ = table.StartGame() // Ignore error for now (handled internally)
+		_ = table.StartGame() // This will send GAME_STARTED notification immediately
 	}
 
 	return &pokerrpc.SetPlayerReadyResponse{
@@ -342,6 +351,9 @@ func (s *Server) SetPlayerUnready(ctx context.Context, req *pokerrpc.SetPlayerUn
 	}
 
 	player.IsReady = false
+
+	// Trigger player unready event so other players see the update immediately
+	table.TriggerPlayerReadyEvent(req.PlayerId, false)
 
 	return &pokerrpc.SetPlayerUnreadyResponse{
 		Success: true,
@@ -371,24 +383,116 @@ func (s *Server) GetPlayerCurrentTable(ctx context.Context, req *pokerrpc.GetPla
 // PokerService methods
 
 func (s *Server) StartGameStream(req *pokerrpc.StartGameStreamRequest, stream pokerrpc.PokerService_StartGameStreamServer) error {
-	s.mu.RLock()
-	table, ok := s.tables[req.TableId]
-	s.mu.RUnlock()
+	// Register the stream
+	s.gameStreamsMu.Lock()
+	if s.gameStreams[req.TableId] == nil {
+		s.gameStreams[req.TableId] = make(map[string]pokerrpc.PokerService_StartGameStreamServer)
+	}
+	s.gameStreams[req.TableId][req.PlayerId] = stream
+	s.gameStreamsMu.Unlock()
 
-	if !ok {
-		return status.Error(codes.NotFound, "table not found")
+	// Remove stream when done
+	defer func() {
+		s.gameStreamsMu.Lock()
+		if tableStreams, exists := s.gameStreams[req.TableId]; exists {
+			delete(tableStreams, req.PlayerId)
+			if len(tableStreams) == 0 {
+				delete(s.gameStreams, req.TableId)
+			}
+		}
+		s.gameStreamsMu.Unlock()
+	}()
+
+	// Send initial game state
+	gameState, err := s.buildGameState(req.TableId, req.PlayerId)
+	if err != nil {
+		return err
 	}
 
-	// Subscribe to game updates with the requesting player ID
-	updates := table.Subscribe(stream.Context(), req.PlayerId)
+	if err := stream.Send(gameState); err != nil {
+		return err
+	}
 
-	for update := range updates {
-		if err := stream.Send(update); err != nil {
-			return err
+	// Keep stream open and wait for context cancellation
+	// Game state updates will be sent via the notification system when events occur
+	ctx := stream.Context()
+	<-ctx.Done()
+	return nil
+}
+
+// buildGameState creates a GameUpdate for the requesting player
+func (s *Server) buildGameState(tableID, requestingPlayerID string) (*pokerrpc.GameUpdate, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	table, ok := s.tables[tableID]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "table not found")
+	}
+
+	// Process any player timeouts before building the state
+	table.HandleTimeouts()
+
+	game := table.GetGame()
+
+	// Use table players as the single source of truth
+	tablePlayers := table.GetPlayers()
+	players := make([]*pokerrpc.Player, 0, len(tablePlayers))
+	for _, p := range tablePlayers {
+		// Create player update with complete information
+		player := &pokerrpc.Player{
+			Id:         p.ID,
+			Balance:    p.Balance,
+			IsReady:    p.IsReady,
+			Folded:     p.HasFolded,
+			CurrentBet: p.HasBet,
+		}
+
+		// Only include hand cards if this is the requesting player's own data
+		// or if the game is in showdown phase
+		if (p.ID == requestingPlayerID) || (game != nil && game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN) {
+			player.Hand = make([]*pokerrpc.Card, len(p.Hand))
+			for i, card := range p.Hand {
+				player.Hand[i] = &pokerrpc.Card{
+					Suit:  card.GetSuit(),
+					Value: card.GetValue(),
+				}
+			}
+		}
+
+		players = append(players, player)
+	}
+
+	// Build community cards slice
+	communityCards := make([]*pokerrpc.Card, 0)
+	if game != nil {
+		for _, c := range game.GetCommunityCards() {
+			communityCards = append(communityCards, &pokerrpc.Card{
+				Suit:  c.GetSuit(),
+				Value: c.GetValue(),
+			})
 		}
 	}
 
-	return nil
+	var currentPlayerID string
+	if table.IsGameStarted() && game != nil {
+		currentPlayerID = table.GetCurrentPlayerID()
+	}
+
+	gameUpdate := &pokerrpc.GameUpdate{
+		TableId:         tableID,
+		Phase:           table.GetGamePhase(),
+		Players:         players,
+		CommunityCards:  communityCards,
+		Pot:             table.GetPot(),
+		CurrentBet:      table.GetCurrentBet(),
+		CurrentPlayer:   currentPlayerID,
+		GameStarted:     table.IsGameStarted(),
+		PlayersRequired: int32(table.GetMinPlayers()),
+		PlayersJoined:   int32(len(table.GetPlayers())),
+	}
+
+	return gameUpdate, nil
 }
 
 func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*pokerrpc.MakeBetResponse, error) {
@@ -682,109 +786,4 @@ func (s *Server) GetWinners(ctx context.Context, req *pokerrpc.GetWinnersRequest
 		Winners: winners,
 		Pot:     pot,
 	}, nil
-}
-
-// StartNotificationStream handles notification streaming
-func (s *Server) StartNotificationStream(req *pokerrpc.StartNotificationStreamRequest, stream pokerrpc.LobbyService_StartNotificationStreamServer) error {
-	playerID := req.PlayerId
-	if playerID == "" {
-		return status.Error(codes.InvalidArgument, "player ID is required")
-	}
-
-	// Create notification stream
-	notifStream := &NotificationStream{
-		playerID: playerID,
-		stream:   stream,
-		done:     make(chan struct{}),
-	}
-
-	// Register the stream
-	s.notificationMu.Lock()
-	s.notificationStreams[playerID] = notifStream
-	s.notificationMu.Unlock()
-
-	// Remove stream when done
-	defer func() {
-		s.notificationMu.Lock()
-		delete(s.notificationStreams, playerID)
-		s.notificationMu.Unlock()
-		close(notifStream.done)
-	}()
-
-	// Send an initial notification to ensure the stream is established
-	initialNotification := &pokerrpc.Notification{
-		Type:     pokerrpc.NotificationType_UNKNOWN,
-		Message:  "Connected to notification stream",
-		PlayerId: playerID,
-	}
-	if err := stream.Send(initialNotification); err != nil {
-		return err
-	}
-
-	// Keep the stream open and wait for context cancellation
-	ctx := stream.Context()
-	<-ctx.Done()
-	return nil
-}
-
-// broadcastNotification sends a notification to a specific player
-func (s *Server) sendNotificationToPlayer(playerID string, notification *pokerrpc.Notification) {
-	s.notificationMu.RLock()
-	notifStream, exists := s.notificationStreams[playerID]
-	s.notificationMu.RUnlock()
-
-	if !exists {
-		return // Player doesn't have an active notification stream
-	}
-
-	select {
-	case <-notifStream.done:
-		return // Stream is closed
-	default:
-		// Send notification, ignore errors as client might have disconnected
-		notifStream.stream.Send(notification)
-	}
-}
-
-// broadcastNotificationToTable sends a notification to all players at a table
-func (s *Server) broadcastNotificationToTable(tableID string, notification *pokerrpc.Notification) {
-	s.mu.RLock()
-	table, exists := s.tables[tableID]
-	s.mu.RUnlock()
-
-	if !exists {
-		return
-	}
-
-	players := table.GetPlayers()
-	for _, player := range players {
-		s.sendNotificationToPlayer(player.ID, notification)
-	}
-}
-
-// sendBlindNotification sends a notification when a blind is posted
-func (s *Server) sendBlindNotification(tableID, playerID string, amount int64, isSmallBlind bool) {
-	var notificationType pokerrpc.NotificationType
-	var message string
-
-	if isSmallBlind {
-		notificationType = pokerrpc.NotificationType_SMALL_BLIND_POSTED
-		message = fmt.Sprintf("Small blind posted: %d chips", amount)
-	} else {
-		notificationType = pokerrpc.NotificationType_BIG_BLIND_POSTED
-		message = fmt.Sprintf("Big blind posted: %d chips", amount)
-	}
-
-	notification := &pokerrpc.Notification{
-		Type:     notificationType,
-		Message:  message,
-		TableId:  tableID,
-		PlayerId: playerID,
-		Amount:   amount,
-	}
-
-	// Send notifications asynchronously to avoid deadlocks
-	go func() {
-		s.broadcastNotificationToTable(tableID, notification)
-	}()
 }

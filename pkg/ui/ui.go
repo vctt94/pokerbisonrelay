@@ -90,6 +90,9 @@ type PokerUI struct {
 
 	// New fields
 	myTurn bool
+
+	// current account balance
+	balance int64
 }
 
 // NewPokerUI creates a new poker UI model
@@ -119,7 +122,11 @@ func NewPokerUI(ctx context.Context, client *client.PokerClient) *PokerUI {
 	}
 
 	// Create component handlers
-	ui.dispatcher = NewCommandDispatcher(ctx, client.ID, client)
+	ui.dispatcher = &CommandDispatcher{
+		ctx:      ctx,
+		clientID: client.ID,
+		pc:       client,
+	}
 	ui.inputHandler = &InputHandler{ui: ui}
 	ui.renderer = &Renderer{ui: ui}
 
@@ -148,6 +155,22 @@ func (m *PokerUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		notif := (*pokerrpc.Notification)(msg)
 		m.message = notif.Message
 		m.err = nil
+		// Update cached balance if this is a balance notification
+		if notif.Type == pokerrpc.NotificationType_BALANCE_UPDATED {
+			m.balance = notif.NewBalance
+		}
+		// Process the notification to handle state transitions
+		cmd = m.handleNotification(notif)
+
+	case *pokerrpc.Notification:
+		// Handle direct notification messages from client
+		notif := msg
+		m.message = notif.Message
+		m.err = nil
+		// Update cached balance if this is a balance notification
+		if notif.Type == pokerrpc.NotificationType_BALANCE_UPDATED {
+			m.balance = notif.NewBalance
+		}
 		// Process the notification to handle state transitions
 		cmd = m.handleNotification(notif)
 
@@ -207,7 +230,8 @@ func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cm
 	switch notification.Type {
 	case pokerrpc.NotificationType_BALANCE_UPDATED:
 		m.message = fmt.Sprintf("Balance: %d", notification.NewBalance)
-		return m.dispatcher.getBalanceCmd()
+		m.balance = notification.NewBalance
+		return nil
 
 	case pokerrpc.NotificationType_PLAYER_JOINED:
 		if notification.PlayerId == m.clientID {
@@ -274,7 +298,7 @@ func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cm
 		m.state = stateActiveGame
 		m.message = "Game started!"
 		m.updateMenuOptionsForGameState()
-		return m.dispatcher.getBalanceCmd()
+		return nil
 
 	case pokerrpc.NotificationType_GAME_ENDED:
 		m.state = stateGameLobby

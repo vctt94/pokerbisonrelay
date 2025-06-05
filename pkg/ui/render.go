@@ -19,9 +19,9 @@ func (r *Renderer) RenderMainMenu() string {
 	s += TitleStyle.Render("🃏 Poker Client - Main Menu 🃏") + "\n\n"
 	s += fmt.Sprintf("Client ID: %s\n", r.ui.clientID)
 
-	// Get current balance from poker client and display in DCR
-	if balance, err := r.ui.pc.GetBalance(r.ui.ctx); err == nil {
-		s += fmt.Sprintf("💰 Account Balance: %.8f DCR\n", float64(balance)/1e8)
+	// Display cached balance in DCR
+	if r.ui.balance > 0 {
+		s += fmt.Sprintf("💰 Account Balance: %.8f DCR\n", float64(r.ui.balance)/1e8)
 	} else {
 		s += "💰 Account Balance: (loading...)\n"
 	}
@@ -154,9 +154,9 @@ func (r *Renderer) RenderGameLobby() string {
 	var s string
 	s += TitleStyle.Render(fmt.Sprintf("🎰 Game Lobby - Table %s 🎰", r.ui.pc.GetCurrentTableID())) + "\n\n"
 
-	// Get current balance from poker client and display in DCR
-	if balance, err := r.ui.pc.GetBalance(r.ui.ctx); err == nil {
-		s += fmt.Sprintf("💰 Account Balance: %.8f DCR\n\n", float64(balance)/1e8)
+	// Display cached balance in DCR
+	if r.ui.balance > 0 {
+		s += fmt.Sprintf("💰 Account Balance: %.8f DCR\n\n", float64(r.ui.balance)/1e8)
 	} else {
 		s += "💰 Account Balance: (loading...)\n\n"
 	}

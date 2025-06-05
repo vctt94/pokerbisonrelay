@@ -23,15 +23,6 @@ type CommandDispatcher struct {
 	pc       *client.PokerClient
 }
 
-// NewCommandDispatcher creates a new command dispatcher for the UI
-func NewCommandDispatcher(ctx context.Context, clientID string, pc *client.PokerClient) *CommandDispatcher {
-	return &CommandDispatcher{
-		ctx:      ctx,
-		clientID: clientID,
-		pc:       pc,
-	}
-}
-
 // Command methods on the dispatcher
 
 func (d *CommandDispatcher) getBalanceCmd() tea.Cmd {
