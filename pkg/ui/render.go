@@ -16,26 +16,26 @@ type Renderer struct {
 // RenderMainMenu renders the main menu screen
 func (r *Renderer) RenderMainMenu() string {
 	var s string
-	s += TitleStyle.Render("🃏 Poker Client - Main Menu 🃏") + "\n\n"
+	s += TitleStyle.Render("Poker Client - Main Menu") + "\n\n"
 	s += fmt.Sprintf("Client ID: %s\n", r.ui.clientID)
 
 	// Display cached balance in DCR
 	if r.ui.balance > 0 {
-		s += fmt.Sprintf("💰 Account Balance: %.8f DCR\n", float64(r.ui.balance)/1e8)
+		s += fmt.Sprintf("Account Balance: %.8f DCR\n", float64(r.ui.balance)/1e8)
 	} else {
-		s += "💰 Account Balance: (loading...)\n"
+		s += "Account Balance: (loading...)\n"
 	}
 
 	// Show current table info if player is at a table
 	currentTableID := r.ui.pc.GetCurrentTableID()
 	if currentTableID != "" {
-		s += fmt.Sprintf("🎲 Current Table: %s (Phase: %s)\n", currentTableID, r.ui.gamePhase.String())
+		s += fmt.Sprintf("Current Table: %s (Phase: %s)\n", currentTableID, r.ui.gamePhase.String())
 	}
 	s += "\n"
 
 	for i, option := range r.ui.menuOptions {
 		if i == r.ui.selectedItem {
-			s += FocusedStyle.Render(fmt.Sprintf("▶ %s", option)) + "\n"
+			s += FocusedStyle.Render(fmt.Sprintf("> %s", option)) + "\n"
 		} else {
 			s += BlurredStyle.Render(fmt.Sprintf("  %s", option)) + "\n"
 		}
@@ -47,18 +47,18 @@ func (r *Renderer) RenderMainMenu() string {
 // RenderTableList renders the table list screen with compact styling to show more tables
 func (r *Renderer) RenderTableList() string {
 	var s string
-	s += TitleStyle.Render("🎯 Available Tables 🎯") + "\n\n"
+	s += TitleStyle.Render("Available Tables") + "\n\n"
 
 	if len(r.ui.tables) == 0 {
 		s += BlurredStyle.Render("No tables available.") + "\n"
 	} else {
 		// Add header for better organization
-		s += TitleStyle.Render("📋 SELECT A TABLE TO JOIN") + "\n\n"
+		s += TitleStyle.Render("SELECT A TABLE TO JOIN") + "\n\n"
 
 		for i, table := range r.ui.tables {
 			isSelected := i == r.ui.selectedTable
 
-			// Create more compact table info with icons
+			// Create more compact table info
 			tableID := table.Id
 			if len(tableID) > 20 {
 				tableID = tableID[:17] + "..."
@@ -67,17 +67,17 @@ func (r *Renderer) RenderTableList() string {
 			// Add status indicators for better information
 			var status string
 			if table.GameStarted {
-				status = "🎮" // Game in progress
+				status = "PLAYING"
 			} else if table.AllPlayersReady {
-				status = "⚡" // All ready, about to start
+				status = "STARTING"
 			} else if table.CurrentPlayers >= table.MinPlayers {
-				status = "⏳" // Enough players, waiting for ready
+				status = "WAITING"
 			} else {
-				status = "📍" // Waiting for more players
+				status = "OPEN"
 			}
 
 			// Compact single-line format with enhanced information
-			tableInfo := fmt.Sprintf("%s %s | 👥 %d/%d | 💸 %d/%d",
+			tableInfo := fmt.Sprintf("%s | %s | Players: %d/%d | Blinds: %d/%d",
 				status,
 				tableID,
 				table.CurrentPlayers,
@@ -87,7 +87,7 @@ func (r *Renderer) RenderTableList() string {
 
 			// Add selection indicator and styling
 			if isSelected {
-				s += FocusedStyle.Render("▶ "+tableInfo) + "\n"
+				s += FocusedStyle.Render("> "+tableInfo) + "\n"
 			} else {
 				s += BlurredStyle.Render("  "+tableInfo) + "\n"
 			}
@@ -106,18 +106,18 @@ func (r *Renderer) RenderTableList() string {
 // RenderCreateTable renders the create table form screen
 func (r *Renderer) RenderCreateTable() string {
 	var s string
-	s += TitleStyle.Render("🆕 Create New Table 🆕") + "\n\n"
+	s += TitleStyle.Render("Create New Table") + "\n\n"
 
 	fields := []struct {
 		label string
 		value string
 	}{
-		{"💸 Small Blind", r.ui.smallBlind},
-		{"💰 Big Blind", r.ui.bigBlind},
-		{"👥 Required Players", r.ui.requiredPlayers},
-		{"🎫 Buy In", r.ui.buyIn},
-		{"💵 Min Balance", r.ui.minBalance},
-		{"🎰 Starting Chips", r.ui.startingChips},
+		{"Small Blind", r.ui.smallBlind},
+		{"Big Blind", r.ui.bigBlind},
+		{"Required Players", r.ui.requiredPlayers},
+		{"Buy In", r.ui.buyIn},
+		{"Min Balance", r.ui.minBalance},
+		{"Starting Chips", r.ui.startingChips},
 	}
 
 	for i, field := range fields {
@@ -128,7 +128,7 @@ func (r *Renderer) RenderCreateTable() string {
 		s += style.Render(fmt.Sprintf("%s %s: %s",
 			func() string {
 				if i == r.ui.selectedFormField {
-					return "▶"
+					return ">"
 				}
 				return " "
 			}(),
@@ -143,8 +143,8 @@ func (r *Renderer) RenderCreateTable() string {
 // RenderJoinTable renders the join table screen
 func (r *Renderer) RenderJoinTable() string {
 	var s string
-	s += TitleStyle.Render("🎯 Join Table 🎯") + "\n\n"
-	s += FocusedStyle.Render(fmt.Sprintf("🎲 Table ID: %s", r.ui.tableIdInput)) + "\n\n"
+	s += TitleStyle.Render("Join Table") + "\n\n"
+	s += FocusedStyle.Render(fmt.Sprintf("Table ID: %s", r.ui.tableIdInput)) + "\n\n"
 	s += HelpStyle.Render("Enter table ID and press Enter to join")
 	return s
 }
@@ -152,32 +152,35 @@ func (r *Renderer) RenderJoinTable() string {
 // RenderGameLobby renders the game lobby screen
 func (r *Renderer) RenderGameLobby() string {
 	var s string
-	s += TitleStyle.Render(fmt.Sprintf("🎰 Game Lobby - Table %s 🎰", r.ui.pc.GetCurrentTableID())) + "\n\n"
+	s += TitleStyle.Render(fmt.Sprintf("Game Lobby - Table %s", r.ui.pc.GetCurrentTableID())) + "\n\n"
+
+	// Show client ID
+	s += fmt.Sprintf("Client ID: %s\n", r.ui.clientID)
 
 	// Display cached balance in DCR
 	if r.ui.balance > 0 {
-		s += fmt.Sprintf("💰 Account Balance: %.8f DCR\n\n", float64(r.ui.balance)/1e8)
+		s += fmt.Sprintf("Account Balance: %.8f DCR\n\n", float64(r.ui.balance)/1e8)
 	} else {
-		s += "💰 Account Balance: (loading...)\n\n"
+		s += "Account Balance: (loading...)\n\n"
 	}
 
 	// Show table information if we have game update data
 	if len(r.ui.players) > 0 {
-		s += "📊 Table Status:\n"
-		s += fmt.Sprintf("👥 Players: %d/%d (required to start)\n", r.ui.playersJoined, r.ui.playersRequired)
-		s += fmt.Sprintf("🎯 Game Phase: %s\n", r.ui.gamePhase.String())
+		s += "Table Status:\n"
+		s += fmt.Sprintf("Players: %d/%d (required to start)\n", r.ui.playersJoined, r.ui.playersRequired)
+		s += fmt.Sprintf("Game Phase: %s\n", r.ui.gamePhase.String())
 		if r.ui.pot > 0 {
-			s += fmt.Sprintf("💰 Pot: %d chips\n", r.ui.pot)
+			s += fmt.Sprintf("Pot: %d chips\n", r.ui.pot)
 		}
 		s += "\n"
 
-		s += "👤 Players at table:\n"
+		s += "Players at table:\n"
 		for _, player := range r.ui.players {
 			readyStatus := ""
 			if player.IsReady {
-				readyStatus = " ✅ Ready"
+				readyStatus = " ✅"
 			} else {
-				readyStatus = " ⏳ Not Ready"
+				readyStatus = " ⏳"
 			}
 
 			currentPlayerIndicator := ""
@@ -185,7 +188,7 @@ func (r *Renderer) RenderGameLobby() string {
 				currentPlayerIndicator = " (You)"
 			}
 
-			s += fmt.Sprintf("  %s: 🎮 %d chips%s%s\n",
+			s += fmt.Sprintf("  %s: %d chips%s%s\n",
 				player.Id, player.Balance, readyStatus, currentPlayerIndicator)
 		}
 		s += "\n"
@@ -195,7 +198,7 @@ func (r *Renderer) RenderGameLobby() string {
 
 	for i, option := range r.ui.menuOptions {
 		if i == r.ui.selectedItem {
-			s += FocusedStyle.Render(fmt.Sprintf("▶ %s", option)) + "\n"
+			s += FocusedStyle.Render(fmt.Sprintf("> %s", option)) + "\n"
 		} else {
 			s += BlurredStyle.Render(fmt.Sprintf("  %s", option)) + "\n"
 		}
@@ -207,14 +210,23 @@ func (r *Renderer) RenderGameLobby() string {
 // RenderBetInput renders the bet input screen
 func (r *Renderer) RenderBetInput() string {
 	var s string
-	s += TitleStyle.Render("💸 Enter Bet Amount 💸") + "\n\n"
-	s += fmt.Sprintf("Current bet to call: %d\n", r.ui.currentBet)
+	s += TitleStyle.Render("Enter Bet Amount") + "\n\n"
 
-	minBet := r.ui.currentBet + 10
-	if minBet < 10 {
-		minBet = 10
+	// Show client ID
+	s += fmt.Sprintf("Client ID: %s\n", r.ui.clientID)
+
+	bigBlind := r.ui.GetCurrentTableBigBlind()
+	currentBet := r.ui.currentBet
+
+	if currentBet == 0 {
+		s += "No current bet\n"
+		s += fmt.Sprintf("Minimum bet (big blind): %d\n\n", bigBlind)
+	} else {
+		s += fmt.Sprintf("Current bet to call: %d\n", currentBet)
+		s += fmt.Sprintf("Minimum to call: %d\n", currentBet)
+		s += fmt.Sprintf("Minimum to raise: %d\n\n", currentBet+bigBlind)
 	}
-	s += fmt.Sprintf("Minimum bet: %d\n\n", minBet)
+
 	s += FocusedStyle.Render(fmt.Sprintf("Bet Amount: %s", r.ui.betAmount)) + "\n\n"
 	s += HelpStyle.Render("Type amount and press Enter to bet, or 'q' to cancel")
 	return s
@@ -224,8 +236,11 @@ func (r *Renderer) RenderBetInput() string {
 func (r *Renderer) RenderActiveGame() string {
 	var s string
 
-	// Game title
-	s += TitleStyle.Render(fmt.Sprintf("🃏 Table %s 🃏", r.ui.pc.GetCurrentTableID())) + "\n"
+	// Game title with icon
+	s += TitleStyle.Render(fmt.Sprintf("🎰 Table %s", r.ui.pc.GetCurrentTableID())) + "\n"
+
+	// Show client ID
+	s += fmt.Sprintf("Client ID: %s\n", r.ui.clientID)
 
 	// COMMUNITY CARDS
 	s += r.renderCommunityCardsSection() + "\n"
@@ -243,16 +258,16 @@ func (r *Renderer) RenderActiveGame() string {
 	} else {
 		// Show appropriate options when not player's turn
 		if r.ui.gamePhase == pokerrpc.GamePhase_SHOWDOWN {
-			s += HelpStyle.Render("🏆 Showdown") + " | "
+			s += HelpStyle.Render("🏆 SHOWDOWN") + " | "
 		} else if r.ui.currentPlayerID == "" {
-			s += HelpStyle.Render("⏳ Starting") + " | "
+			s += HelpStyle.Render("⏳ STARTING") + " | "
 		} else if !isPlayerTurn(r.ui.currentPlayerID, r.ui.clientID) {
 			// Find the current player's name for display
 			currentPlayerName := r.ui.currentPlayerID
 			if len(currentPlayerName) > 8 {
 				currentPlayerName = currentPlayerName[:8] + "..."
 			}
-			s += HelpStyle.Render(fmt.Sprintf("⏰ %s acting", currentPlayerName)) + " | "
+			s += HelpStyle.Render(fmt.Sprintf("⏰ Waiting for %s", currentPlayerName)) + " | "
 		}
 
 		// Always show leave table option when not actively playing
@@ -267,9 +282,9 @@ func (r *Renderer) RenderActiveGame() string {
 func (r *Renderer) renderCommunityCardsSection() string {
 	var s string
 
-	// Prominent header
+	// Clean header with subtle icon
 	s += lipgloss.NewStyle().
-		Foreground(lipgloss.Color("46")).
+		Foreground(lipgloss.Color("255")).
 		Bold(true).
 		Background(lipgloss.Color("22")).
 		Padding(0, 2).
@@ -282,7 +297,7 @@ func (r *Renderer) renderCommunityCardsSection() string {
 	case pokerrpc.GamePhase_WAITING, pokerrpc.GamePhase_PRE_FLOP:
 		// Show placeholders
 		for i := 0; i < 5; i++ {
-			cardElements = append(cardElements, CardStyle.Render("🂠"))
+			cardElements = append(cardElements, CardStyle.Render("[  ]"))
 		}
 	default:
 		// Add dealt community cards
@@ -299,7 +314,7 @@ func (r *Renderer) renderCommunityCardsSection() string {
 
 		// Add placeholders for remaining cards
 		for i := len(r.ui.communityCards); i < 5; i++ {
-			cardElements = append(cardElements, CardStyle.Render("🂠"))
+			cardElements = append(cardElements, CardStyle.Render("[  ]"))
 		}
 	}
 
@@ -309,27 +324,23 @@ func (r *Renderer) renderCommunityCardsSection() string {
 		Align(lipgloss.Center).
 		Render(cardsDisplay) + "\n"
 
-	// Phase indicator
+	// Phase indicator - cleaner with minimal icons
 	var phaseText string
 	switch r.ui.gamePhase {
 	case pokerrpc.GamePhase_WAITING:
-		phaseText = "⏳ Waiting"
+		phaseText = "⏳ WAITING FOR PLAYERS"
 	case pokerrpc.GamePhase_PRE_FLOP:
 		phaseText = "🎯 PRE-FLOP"
 	case pokerrpc.GamePhase_FLOP:
-		phaseText = "🔥 FLOP"
+		phaseText = "FLOP"
 	case pokerrpc.GamePhase_TURN:
-		phaseText = "🎲 TURN"
+		phaseText = "TURN"
 	case pokerrpc.GamePhase_RIVER:
-		phaseText = "🌊 RIVER"
+		phaseText = "RIVER"
 	case pokerrpc.GamePhase_SHOWDOWN:
 		phaseText = "🏆 SHOWDOWN"
 	default:
-		phaseText = fmt.Sprintf("🎯 %s", r.ui.gamePhase.String())
-	}
-
-	if isPlayerTurn(r.ui.currentPlayerID, r.ui.clientID) {
-		phaseText += " ← YOUR TURN"
+		phaseText = r.ui.gamePhase.String()
 	}
 
 	s += lipgloss.NewStyle().
@@ -345,13 +356,13 @@ func (r *Renderer) renderCommunityCardsSection() string {
 func (r *Renderer) renderYourCardsAndGameInfo() string {
 	var s string
 
-	// Your cards header - compact
+	// Your cards header - clean and prominent with subtle icon
 	s += lipgloss.NewStyle().
-		Foreground(lipgloss.Color("39")).
+		Foreground(lipgloss.Color("255")).
 		Bold(true).
 		Background(lipgloss.Color("17")).
 		Padding(0, 2).
-		Render("🂠 YOUR CARDS") + "\n"
+		Render("🂠 YOUR HAND") + "\n"
 
 	var cardElements []string
 
@@ -377,10 +388,10 @@ func (r *Renderer) renderYourCardsAndGameInfo() string {
 				cardElements = append(cardElements, styledCard)
 			}
 		} else {
-			cardElements = []string{CardStyle.Render("🂠"), CardStyle.Render("🂠")}
+			cardElements = []string{CardStyle.Render("[  ]"), CardStyle.Render("[  ]")}
 		}
 	} else {
-		cardElements = []string{CardStyle.Render("🂠"), CardStyle.Render("🂠")}
+		cardElements = []string{CardStyle.Render("[  ]"), CardStyle.Render("[  ]")}
 	}
 
 	cardsDisplay := strings.Join(cardElements, " ")
@@ -388,16 +399,15 @@ func (r *Renderer) renderYourCardsAndGameInfo() string {
 		Align(lipgloss.Center).
 		Render(cardsDisplay)
 
-	// Game info on same line after cards - only showing POT and bet info, no account balance
-	potDisplay := fmt.Sprintf("POT: %d chips", r.ui.pot)
+	// Game info - cleaner format with chip icon
+	potDisplay := fmt.Sprintf("💰 Pot: %d", r.ui.pot)
 	if r.ui.currentBet > 0 {
-		potDisplay += fmt.Sprintf(" | Bet: %d chips", r.ui.currentBet)
+		potDisplay += fmt.Sprintf(" | Current Bet: %d", r.ui.currentBet)
 	}
 
-	gameInfo := fmt.Sprintf("💰 %s", potDisplay)
 	s += " | " + lipgloss.NewStyle().
 		Foreground(lipgloss.Color("140")).
-		Render(gameInfo)
+		Render(potDisplay)
 
 	return s
 }
@@ -437,7 +447,7 @@ func (r *Renderer) renderPlayersAroundTable() string {
 	return result
 }
 
-// formatPlayerInfo creates a formatted string for player information
+// formatPlayerInfo creates a clean formatted string for player information
 func (r *Renderer) formatPlayerInfo(player *pokerrpc.Player) string {
 	var info []string
 
@@ -446,54 +456,54 @@ func (r *Renderer) formatPlayerInfo(player *pokerrpc.Player) string {
 	if len(playerName) > 12 {
 		playerName = playerName[:12] + "..."
 	}
-	info = append(info, fmt.Sprintf("👤 %s", playerName))
+	info = append(info, playerName)
 
 	// Game chips balance
-	info = append(info, fmt.Sprintf("🎮 Chips: %d", player.Balance))
+	info = append(info, fmt.Sprintf("Chips: %d", player.Balance))
 
 	// Current bet
 	if player.CurrentBet > 0 {
-		info = append(info, fmt.Sprintf("🎯 Bet: %d chips", player.CurrentBet))
+		info = append(info, fmt.Sprintf("Bet: %d", player.CurrentBet))
 	}
 
-	// Status indicators - improved logic
+	// Status indicators - clean and clear
 	var status []string
 
 	// Check if player is you
 	if player.Id == r.ui.clientID {
-		status = append(status, "🔵 You")
+		status = append(status, "YOU")
 	}
 
 	// Check if it's their turn (and they haven't folded)
 	if player.Id == r.ui.currentPlayerID && !player.Folded {
-		status = append(status, "⏰ Turn")
+		status = append(status, "ACTING")
 	}
 
 	// Only show folded if player has actually folded
 	if player.Folded {
-		status = append(status, "❌ Folded")
+		status = append(status, "FOLDED")
 	} else {
 		// Player is active in the game
 		if r.ui.gamePhase != pokerrpc.GamePhase_WAITING {
-			status = append(status, "✅ Active")
+			status = append(status, "ACTIVE")
 		} else {
 			// In waiting phase, show ready status
 			if player.IsReady {
-				status = append(status, "✅ Ready")
+				status = append(status, "READY")
 			} else {
-				status = append(status, "⏳ Not Ready")
+				status = append(status, "NOT READY")
 			}
 		}
 	}
 
 	if len(status) > 0 {
-		info = append(info, strings.Join(status, " "))
+		info = append(info, fmt.Sprintf("[%s]", strings.Join(status, ", ")))
 	}
 
-	return strings.Join(info, "\n")
+	return strings.Join(info, " | ")
 }
 
-// renderActionButtons creates interactive action buttons
+// renderActionButtons creates clear action buttons with better UX
 func (r *Renderer) renderActionButtons() string {
 	// Check if it's player's turn and they're in an active game phase
 	if !isPlayerTurn(r.ui.currentPlayerID, r.ui.clientID) {
@@ -510,35 +520,34 @@ func (r *Renderer) renderActionButtons() string {
 	}
 
 	var result string
-	result += TitleStyle.Render("🎯 YOUR TURN - Choose your action 🎯") + "\n"
 
-	// Use the actual menuOptions from the UI state instead of hardcoded actions
+	// Very clear turn indicator with icon
+	result += lipgloss.NewStyle().
+		Foreground(lipgloss.Color("255")).
+		Bold(true).
+		Background(lipgloss.Color("196")).
+		Padding(0, 2).
+		Render("⚡ YOUR TURN - CHOOSE ACTION") + "\n\n"
+
+	// Clean action buttons with minimal icons
 	for i, option := range r.ui.menuOptions {
-		var icon string
-		var desc string
+		var buttonText string
 
 		switch option {
 		case optionCheck:
-			icon = "✅"
-			desc = "Check"
+			buttonText = "✅ Check"
 		case optionBet:
-			icon = "💸"
-			desc = "Bet/Raise"
+			buttonText = "💸 Bet/Raise"
 		case optionFold:
-			icon = "❌"
-			desc = "Fold"
+			buttonText = "❌ Fold"
 		case optionLeaveTable:
-			icon = "🚪"
-			desc = "Leave Table"
+			buttonText = "🚪 Leave Table"
 		default:
-			icon = "🔧"
-			desc = string(option)
+			buttonText = string(option)
 		}
 
-		buttonText := fmt.Sprintf("%s %s", icon, desc)
-
 		if i == r.ui.selectedItem {
-			result += FocusedStyle.Render(fmt.Sprintf("▶ %s", buttonText)) + "\n"
+			result += FocusedStyle.Render(fmt.Sprintf("> %s", buttonText)) + "\n"
 		} else {
 			result += BlurredStyle.Render(fmt.Sprintf("  %s", buttonText)) + "\n"
 		}
@@ -547,10 +556,10 @@ func (r *Renderer) renderActionButtons() string {
 	return result
 }
 
-// formatCard creates a visual representation of a playing card
+// formatCard creates a clean visual representation of a playing card
 func (r *Renderer) formatCard(card *pokerrpc.Card) string {
 	if card == nil {
-		return "🂠"
+		return "[  ]"
 	}
 
 	// Convert suit to symbol
@@ -562,7 +571,7 @@ func (r *Renderer) formatCard(card *pokerrpc.Card) string {
 		value = "10"
 	}
 
-	return fmt.Sprintf("%s%s", value, suitSymbol)
+	return fmt.Sprintf("[%s%s]", value, suitSymbol)
 }
 
 // getSuitSymbol returns the appropriate symbol for a suit
@@ -587,57 +596,64 @@ func isRedSuit(suit string) bool {
 	return suit == "♥" || suit == "♦"
 }
 
-// renderPlayersCompact creates a compact single-line representation of players for when action buttons are shown
+// renderPlayersCompact creates a clear representation of players with better turn indication
 func (r *Renderer) renderPlayersCompact() string {
 	if len(r.ui.players) == 0 {
-		return HelpStyle.Render("👥 No players")
+		return HelpStyle.Render("No players")
 	}
 
 	var result strings.Builder
-	result.WriteString("👥 ")
+	result.WriteString(lipgloss.NewStyle().
+		Foreground(lipgloss.Color("255")).
+		Bold(true).
+		Render("👥 PLAYERS") + "\n")
 
-	var playerInfos []string
+	var playerLines []string
 	for _, player := range r.ui.players {
-		// Player name (truncated more)
+		// Player name (truncated reasonably)
 		playerName := player.Id
-		if len(playerName) > 6 {
-			playerName = playerName[:6] + "…"
+		if len(playerName) > 12 {
+			playerName = playerName[:12] + "..."
 		}
 
-		// Create status indicators with colors
-		var statusColor lipgloss.Color
-		var statusIcon string
+		// Determine player status and styling
+		var line string
+		var style lipgloss.Style
 
 		if player.Id == r.ui.clientID {
-			statusColor = lipgloss.Color("39") // Blue for you
-			statusIcon = "🔵"
+			// This is YOU - make it very clear
+			style = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("39")).
+				Bold(true).
+				Background(lipgloss.Color("17"))
+			line = fmt.Sprintf(" 🔵 YOU (%s) - Chips: %d", playerName, player.Balance)
 		} else if player.Id == r.ui.currentPlayerID && !player.Folded {
-			statusColor = lipgloss.Color("46") // Green for current turn
-			statusIcon = "⏰"
+			// Current player's turn - highlight clearly
+			style = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("46")).
+				Bold(true).
+				Background(lipgloss.Color("22"))
+			line = fmt.Sprintf(" ⏰ ACTING: %s - Chips: %d", playerName, player.Balance)
 		} else if player.Folded {
-			statusColor = lipgloss.Color("241") // Gray for folded
-			statusIcon = "❌"
+			// Folded player - muted
+			style = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("241"))
+			line = fmt.Sprintf(" ❌ %s - FOLDED", playerName)
 		} else {
-			statusColor = lipgloss.Color("255") // White for active
-			statusIcon = "✅"
+			// Regular active player
+			style = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("255"))
+			line = fmt.Sprintf(" %s - Chips: %d", playerName, player.Balance)
 		}
-
-		// Format player info with styling
-		playerInfo := fmt.Sprintf("%s%s(🎮%d)", statusIcon, playerName, player.Balance)
 
 		// Add current bet if they have one
-		if player.CurrentBet > 0 {
-			playerInfo += fmt.Sprintf("(🎯%d)", player.CurrentBet)
+		if player.CurrentBet > 0 && !player.Folded {
+			line += fmt.Sprintf(" (Bet: %d)", player.CurrentBet)
 		}
 
-		styledPlayerInfo := lipgloss.NewStyle().
-			Foreground(statusColor).
-			Render(playerInfo)
-
-		playerInfos = append(playerInfos, styledPlayerInfo)
+		playerLines = append(playerLines, style.Render(line))
 	}
 
-	result.WriteString(strings.Join(playerInfos, " "))
-
+	result.WriteString(strings.Join(playerLines, "\n"))
 	return result.String()
 }
