@@ -6,12 +6,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/decred/slog"
+
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
 // TableConfig holds configuration for a new poker table
 type TableConfig struct {
 	ID            string
+	Log           slog.Logger
 	HostID        string
 	BuyIn         int64 // DCR amount required to join table (in atoms)
 	MinPlayers    int
@@ -77,6 +80,7 @@ func (tem *TableEventManager) NotifyBlindPosted(tableID, playerID string, amount
 
 // Table represents a poker table
 type Table struct {
+	log             slog.Logger
 	config          TableConfig
 	players         map[string]*Player
 	game            *Game // Game logic without separate player management
@@ -94,6 +98,7 @@ type Table struct {
 // NewTable creates a new poker table
 func NewTable(cfg TableConfig) *Table {
 	return &Table{
+		log:            cfg.Log,
 		config:         cfg,
 		players:        make(map[string]*Player),
 		createdAt:      time.Now(),
@@ -229,6 +234,8 @@ func (t *Table) StartGame() error {
 	t.game = NewGame(GameConfig{
 		NumPlayers:    len(activePlayers),
 		StartingChips: t.config.StartingChips,
+		SmallBlind:    t.config.SmallBlind,
+		BigBlind:      t.config.BigBlind,
 	})
 
 	// Populate game.players with references to the same Player objects from the table
@@ -241,8 +248,8 @@ func (t *Table) StartGame() error {
 		return fmt.Errorf("failed to deal cards: %v", err)
 	}
 
-	// Post blinds before setting phase to PRE_FLOP
-	err = t.postBlinds()
+	// Post blinds using the game state machine logic
+	err = t.postBlindsFromGame()
 	if err != nil {
 		return fmt.Errorf("failed to post blinds: %v", err)
 	}
@@ -250,7 +257,7 @@ func (t *Table) StartGame() error {
 	// Initialize phase to PRE_FLOP so betting can begin immediately
 	t.game.phase = pokerrpc.GamePhase_PRE_FLOP
 
-	// Initialize the current player (first to act after blinds are posted)
+	// Set the current player for the PRE_FLOP phase
 	t.initializeCurrentPlayer()
 
 	gameStartTime := time.Now()
@@ -264,9 +271,14 @@ func (t *Table) StartGame() error {
 	}
 
 	// Set the current player's LastAction to now so their timeout timer starts
-	if currentPlayer := t.getCurrentPlayerFromUnifiedState(); currentPlayer != nil {
-		currentPlayer.LastAction = gameStartTime
+	if t.game.currentPlayer >= 0 && t.game.currentPlayer < len(t.game.players) {
+		if !t.game.players[t.game.currentPlayer].HasFolded {
+			t.game.players[t.game.currentPlayer].LastAction = gameStartTime
+		}
 	}
+
+	// Broadcast the updated game state to all clients so they know the correct current player
+	go t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
 
 	// Mark that the game has started
 	t.gameStarted = true
@@ -337,6 +349,16 @@ func (t *Table) MakeBet(playerID string, amount int64) error {
 		return fmt.Errorf("player not found")
 	}
 
+	// Validate that it's this player's turn to act
+	if t.gameStarted && t.game != nil {
+		currentPlayerID := t.getCurrentPlayerIDLocked()
+		t.log.Debugf("MakeBet: playerID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v, amount=%d",
+			playerID, currentPlayerID, t.game.currentPlayer, t.game.phase, amount)
+		if currentPlayerID != playerID {
+			return fmt.Errorf("not your turn to act")
+		}
+	}
+
 	// Validate and make the bet
 	if amount < player.HasBet {
 		return fmt.Errorf("cannot decrease bet")
@@ -375,6 +397,9 @@ func (t *Table) MakeBet(playerID string, amount int64) error {
 
 	// Possibly advance phase if betting round is complete
 	t.maybeAdvancePhase()
+
+	// Broadcast game state update to notify clients of the current player change
+	go t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
 
 	t.lastAction = time.Now()
 	return nil
@@ -601,7 +626,11 @@ func (t *Table) GetCurrentBet() int64 {
 func (t *Table) GetCurrentPlayerID() string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
+	return t.getCurrentPlayerIDLocked()
+}
 
+// getCurrentPlayerIDLocked returns the current player ID without acquiring locks
+func (t *Table) getCurrentPlayerIDLocked() string {
 	if t.game == nil || len(t.game.players) == 0 {
 		return ""
 	}
@@ -645,7 +674,7 @@ func (t *Table) advanceToNextPlayerLocked() {
 	}
 }
 
-// initializeCurrentPlayerLocked is the internal implementation that assumes the lock is already held
+// initializeCurrentPlayer is the internal implementation that assumes the lock is already held
 func (t *Table) initializeCurrentPlayer() {
 	if t.game == nil || len(t.game.players) == 0 {
 		return
@@ -653,18 +682,32 @@ func (t *Table) initializeCurrentPlayer() {
 
 	numPlayers := len(t.game.players)
 
+	t.log.Debugf("initializeCurrentPlayer: numPlayers=%d, dealer=%d, phase=%v",
+		numPlayers, t.game.dealer, t.game.phase)
+
 	// In pre-flop, start with Under the Gun (player after big blind)
 	if t.game.phase == pokerrpc.GamePhase_PRE_FLOP {
 		if numPlayers == 2 {
 			// In heads-up, after blinds are posted, small blind acts first
-			t.game.currentPlayer = (t.game.dealer + 1) % numPlayers
+			// The small blind IS the dealer in heads-up
+			t.game.currentPlayer = t.game.dealer
+			t.log.Debugf("initializeCurrentPlayer: heads-up pre-flop, setting currentPlayer to dealer=%d", t.game.dealer)
 		} else {
 			// In multi-way, Under the Gun acts first (after big blind)
 			t.game.currentPlayer = (t.game.dealer + 3) % numPlayers
+			t.log.Debugf("initializeCurrentPlayer: multi-way pre-flop, setting currentPlayer to UTG=%d", t.game.currentPlayer)
 		}
 	} else {
-		// In post-flop streets, start with player after dealer (small blind position)
-		t.game.currentPlayer = (t.game.dealer + 1) % numPlayers
+		// In post-flop streets, start with small blind position
+		if numPlayers == 2 {
+			// In heads-up, small blind is the dealer
+			t.game.currentPlayer = t.game.dealer
+			t.log.Debugf("initializeCurrentPlayer: heads-up post-flop, setting currentPlayer to dealer=%d", t.game.dealer)
+		} else {
+			// In multi-way, small blind is player after dealer
+			t.game.currentPlayer = (t.game.dealer + 1) % numPlayers
+			t.log.Debugf("initializeCurrentPlayer: multi-way post-flop, setting currentPlayer to SB=%d", t.game.currentPlayer)
+		}
 	}
 
 	// Ensure we start with an active player
@@ -694,6 +737,16 @@ func (t *Table) HandleFold(playerID string) error {
 		return fmt.Errorf("player not found")
 	}
 
+	// Validate that it's this player's turn to act
+	if t.gameStarted && t.game != nil {
+		currentPlayerID := t.getCurrentPlayerIDLocked()
+		t.log.Debugf("HandleFold: playerID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v",
+			playerID, currentPlayerID, t.game.currentPlayer, t.game.phase)
+		if currentPlayerID != playerID {
+			return fmt.Errorf("not your turn to act")
+		}
+	}
+
 	// Update the shared player object (this updates both table and game state automatically)
 	player.SetGameState("FOLDED")
 	player.LastAction = time.Now()
@@ -709,6 +762,75 @@ func (t *Table) HandleFold(playerID string) error {
 	// Possibly advance phase if betting round is complete
 	t.maybeAdvancePhase()
 
+	// Broadcast game state update to notify clients of the current player change
+	go t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
+
+	t.lastAction = time.Now()
+	return nil
+}
+
+// HandleCall handles call actions using the unified player state system
+func (t *Table) HandleCall(playerID string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	player := t.players[playerID]
+	if player == nil {
+		return fmt.Errorf("player not found")
+	}
+
+	// Validate that it's this player's turn to act
+	if t.gameStarted && t.game != nil {
+		currentPlayerID := t.getCurrentPlayerIDLocked()
+		t.log.Debugf("HandleCall: playerID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v",
+			playerID, currentPlayerID, t.game.currentPlayer, t.game.phase)
+		if currentPlayerID != playerID {
+			return fmt.Errorf("not your turn to act")
+		}
+	}
+
+	currentBet := t.game.currentBet
+
+	// For call to be valid, there must be a bet to call (current bet > player's current bet)
+	if currentBet <= player.HasBet {
+		return fmt.Errorf("nothing to call - use check instead")
+	}
+
+	// Calculate how much more the player needs to bet to call
+	delta := currentBet - player.HasBet
+	if delta > player.Balance {
+		return fmt.Errorf("insufficient balance to call")
+	}
+
+	// Update the shared player object (this updates both table and game state automatically)
+	player.Balance -= delta
+	player.HasBet = currentBet
+	player.LastAction = time.Now()
+
+	// Update game state
+	if player.Balance == 0 {
+		player.SetGameState("ALL_IN")
+	}
+
+	// Update game-level state
+	if delta > 0 {
+		t.game.AddToPot(delta)
+	}
+
+	// Increment actions counter for this betting round
+	t.actionsInRound++
+
+	// Advance to next player after call action
+	t.advanceToNextPlayerLocked()
+
+	// Check if this action completes the betting round
+	t.maybeAdvancePhase()
+
+	// Broadcast game state update to notify clients of the current player change
+	if t.eventManager.notificationSender != nil {
+		go t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
+	}
+
 	t.lastAction = time.Now()
 	return nil
 }
@@ -723,10 +845,22 @@ func (t *Table) HandleCheck(playerID string) error {
 		return fmt.Errorf("player not found")
 	}
 
+	// Validate that it's this player's turn to act
+	if t.gameStarted && t.game != nil {
+		currentPlayerID := t.getCurrentPlayerIDLocked()
+		t.log.Debugf("HandleCheck: playerID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v",
+			playerID, currentPlayerID, t.game.currentPlayer, t.game.phase)
+		if currentPlayerID != playerID {
+			return fmt.Errorf("not your turn to act")
+		}
+	}
+
 	// Check action - player can only check if their current bet equals the table's current bet
 	currentBet := t.game.currentBet
+
 	if player.HasBet < currentBet {
-		return fmt.Errorf("cannot check when there's a bet to call")
+		return fmt.Errorf("cannot check when there's a bet to call (player bet: %d, current bet: %d)",
+			player.HasBet, currentBet)
 	}
 
 	// Update player's last action time
@@ -743,12 +877,17 @@ func (t *Table) HandleCheck(playerID string) error {
 	// Possibly advance phase if betting round is complete
 	t.maybeAdvancePhase()
 
+	// Broadcast game state update to notify clients of the current player change
+	if t.eventManager.notificationSender != nil {
+		go t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
+	}
+
 	t.lastAction = time.Now()
 	return nil
 }
 
-// postBlinds posts blinds before setting phase to PRE_FLOP
-func (t *Table) postBlinds() error {
+// postBlindsFromGame calls the game state machine logic to post blinds
+func (t *Table) postBlindsFromGame() error {
 	if t.game == nil {
 		return fmt.Errorf("game not started")
 	}
@@ -758,55 +897,47 @@ func (t *Table) postBlinds() error {
 		return fmt.Errorf("not enough players for blinds")
 	}
 
-	// Small blind position
-	var smallBlindIdx int
+	// Calculate blind positions
+	smallBlindPos := (t.game.dealer + 1) % numPlayers
+	bigBlindPos := (t.game.dealer + 2) % numPlayers
+
+	// For heads-up (2 players), dealer posts small blind
 	if numPlayers == 2 {
-		// In heads-up, dealer posts small blind
-		smallBlindIdx = t.game.dealer
-	} else {
-		// In multi-way, player after dealer posts small blind
-		smallBlindIdx = (t.game.dealer + 1) % numPlayers
+		smallBlindPos = t.game.dealer
+		bigBlindPos = (t.game.dealer + 1) % numPlayers
 	}
 
-	smallBlindGamePlayer := t.game.players[smallBlindIdx]
-	smallBlind := t.config.SmallBlind
-	if smallBlind > smallBlindGamePlayer.Balance {
-		return fmt.Errorf("insufficient balance for small blind")
+	t.log.Debugf("postBlindsFromGame: numPlayers=%d, dealer=%d, smallBlindPos=%d, bigBlindPos=%d",
+		numPlayers, t.game.dealer, smallBlindPos, bigBlindPos)
+
+	// Post small blind
+	if t.game.players[smallBlindPos] != nil {
+		smallBlindAmount := t.game.config.SmallBlind
+		if smallBlindAmount > t.game.players[smallBlindPos].Balance {
+			return fmt.Errorf("insufficient balance for small blind")
+		}
+		t.game.players[smallBlindPos].Balance -= smallBlindAmount
+		t.game.players[smallBlindPos].HasBet = smallBlindAmount
+		t.game.potManager.AddBet(smallBlindPos, smallBlindAmount)
+
+		// Send small blind notification
+		go t.eventManager.NotifyBlindPosted(t.config.ID, t.game.players[smallBlindPos].ID, smallBlindAmount, true)
 	}
 
-	// Update the unified player object
-	smallBlindGamePlayer.Balance -= smallBlind
-	smallBlindGamePlayer.HasBet = smallBlind
-	t.game.AddToPotForPlayer(smallBlindIdx, smallBlind)
+	// Post big blind
+	if t.game.players[bigBlindPos] != nil {
+		bigBlindAmount := t.game.config.BigBlind
+		if bigBlindAmount > t.game.players[bigBlindPos].Balance {
+			return fmt.Errorf("insufficient balance for big blind")
+		}
+		t.game.players[bigBlindPos].Balance -= bigBlindAmount
+		t.game.players[bigBlindPos].HasBet = bigBlindAmount
+		t.game.potManager.AddBet(bigBlindPos, bigBlindAmount)
+		t.game.currentBet = bigBlindAmount // Set current bet to big blind amount
 
-	// Send small blind posted notification
-	go t.eventManager.NotifyBlindPosted(t.config.ID, smallBlindGamePlayer.ID, smallBlind, true)
-
-	// Big blind position
-	var bigBlindIdx int
-	if numPlayers == 2 {
-		// In heads-up, other player posts big blind
-		bigBlindIdx = (t.game.dealer + 1) % numPlayers
-	} else {
-		// In multi-way, two positions after dealer posts big blind
-		bigBlindIdx = (t.game.dealer + 2) % numPlayers
+		// Send big blind notification
+		go t.eventManager.NotifyBlindPosted(t.config.ID, t.game.players[bigBlindPos].ID, bigBlindAmount, false)
 	}
-	bigBlindGamePlayer := t.game.players[bigBlindIdx]
-	bigBlind := t.config.BigBlind
-	if bigBlind > bigBlindGamePlayer.Balance {
-		return fmt.Errorf("insufficient balance for big blind")
-	}
-
-	// Update the unified player object
-	bigBlindGamePlayer.Balance -= bigBlind
-	bigBlindGamePlayer.HasBet = bigBlind
-	t.game.AddToPotForPlayer(bigBlindIdx, bigBlind)
-
-	// Set the current bet to the big blind amount
-	t.game.currentBet = bigBlind
-
-	// Send big blind posted notification
-	go t.eventManager.NotifyBlindPosted(t.config.ID, bigBlindGamePlayer.ID, bigBlind, false)
 
 	return nil
 }
@@ -933,6 +1064,8 @@ func (t *Table) startNewHand() error {
 	t.game = NewGame(GameConfig{
 		NumPlayers:    len(activePlayers),
 		StartingChips: t.config.StartingChips,
+		SmallBlind:    t.config.SmallBlind,
+		BigBlind:      t.config.BigBlind,
 	})
 
 	// Populate game.players with references to the same Player objects from the table
@@ -945,8 +1078,8 @@ func (t *Table) startNewHand() error {
 		return fmt.Errorf("failed to deal cards: %v", err)
 	}
 
-	// Post blinds before setting phase to PRE_FLOP
-	err = t.postBlinds()
+	// Post blinds using the game state machine logic
+	err = t.postBlindsFromGame()
 	if err != nil {
 		return fmt.Errorf("failed to post blinds: %v", err)
 	}
@@ -954,7 +1087,7 @@ func (t *Table) startNewHand() error {
 	// Initialize phase to PRE_FLOP so betting can begin immediately
 	t.game.phase = pokerrpc.GamePhase_PRE_FLOP
 
-	// Initialize the current player (first to act after blinds are posted)
+	// Set the current player for the PRE_FLOP phase
 	t.initializeCurrentPlayer()
 
 	gameStartTime := time.Now()
@@ -973,6 +1106,9 @@ func (t *Table) startNewHand() error {
 			t.game.players[t.game.currentPlayer].LastAction = gameStartTime
 		}
 	}
+
+	// Broadcast the updated game state to all clients so they know the correct current player
+	go t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
 
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/vctt94/bisonbotkit/logging"
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 	"github.com/vctt94/poker-bisonrelay/pkg/server"
 	"google.golang.org/grpc"
@@ -13,7 +14,7 @@ import (
 )
 
 // SetupGRPCServer sets up and returns a configured GRPC server with TLS
-func SetupGRPCServer(datadir, certFile, keyFile, serverAddress string, db server.Database) (*grpc.Server, net.Listener, error) {
+func SetupGRPCServer(datadir, certFile, keyFile, serverAddress string, db server.Database, logBackend *logging.LogBackend) (*grpc.Server, net.Listener, error) {
 	// Determine certificate and key file paths
 	grpcCertFile := certFile
 	grpcKeyFile := keyFile
@@ -50,7 +51,7 @@ func SetupGRPCServer(datadir, certFile, keyFile, serverAddress string, db server
 	}
 
 	// Initialize and register the poker server
-	pokerServer := server.NewServer(db)
+	pokerServer := server.NewServer(db, logBackend)
 	pokerrpc.RegisterLobbyServiceServer(grpcServer, pokerServer)
 	pokerrpc.RegisterPokerServiceServer(grpcServer, pokerServer)
 

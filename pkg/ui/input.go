@@ -270,10 +270,20 @@ func (ih *InputHandler) handleActiveGameInput(msg tea.KeyMsg) tea.Cmd {
 				return ih.ui.dispatcher.checkCmd()
 			case optionBet:
 				ih.ui.state = stateBetInput
-				// Calculate minimum bet
-				minBet := ih.ui.currentBet + 10
-				if minBet < 10 {
-					minBet = 10
+				// Calculate minimum bet for poker rules:
+				// - To call: match the current bet
+				// - To raise: current bet + big blind
+				bigBlind := ih.ui.GetCurrentTableBigBlind()
+				currentBet := ih.ui.currentBet
+
+				var minBet int64
+				if currentBet == 0 {
+					// No one has bet yet, minimum is big blind
+					minBet = bigBlind
+				} else {
+					// Someone has bet, minimum to call is the current bet
+					// Minimum to raise is current bet + big blind
+					minBet = currentBet
 				}
 				ih.ui.betAmount = fmt.Sprintf("%d", minBet)
 			case optionFold:

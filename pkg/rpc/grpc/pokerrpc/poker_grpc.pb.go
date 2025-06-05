@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	PokerService_StartGameStream_FullMethodName = "/pokerrpc.PokerService/StartGameStream"
 	PokerService_MakeBet_FullMethodName         = "/pokerrpc.PokerService/MakeBet"
+	PokerService_Call_FullMethodName            = "/pokerrpc.PokerService/Call"
 	PokerService_Fold_FullMethodName            = "/pokerrpc.PokerService/Fold"
 	PokerService_Check_FullMethodName           = "/pokerrpc.PokerService/Check"
 	PokerService_GetGameState_FullMethodName    = "/pokerrpc.PokerService/GetGameState"
@@ -38,6 +39,7 @@ type PokerServiceClient interface {
 	StartGameStream(ctx context.Context, in *StartGameStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GameUpdate], error)
 	// Player actions
 	MakeBet(ctx context.Context, in *MakeBetRequest, opts ...grpc.CallOption) (*MakeBetResponse, error)
+	Call(ctx context.Context, in *CallRequest, opts ...grpc.CallOption) (*CallResponse, error)
 	Fold(ctx context.Context, in *FoldRequest, opts ...grpc.CallOption) (*FoldResponse, error)
 	Check(ctx context.Context, in *CheckRequest, opts ...grpc.CallOption) (*CheckResponse, error)
 	// Game state
@@ -78,6 +80,16 @@ func (c *pokerServiceClient) MakeBet(ctx context.Context, in *MakeBetRequest, op
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MakeBetResponse)
 	err := c.cc.Invoke(ctx, PokerService_MakeBet_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pokerServiceClient) Call(ctx context.Context, in *CallRequest, opts ...grpc.CallOption) (*CallResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CallResponse)
+	err := c.cc.Invoke(ctx, PokerService_Call_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -144,6 +156,7 @@ type PokerServiceServer interface {
 	StartGameStream(*StartGameStreamRequest, grpc.ServerStreamingServer[GameUpdate]) error
 	// Player actions
 	MakeBet(context.Context, *MakeBetRequest) (*MakeBetResponse, error)
+	Call(context.Context, *CallRequest) (*CallResponse, error)
 	Fold(context.Context, *FoldRequest) (*FoldResponse, error)
 	Check(context.Context, *CheckRequest) (*CheckResponse, error)
 	// Game state
@@ -166,6 +179,9 @@ func (UnimplementedPokerServiceServer) StartGameStream(*StartGameStreamRequest, 
 }
 func (UnimplementedPokerServiceServer) MakeBet(context.Context, *MakeBetRequest) (*MakeBetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method MakeBet not implemented")
+}
+func (UnimplementedPokerServiceServer) Call(context.Context, *CallRequest) (*CallResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Call not implemented")
 }
 func (UnimplementedPokerServiceServer) Fold(context.Context, *FoldRequest) (*FoldResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Fold not implemented")
@@ -228,6 +244,24 @@ func _PokerService_MakeBet_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PokerServiceServer).MakeBet(ctx, req.(*MakeBetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PokerService_Call_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CallRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PokerServiceServer).Call(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PokerService_Call_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PokerServiceServer).Call(ctx, req.(*CallRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -332,6 +366,10 @@ var PokerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MakeBet",
 			Handler:    _PokerService_MakeBet_Handler,
+		},
+		{
+			MethodName: "Call",
+			Handler:    _PokerService_Call_Handler,
 		},
 		{
 			MethodName: "Fold",

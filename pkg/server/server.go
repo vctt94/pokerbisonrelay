@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/decred/slog"
+	"github.com/vctt94/bisonbotkit/logging"
 	"github.com/vctt94/poker-bisonrelay/pkg/poker"
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 	"google.golang.org/grpc/codes"
@@ -24,9 +26,11 @@ type NotificationStream struct {
 type Server struct {
 	pokerrpc.UnimplementedPokerServiceServer
 	pokerrpc.UnimplementedLobbyServiceServer
-	db     Database
-	tables map[string]*poker.Table
-	mu     sync.RWMutex
+	log        slog.Logger
+	logBackend *logging.LogBackend
+	db         Database
+	tables     map[string]*poker.Table
+	mu         sync.RWMutex
 
 	// Notification streaming
 	notificationStreams map[string]*NotificationStream
@@ -38,8 +42,10 @@ type Server struct {
 }
 
 // NewServer creates a new poker server
-func NewServer(db Database) *Server {
+func NewServer(db Database, logBackend *logging.LogBackend) *Server {
 	return &Server{
+		log:                 logBackend.Logger("SERVER"),
+		logBackend:          logBackend,
 		db:                  db,
 		tables:              make(map[string]*poker.Table),
 		notificationStreams: make(map[string]*NotificationStream),
@@ -80,6 +86,7 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 	// Create table config
 	cfg := poker.TableConfig{
 		ID:            fmt.Sprintf("table-%d", time.Now().UnixNano()),
+		Log:           s.logBackend.Logger("TABLE"),
 		HostID:        req.PlayerId,
 		BuyIn:         req.BuyIn, // DCR amount (in atoms) to join table
 		MinPlayers:    int(req.MinPlayers),
@@ -497,34 +504,35 @@ func (s *Server) buildGameState(tableID, requestingPlayerID string) (*pokerrpc.G
 
 func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*pokerrpc.MakeBetResponse, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	table, ok := s.tables[req.TableId]
 	if !ok {
+		s.mu.Unlock()
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
 
 	// Check if game is running
 	if !table.IsGameStarted() {
+		s.mu.Unlock()
 		return nil, status.Error(codes.FailedPrecondition, "game not started")
 	}
 
 	// Verify it's the player's turn
 	currentPlayerID := table.GetCurrentPlayerID()
 	if currentPlayerID != req.PlayerId {
+		s.mu.Unlock()
 		return nil, status.Error(codes.FailedPrecondition, "not your turn")
 	}
 
 	err := table.MakeBet(req.PlayerId, req.Amount)
 	if err != nil {
+		s.mu.Unlock()
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	// Advance to next player and check phase progression
-	table.AdvanceToNextPlayer()
-	table.MaybeAdvancePhase()
+	s.mu.Unlock()
 
-	// Broadcast bet notification to all players at the table
+	// Broadcast bet notification to all players at the table (outside of server lock)
 	s.broadcastNotificationToTable(req.TableId, &pokerrpc.Notification{
 		Type:     pokerrpc.NotificationType_BET_MADE,
 		PlayerId: req.PlayerId,
@@ -532,6 +540,9 @@ func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*po
 		Amount:   req.Amount,
 		Message:  fmt.Sprintf("Player %s bet %d chips", req.PlayerId, req.Amount),
 	})
+
+	// Broadcast updated game state to all players
+	s.BroadcastGameStateUpdate(req.TableId)
 
 	balance, err := s.db.GetPlayerBalance(req.PlayerId)
 	if err != nil {
@@ -547,35 +558,36 @@ func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*po
 
 func (s *Server) Fold(ctx context.Context, req *pokerrpc.FoldRequest) (*pokerrpc.FoldResponse, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	table, ok := s.tables[req.TableId]
 	if !ok {
+		s.mu.Unlock()
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
 
 	// Check if game is running
 	if !table.IsGameStarted() {
+		s.mu.Unlock()
 		return nil, status.Error(codes.FailedPrecondition, "game not started")
 	}
 
 	// Verify it's the player's turn
 	currentPlayerID := table.GetCurrentPlayerID()
 	if currentPlayerID != req.PlayerId {
+		s.mu.Unlock()
 		return nil, status.Error(codes.FailedPrecondition, "not your turn")
 	}
 
 	// Handle the fold action
 	err := table.HandleFold(req.PlayerId)
 	if err != nil {
+		s.mu.Unlock()
 		return nil, status.Error(codes.Internal, "failed to process fold: "+err.Error())
 	}
 
-	// Advance to next player and check phase progression
-	table.AdvanceToNextPlayer()
-	table.MaybeAdvancePhase()
+	s.mu.Unlock()
 
-	// Broadcast fold notification to all players at the table
+	// Broadcast fold notification to all players at the table (outside of server lock)
 	s.broadcastNotificationToTable(req.TableId, &pokerrpc.Notification{
 		Type:     pokerrpc.NotificationType_PLAYER_FOLDED,
 		PlayerId: req.PlayerId,
@@ -583,55 +595,115 @@ func (s *Server) Fold(ctx context.Context, req *pokerrpc.FoldRequest) (*pokerrpc
 		Message:  fmt.Sprintf("Player %s folded", req.PlayerId),
 	})
 
+	// Broadcast updated game state to all players
+	s.BroadcastGameStateUpdate(req.TableId)
+
 	return &pokerrpc.FoldResponse{
 		Success: true,
-		Message: "Player folded",
+		Message: "Folded successfully",
 	}, nil
 }
 
-// Check implements the Check RPC method
-func (s *Server) Check(ctx context.Context, req *pokerrpc.CheckRequest) (*pokerrpc.CheckResponse, error) {
+// Call implements the Call RPC method
+func (s *Server) Call(ctx context.Context, req *pokerrpc.CallRequest) (*pokerrpc.CallResponse, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	table, ok := s.tables[req.TableId]
 	if !ok {
+		s.mu.Unlock()
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
 
 	// Check if game is running
 	if !table.IsGameStarted() {
+		s.mu.Unlock()
 		return nil, status.Error(codes.FailedPrecondition, "game not started")
 	}
 
 	// Verify it's the player's turn
 	currentPlayerID := table.GetCurrentPlayerID()
 	if currentPlayerID != req.PlayerId {
+		s.mu.Unlock()
 		return nil, status.Error(codes.FailedPrecondition, "not your turn")
 	}
 
-	// Check action - player needs to pass without betting
-	currentBet := table.GetCurrentBet()
-	if currentBet > 0 {
-		return nil, status.Error(codes.FailedPrecondition, "cannot check when there's a bet to call")
+	// Handle the call action
+	err := table.HandleCall(req.PlayerId)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
 
-	// Advance to next player and check phase progression
-	table.AdvanceToNextPlayer()
-	table.MaybeAdvancePhase()
+	// Get the current bet amount for the notification
+	currentBet := table.GetCurrentBet()
 
-	// Broadcast check notification to all players at the table
+	s.mu.Unlock()
+
+	// Broadcast call notification to all players at the table (outside of server lock)
 	s.broadcastNotificationToTable(req.TableId, &pokerrpc.Notification{
-		Type:     pokerrpc.NotificationType_BET_MADE,
+		Type:     pokerrpc.NotificationType_CALL_MADE,
+		PlayerId: req.PlayerId,
+		TableId:  req.TableId,
+		Amount:   currentBet,
+		Message:  fmt.Sprintf("Player %s called %d chips", req.PlayerId, currentBet),
+	})
+
+	// Broadcast updated game state to all players
+	s.BroadcastGameStateUpdate(req.TableId)
+
+	return &pokerrpc.CallResponse{
+		Success: true,
+		Message: "Call successful",
+	}, nil
+}
+
+// Check implements the Check RPC method
+func (s *Server) Check(ctx context.Context, req *pokerrpc.CheckRequest) (*pokerrpc.CheckResponse, error) {
+	s.mu.Lock()
+
+	table, ok := s.tables[req.TableId]
+	if !ok {
+		s.mu.Unlock()
+		return nil, status.Error(codes.NotFound, "table not found")
+	}
+
+	// Check if game is running
+	if !table.IsGameStarted() {
+		s.mu.Unlock()
+		return nil, status.Error(codes.FailedPrecondition, "game not started")
+	}
+
+	// Verify it's the player's turn
+	currentPlayerID := table.GetCurrentPlayerID()
+	if currentPlayerID != req.PlayerId {
+		s.mu.Unlock()
+		return nil, status.Error(codes.FailedPrecondition, "not your turn")
+	}
+
+	// Handle the check action
+	err := table.HandleCheck(req.PlayerId)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+
+	s.mu.Unlock()
+
+	// Broadcast check notification to all players at the table (outside of server lock)
+	s.broadcastNotificationToTable(req.TableId, &pokerrpc.Notification{
+		Type:     pokerrpc.NotificationType_CHECK_MADE,
 		PlayerId: req.PlayerId,
 		TableId:  req.TableId,
 		Amount:   0,
 		Message:  fmt.Sprintf("Player %s checked", req.PlayerId),
 	})
 
+	// Broadcast updated game state to all players
+	s.BroadcastGameStateUpdate(req.TableId)
+
 	return &pokerrpc.CheckResponse{
 		Success: true,
-		Message: "Player checked",
+		Message: "Check successful",
 	}, nil
 }
 

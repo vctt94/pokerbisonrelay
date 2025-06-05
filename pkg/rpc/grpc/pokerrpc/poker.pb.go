@@ -101,6 +101,8 @@ const (
 	NotificationType_ALL_PLAYERS_READY  NotificationType = 15
 	NotificationType_SMALL_BLIND_POSTED NotificationType = 16
 	NotificationType_BIG_BLIND_POSTED   NotificationType = 17
+	NotificationType_CALL_MADE          NotificationType = 18
+	NotificationType_CHECK_MADE         NotificationType = 19
 )
 
 // Enum value maps for NotificationType.
@@ -124,6 +126,8 @@ var (
 		15: "ALL_PLAYERS_READY",
 		16: "SMALL_BLIND_POSTED",
 		17: "BIG_BLIND_POSTED",
+		18: "CALL_MADE",
+		19: "CHECK_MADE",
 	}
 	NotificationType_value = map[string]int32{
 		"UNKNOWN":            0,
@@ -144,6 +148,8 @@ var (
 		"ALL_PLAYERS_READY":  15,
 		"SMALL_BLIND_POSTED": 16,
 		"BIG_BLIND_POSTED":   17,
+		"CALL_MADE":          18,
+		"CHECK_MADE":         19,
 	}
 )
 
@@ -757,6 +763,110 @@ func (x *CheckResponse) GetMessage() string {
 	return ""
 }
 
+type CallRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PlayerId      string                 `protobuf:"bytes,1,opt,name=player_id,json=playerId,proto3" json:"player_id,omitempty"`
+	TableId       string                 `protobuf:"bytes,2,opt,name=table_id,json=tableId,proto3" json:"table_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CallRequest) Reset() {
+	*x = CallRequest{}
+	mi := &file_poker_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CallRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CallRequest) ProtoMessage() {}
+
+func (x *CallRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_poker_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CallRequest.ProtoReflect.Descriptor instead.
+func (*CallRequest) Descriptor() ([]byte, []int) {
+	return file_poker_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *CallRequest) GetPlayerId() string {
+	if x != nil {
+		return x.PlayerId
+	}
+	return ""
+}
+
+func (x *CallRequest) GetTableId() string {
+	if x != nil {
+		return x.TableId
+	}
+	return ""
+}
+
+type CallResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CallResponse) Reset() {
+	*x = CallResponse{}
+	mi := &file_poker_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CallResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CallResponse) ProtoMessage() {}
+
+func (x *CallResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_poker_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CallResponse.ProtoReflect.Descriptor instead.
+func (*CallResponse) Descriptor() ([]byte, []int) {
+	return file_poker_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *CallResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *CallResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
 type GetGameStateRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TableId       string                 `protobuf:"bytes,1,opt,name=table_id,json=tableId,proto3" json:"table_id,omitempty"`
@@ -766,7 +876,7 @@ type GetGameStateRequest struct {
 
 func (x *GetGameStateRequest) Reset() {
 	*x = GetGameStateRequest{}
-	mi := &file_poker_proto_msgTypes[8]
+	mi := &file_poker_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -778,7 +888,7 @@ func (x *GetGameStateRequest) String() string {
 func (*GetGameStateRequest) ProtoMessage() {}
 
 func (x *GetGameStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[8]
+	mi := &file_poker_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -791,7 +901,7 @@ func (x *GetGameStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetGameStateRequest.ProtoReflect.Descriptor instead.
 func (*GetGameStateRequest) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{8}
+	return file_poker_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *GetGameStateRequest) GetTableId() string {
@@ -810,7 +920,7 @@ type GetGameStateResponse struct {
 
 func (x *GetGameStateResponse) Reset() {
 	*x = GetGameStateResponse{}
-	mi := &file_poker_proto_msgTypes[9]
+	mi := &file_poker_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -822,7 +932,7 @@ func (x *GetGameStateResponse) String() string {
 func (*GetGameStateResponse) ProtoMessage() {}
 
 func (x *GetGameStateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[9]
+	mi := &file_poker_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -835,7 +945,7 @@ func (x *GetGameStateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetGameStateResponse.ProtoReflect.Descriptor instead.
 func (*GetGameStateResponse) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{9}
+	return file_poker_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GetGameStateResponse) GetGameState() *GameUpdate {
@@ -854,7 +964,7 @@ type EvaluateHandRequest struct {
 
 func (x *EvaluateHandRequest) Reset() {
 	*x = EvaluateHandRequest{}
-	mi := &file_poker_proto_msgTypes[10]
+	mi := &file_poker_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -866,7 +976,7 @@ func (x *EvaluateHandRequest) String() string {
 func (*EvaluateHandRequest) ProtoMessage() {}
 
 func (x *EvaluateHandRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[10]
+	mi := &file_poker_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -879,7 +989,7 @@ func (x *EvaluateHandRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvaluateHandRequest.ProtoReflect.Descriptor instead.
 func (*EvaluateHandRequest) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{10}
+	return file_poker_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *EvaluateHandRequest) GetCards() []*Card {
@@ -900,7 +1010,7 @@ type EvaluateHandResponse struct {
 
 func (x *EvaluateHandResponse) Reset() {
 	*x = EvaluateHandResponse{}
-	mi := &file_poker_proto_msgTypes[11]
+	mi := &file_poker_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -912,7 +1022,7 @@ func (x *EvaluateHandResponse) String() string {
 func (*EvaluateHandResponse) ProtoMessage() {}
 
 func (x *EvaluateHandResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[11]
+	mi := &file_poker_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -925,7 +1035,7 @@ func (x *EvaluateHandResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvaluateHandResponse.ProtoReflect.Descriptor instead.
 func (*EvaluateHandResponse) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{11}
+	return file_poker_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *EvaluateHandResponse) GetRank() HandRank {
@@ -958,7 +1068,7 @@ type GetWinnersRequest struct {
 
 func (x *GetWinnersRequest) Reset() {
 	*x = GetWinnersRequest{}
-	mi := &file_poker_proto_msgTypes[12]
+	mi := &file_poker_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -970,7 +1080,7 @@ func (x *GetWinnersRequest) String() string {
 func (*GetWinnersRequest) ProtoMessage() {}
 
 func (x *GetWinnersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[12]
+	mi := &file_poker_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -983,7 +1093,7 @@ func (x *GetWinnersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWinnersRequest.ProtoReflect.Descriptor instead.
 func (*GetWinnersRequest) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{12}
+	return file_poker_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *GetWinnersRequest) GetTableId() string {
@@ -1003,7 +1113,7 @@ type GetWinnersResponse struct {
 
 func (x *GetWinnersResponse) Reset() {
 	*x = GetWinnersResponse{}
-	mi := &file_poker_proto_msgTypes[13]
+	mi := &file_poker_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1015,7 +1125,7 @@ func (x *GetWinnersResponse) String() string {
 func (*GetWinnersResponse) ProtoMessage() {}
 
 func (x *GetWinnersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[13]
+	mi := &file_poker_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1028,7 +1138,7 @@ func (x *GetWinnersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWinnersResponse.ProtoReflect.Descriptor instead.
 func (*GetWinnersResponse) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{13}
+	return file_poker_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *GetWinnersResponse) GetWinners() []*Winner {
@@ -1057,7 +1167,7 @@ type Winner struct {
 
 func (x *Winner) Reset() {
 	*x = Winner{}
-	mi := &file_poker_proto_msgTypes[14]
+	mi := &file_poker_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1069,7 +1179,7 @@ func (x *Winner) String() string {
 func (*Winner) ProtoMessage() {}
 
 func (x *Winner) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[14]
+	mi := &file_poker_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1082,7 +1192,7 @@ func (x *Winner) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Winner.ProtoReflect.Descriptor instead.
 func (*Winner) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{14}
+	return file_poker_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *Winner) GetPlayerId() string {
@@ -1131,7 +1241,7 @@ type CreateTableRequest struct {
 
 func (x *CreateTableRequest) Reset() {
 	*x = CreateTableRequest{}
-	mi := &file_poker_proto_msgTypes[15]
+	mi := &file_poker_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1143,7 +1253,7 @@ func (x *CreateTableRequest) String() string {
 func (*CreateTableRequest) ProtoMessage() {}
 
 func (x *CreateTableRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[15]
+	mi := &file_poker_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1156,7 +1266,7 @@ func (x *CreateTableRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTableRequest.ProtoReflect.Descriptor instead.
 func (*CreateTableRequest) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{15}
+	return file_poker_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *CreateTableRequest) GetPlayerId() string {
@@ -1231,7 +1341,7 @@ type CreateTableResponse struct {
 
 func (x *CreateTableResponse) Reset() {
 	*x = CreateTableResponse{}
-	mi := &file_poker_proto_msgTypes[16]
+	mi := &file_poker_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1243,7 +1353,7 @@ func (x *CreateTableResponse) String() string {
 func (*CreateTableResponse) ProtoMessage() {}
 
 func (x *CreateTableResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[16]
+	mi := &file_poker_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1256,7 +1366,7 @@ func (x *CreateTableResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTableResponse.ProtoReflect.Descriptor instead.
 func (*CreateTableResponse) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{16}
+	return file_poker_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *CreateTableResponse) GetTableId() string {
@@ -1276,7 +1386,7 @@ type JoinTableRequest struct {
 
 func (x *JoinTableRequest) Reset() {
 	*x = JoinTableRequest{}
-	mi := &file_poker_proto_msgTypes[17]
+	mi := &file_poker_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1288,7 +1398,7 @@ func (x *JoinTableRequest) String() string {
 func (*JoinTableRequest) ProtoMessage() {}
 
 func (x *JoinTableRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[17]
+	mi := &file_poker_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1301,7 +1411,7 @@ func (x *JoinTableRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinTableRequest.ProtoReflect.Descriptor instead.
 func (*JoinTableRequest) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{17}
+	return file_poker_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *JoinTableRequest) GetPlayerId() string {
@@ -1329,7 +1439,7 @@ type JoinTableResponse struct {
 
 func (x *JoinTableResponse) Reset() {
 	*x = JoinTableResponse{}
-	mi := &file_poker_proto_msgTypes[18]
+	mi := &file_poker_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1341,7 +1451,7 @@ func (x *JoinTableResponse) String() string {
 func (*JoinTableResponse) ProtoMessage() {}
 
 func (x *JoinTableResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[18]
+	mi := &file_poker_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1354,7 +1464,7 @@ func (x *JoinTableResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinTableResponse.ProtoReflect.Descriptor instead.
 func (*JoinTableResponse) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{18}
+	return file_poker_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *JoinTableResponse) GetSuccess() bool {
@@ -1388,7 +1498,7 @@ type LeaveTableRequest struct {
 
 func (x *LeaveTableRequest) Reset() {
 	*x = LeaveTableRequest{}
-	mi := &file_poker_proto_msgTypes[19]
+	mi := &file_poker_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1400,7 +1510,7 @@ func (x *LeaveTableRequest) String() string {
 func (*LeaveTableRequest) ProtoMessage() {}
 
 func (x *LeaveTableRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[19]
+	mi := &file_poker_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1413,7 +1523,7 @@ func (x *LeaveTableRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LeaveTableRequest.ProtoReflect.Descriptor instead.
 func (*LeaveTableRequest) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{19}
+	return file_poker_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *LeaveTableRequest) GetPlayerId() string {
@@ -1440,7 +1550,7 @@ type LeaveTableResponse struct {
 
 func (x *LeaveTableResponse) Reset() {
 	*x = LeaveTableResponse{}
-	mi := &file_poker_proto_msgTypes[20]
+	mi := &file_poker_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1452,7 +1562,7 @@ func (x *LeaveTableResponse) String() string {
 func (*LeaveTableResponse) ProtoMessage() {}
 
 func (x *LeaveTableResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[20]
+	mi := &file_poker_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1465,7 +1575,7 @@ func (x *LeaveTableResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LeaveTableResponse.ProtoReflect.Descriptor instead.
 func (*LeaveTableResponse) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{20}
+	return file_poker_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *LeaveTableResponse) GetSuccess() bool {
@@ -1490,7 +1600,7 @@ type GetTablesRequest struct {
 
 func (x *GetTablesRequest) Reset() {
 	*x = GetTablesRequest{}
-	mi := &file_poker_proto_msgTypes[21]
+	mi := &file_poker_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1502,7 +1612,7 @@ func (x *GetTablesRequest) String() string {
 func (*GetTablesRequest) ProtoMessage() {}
 
 func (x *GetTablesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[21]
+	mi := &file_poker_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1515,7 +1625,7 @@ func (x *GetTablesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTablesRequest.ProtoReflect.Descriptor instead.
 func (*GetTablesRequest) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{21}
+	return file_poker_proto_rawDescGZIP(), []int{23}
 }
 
 type GetTablesResponse struct {
@@ -1527,7 +1637,7 @@ type GetTablesResponse struct {
 
 func (x *GetTablesResponse) Reset() {
 	*x = GetTablesResponse{}
-	mi := &file_poker_proto_msgTypes[22]
+	mi := &file_poker_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1539,7 +1649,7 @@ func (x *GetTablesResponse) String() string {
 func (*GetTablesResponse) ProtoMessage() {}
 
 func (x *GetTablesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[22]
+	mi := &file_poker_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1552,7 +1662,7 @@ func (x *GetTablesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTablesResponse.ProtoReflect.Descriptor instead.
 func (*GetTablesResponse) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{22}
+	return file_poker_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *GetTablesResponse) GetTables() []*Table {
@@ -1583,7 +1693,7 @@ type Table struct {
 
 func (x *Table) Reset() {
 	*x = Table{}
-	mi := &file_poker_proto_msgTypes[23]
+	mi := &file_poker_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1595,7 +1705,7 @@ func (x *Table) String() string {
 func (*Table) ProtoMessage() {}
 
 func (x *Table) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[23]
+	mi := &file_poker_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1608,7 +1718,7 @@ func (x *Table) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Table.ProtoReflect.Descriptor instead.
 func (*Table) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{23}
+	return file_poker_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *Table) GetId() string {
@@ -1711,7 +1821,7 @@ type GetBalanceRequest struct {
 
 func (x *GetBalanceRequest) Reset() {
 	*x = GetBalanceRequest{}
-	mi := &file_poker_proto_msgTypes[24]
+	mi := &file_poker_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1723,7 +1833,7 @@ func (x *GetBalanceRequest) String() string {
 func (*GetBalanceRequest) ProtoMessage() {}
 
 func (x *GetBalanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[24]
+	mi := &file_poker_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1736,7 +1846,7 @@ func (x *GetBalanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBalanceRequest.ProtoReflect.Descriptor instead.
 func (*GetBalanceRequest) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{24}
+	return file_poker_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *GetBalanceRequest) GetPlayerId() string {
@@ -1755,7 +1865,7 @@ type GetBalanceResponse struct {
 
 func (x *GetBalanceResponse) Reset() {
 	*x = GetBalanceResponse{}
-	mi := &file_poker_proto_msgTypes[25]
+	mi := &file_poker_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1767,7 +1877,7 @@ func (x *GetBalanceResponse) String() string {
 func (*GetBalanceResponse) ProtoMessage() {}
 
 func (x *GetBalanceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[25]
+	mi := &file_poker_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1780,7 +1890,7 @@ func (x *GetBalanceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBalanceResponse.ProtoReflect.Descriptor instead.
 func (*GetBalanceResponse) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{25}
+	return file_poker_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *GetBalanceResponse) GetBalance() int64 {
@@ -1801,7 +1911,7 @@ type UpdateBalanceRequest struct {
 
 func (x *UpdateBalanceRequest) Reset() {
 	*x = UpdateBalanceRequest{}
-	mi := &file_poker_proto_msgTypes[26]
+	mi := &file_poker_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1813,7 +1923,7 @@ func (x *UpdateBalanceRequest) String() string {
 func (*UpdateBalanceRequest) ProtoMessage() {}
 
 func (x *UpdateBalanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[26]
+	mi := &file_poker_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1826,7 +1936,7 @@ func (x *UpdateBalanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateBalanceRequest.ProtoReflect.Descriptor instead.
 func (*UpdateBalanceRequest) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{26}
+	return file_poker_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *UpdateBalanceRequest) GetPlayerId() string {
@@ -1860,7 +1970,7 @@ type UpdateBalanceResponse struct {
 
 func (x *UpdateBalanceResponse) Reset() {
 	*x = UpdateBalanceResponse{}
-	mi := &file_poker_proto_msgTypes[27]
+	mi := &file_poker_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1872,7 +1982,7 @@ func (x *UpdateBalanceResponse) String() string {
 func (*UpdateBalanceResponse) ProtoMessage() {}
 
 func (x *UpdateBalanceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[27]
+	mi := &file_poker_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1885,7 +1995,7 @@ func (x *UpdateBalanceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateBalanceResponse.ProtoReflect.Descriptor instead.
 func (*UpdateBalanceResponse) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{27}
+	return file_poker_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *UpdateBalanceResponse) GetNewBalance() int64 {
@@ -1914,7 +2024,7 @@ type ProcessTipRequest struct {
 
 func (x *ProcessTipRequest) Reset() {
 	*x = ProcessTipRequest{}
-	mi := &file_poker_proto_msgTypes[28]
+	mi := &file_poker_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1926,7 +2036,7 @@ func (x *ProcessTipRequest) String() string {
 func (*ProcessTipRequest) ProtoMessage() {}
 
 func (x *ProcessTipRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[28]
+	mi := &file_poker_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1939,7 +2049,7 @@ func (x *ProcessTipRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessTipRequest.ProtoReflect.Descriptor instead.
 func (*ProcessTipRequest) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{28}
+	return file_poker_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ProcessTipRequest) GetFromPlayerId() string {
@@ -1981,7 +2091,7 @@ type ProcessTipResponse struct {
 
 func (x *ProcessTipResponse) Reset() {
 	*x = ProcessTipResponse{}
-	mi := &file_poker_proto_msgTypes[29]
+	mi := &file_poker_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1993,7 +2103,7 @@ func (x *ProcessTipResponse) String() string {
 func (*ProcessTipResponse) ProtoMessage() {}
 
 func (x *ProcessTipResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[29]
+	mi := &file_poker_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2006,7 +2116,7 @@ func (x *ProcessTipResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessTipResponse.ProtoReflect.Descriptor instead.
 func (*ProcessTipResponse) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{29}
+	return file_poker_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ProcessTipResponse) GetSuccess() bool {
@@ -2039,7 +2149,7 @@ type StartNotificationStreamRequest struct {
 
 func (x *StartNotificationStreamRequest) Reset() {
 	*x = StartNotificationStreamRequest{}
-	mi := &file_poker_proto_msgTypes[30]
+	mi := &file_poker_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2051,7 +2161,7 @@ func (x *StartNotificationStreamRequest) String() string {
 func (*StartNotificationStreamRequest) ProtoMessage() {}
 
 func (x *StartNotificationStreamRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[30]
+	mi := &file_poker_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2064,7 +2174,7 @@ func (x *StartNotificationStreamRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartNotificationStreamRequest.ProtoReflect.Descriptor instead.
 func (*StartNotificationStreamRequest) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{30}
+	return file_poker_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *StartNotificationStreamRequest) GetPlayerId() string {
@@ -2096,7 +2206,7 @@ type Notification struct {
 
 func (x *Notification) Reset() {
 	*x = Notification{}
-	mi := &file_poker_proto_msgTypes[31]
+	mi := &file_poker_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2108,7 +2218,7 @@ func (x *Notification) String() string {
 func (*Notification) ProtoMessage() {}
 
 func (x *Notification) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[31]
+	mi := &file_poker_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2121,7 +2231,7 @@ func (x *Notification) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Notification.ProtoReflect.Descriptor instead.
 func (*Notification) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{31}
+	return file_poker_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *Notification) GetType() NotificationType {
@@ -2241,7 +2351,7 @@ type Player struct {
 
 func (x *Player) Reset() {
 	*x = Player{}
-	mi := &file_poker_proto_msgTypes[32]
+	mi := &file_poker_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2253,7 +2363,7 @@ func (x *Player) String() string {
 func (*Player) ProtoMessage() {}
 
 func (x *Player) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[32]
+	mi := &file_poker_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2266,7 +2376,7 @@ func (x *Player) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Player.ProtoReflect.Descriptor instead.
 func (*Player) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{32}
+	return file_poker_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *Player) GetId() string {
@@ -2349,7 +2459,7 @@ type Card struct {
 
 func (x *Card) Reset() {
 	*x = Card{}
-	mi := &file_poker_proto_msgTypes[33]
+	mi := &file_poker_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2361,7 +2471,7 @@ func (x *Card) String() string {
 func (*Card) ProtoMessage() {}
 
 func (x *Card) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[33]
+	mi := &file_poker_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2374,7 +2484,7 @@ func (x *Card) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Card.ProtoReflect.Descriptor instead.
 func (*Card) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{33}
+	return file_poker_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *Card) GetSuit() string {
@@ -2401,7 +2511,7 @@ type SetPlayerReadyRequest struct {
 
 func (x *SetPlayerReadyRequest) Reset() {
 	*x = SetPlayerReadyRequest{}
-	mi := &file_poker_proto_msgTypes[34]
+	mi := &file_poker_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2413,7 +2523,7 @@ func (x *SetPlayerReadyRequest) String() string {
 func (*SetPlayerReadyRequest) ProtoMessage() {}
 
 func (x *SetPlayerReadyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[34]
+	mi := &file_poker_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2426,7 +2536,7 @@ func (x *SetPlayerReadyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPlayerReadyRequest.ProtoReflect.Descriptor instead.
 func (*SetPlayerReadyRequest) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{34}
+	return file_poker_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *SetPlayerReadyRequest) GetPlayerId() string {
@@ -2454,7 +2564,7 @@ type SetPlayerReadyResponse struct {
 
 func (x *SetPlayerReadyResponse) Reset() {
 	*x = SetPlayerReadyResponse{}
-	mi := &file_poker_proto_msgTypes[35]
+	mi := &file_poker_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2466,7 +2576,7 @@ func (x *SetPlayerReadyResponse) String() string {
 func (*SetPlayerReadyResponse) ProtoMessage() {}
 
 func (x *SetPlayerReadyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[35]
+	mi := &file_poker_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2479,7 +2589,7 @@ func (x *SetPlayerReadyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPlayerReadyResponse.ProtoReflect.Descriptor instead.
 func (*SetPlayerReadyResponse) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{35}
+	return file_poker_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *SetPlayerReadyResponse) GetSuccess() bool {
@@ -2513,7 +2623,7 @@ type SetPlayerUnreadyRequest struct {
 
 func (x *SetPlayerUnreadyRequest) Reset() {
 	*x = SetPlayerUnreadyRequest{}
-	mi := &file_poker_proto_msgTypes[36]
+	mi := &file_poker_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2525,7 +2635,7 @@ func (x *SetPlayerUnreadyRequest) String() string {
 func (*SetPlayerUnreadyRequest) ProtoMessage() {}
 
 func (x *SetPlayerUnreadyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[36]
+	mi := &file_poker_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2538,7 +2648,7 @@ func (x *SetPlayerUnreadyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPlayerUnreadyRequest.ProtoReflect.Descriptor instead.
 func (*SetPlayerUnreadyRequest) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{36}
+	return file_poker_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *SetPlayerUnreadyRequest) GetPlayerId() string {
@@ -2565,7 +2675,7 @@ type SetPlayerUnreadyResponse struct {
 
 func (x *SetPlayerUnreadyResponse) Reset() {
 	*x = SetPlayerUnreadyResponse{}
-	mi := &file_poker_proto_msgTypes[37]
+	mi := &file_poker_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2577,7 +2687,7 @@ func (x *SetPlayerUnreadyResponse) String() string {
 func (*SetPlayerUnreadyResponse) ProtoMessage() {}
 
 func (x *SetPlayerUnreadyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[37]
+	mi := &file_poker_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2590,7 +2700,7 @@ func (x *SetPlayerUnreadyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPlayerUnreadyResponse.ProtoReflect.Descriptor instead.
 func (*SetPlayerUnreadyResponse) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{37}
+	return file_poker_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *SetPlayerUnreadyResponse) GetSuccess() bool {
@@ -2616,7 +2726,7 @@ type GetPlayerCurrentTableRequest struct {
 
 func (x *GetPlayerCurrentTableRequest) Reset() {
 	*x = GetPlayerCurrentTableRequest{}
-	mi := &file_poker_proto_msgTypes[38]
+	mi := &file_poker_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2628,7 +2738,7 @@ func (x *GetPlayerCurrentTableRequest) String() string {
 func (*GetPlayerCurrentTableRequest) ProtoMessage() {}
 
 func (x *GetPlayerCurrentTableRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[38]
+	mi := &file_poker_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2641,7 +2751,7 @@ func (x *GetPlayerCurrentTableRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPlayerCurrentTableRequest.ProtoReflect.Descriptor instead.
 func (*GetPlayerCurrentTableRequest) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{38}
+	return file_poker_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *GetPlayerCurrentTableRequest) GetPlayerId() string {
@@ -2660,7 +2770,7 @@ type GetPlayerCurrentTableResponse struct {
 
 func (x *GetPlayerCurrentTableResponse) Reset() {
 	*x = GetPlayerCurrentTableResponse{}
-	mi := &file_poker_proto_msgTypes[39]
+	mi := &file_poker_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2672,7 +2782,7 @@ func (x *GetPlayerCurrentTableResponse) String() string {
 func (*GetPlayerCurrentTableResponse) ProtoMessage() {}
 
 func (x *GetPlayerCurrentTableResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_poker_proto_msgTypes[39]
+	mi := &file_poker_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2685,7 +2795,7 @@ func (x *GetPlayerCurrentTableResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPlayerCurrentTableResponse.ProtoReflect.Descriptor instead.
 func (*GetPlayerCurrentTableResponse) Descriptor() ([]byte, []int) {
-	return file_poker_proto_rawDescGZIP(), []int{39}
+	return file_poker_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *GetPlayerCurrentTableResponse) GetTableId() string {
@@ -2738,6 +2848,12 @@ const file_poker_proto_rawDesc = "" +
 	"\tplayer_id\x18\x01 \x01(\tR\bplayerId\x12\x19\n" +
 	"\btable_id\x18\x02 \x01(\tR\atableId\"C\n" +
 	"\rCheckResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"E\n" +
+	"\vCallRequest\x12\x1b\n" +
+	"\tplayer_id\x18\x01 \x01(\tR\bplayerId\x12\x19\n" +
+	"\btable_id\x18\x02 \x01(\tR\atableId\"B\n" +
+	"\fCallResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"0\n" +
 	"\x13GetGameStateRequest\x12\x19\n" +
@@ -2894,7 +3010,7 @@ const file_poker_proto_rawDesc = "" +
 	"\x04FLOP\x10\x02\x12\b\n" +
 	"\x04TURN\x10\x03\x12\t\n" +
 	"\x05RIVER\x10\x04\x12\f\n" +
-	"\bSHOWDOWN\x10\x05*\xe2\x02\n" +
+	"\bSHOWDOWN\x10\x05*\x81\x03\n" +
 	"\x10NotificationType\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x11\n" +
 	"\rPLAYER_JOINED\x10\x01\x12\x0f\n" +
@@ -2915,7 +3031,10 @@ const file_poker_proto_rawDesc = "" +
 	"\x0ePLAYER_UNREADY\x10\x0e\x12\x15\n" +
 	"\x11ALL_PLAYERS_READY\x10\x0f\x12\x16\n" +
 	"\x12SMALL_BLIND_POSTED\x10\x10\x12\x14\n" +
-	"\x10BIG_BLIND_POSTED\x10\x11*\xa8\x01\n" +
+	"\x10BIG_BLIND_POSTED\x10\x11\x12\r\n" +
+	"\tCALL_MADE\x10\x12\x12\x0e\n" +
+	"\n" +
+	"CHECK_MADE\x10\x13*\xa8\x01\n" +
 	"\bHandRank\x12\r\n" +
 	"\tHIGH_CARD\x10\x00\x12\b\n" +
 	"\x04PAIR\x10\x01\x12\f\n" +
@@ -2927,10 +3046,11 @@ const file_poker_proto_rawDesc = "" +
 	"FULL_HOUSE\x10\x06\x12\x12\n" +
 	"\x0eFOUR_OF_A_KIND\x10\a\x12\x12\n" +
 	"\x0eSTRAIGHT_FLUSH\x10\b\x12\x0f\n" +
-	"\vROYAL_FLUSH\x10\t2\x81\x04\n" +
+	"\vROYAL_FLUSH\x10\t2\xba\x04\n" +
 	"\fPokerService\x12M\n" +
 	"\x0fStartGameStream\x12 .pokerrpc.StartGameStreamRequest\x1a\x14.pokerrpc.GameUpdate\"\x000\x01\x12@\n" +
 	"\aMakeBet\x12\x18.pokerrpc.MakeBetRequest\x1a\x19.pokerrpc.MakeBetResponse\"\x00\x127\n" +
+	"\x04Call\x12\x15.pokerrpc.CallRequest\x1a\x16.pokerrpc.CallResponse\"\x00\x127\n" +
 	"\x04Fold\x12\x15.pokerrpc.FoldRequest\x1a\x16.pokerrpc.FoldResponse\"\x00\x12:\n" +
 	"\x05Check\x12\x16.pokerrpc.CheckRequest\x1a\x17.pokerrpc.CheckResponse\"\x00\x12O\n" +
 	"\fGetGameState\x12\x1d.pokerrpc.GetGameStateRequest\x1a\x1e.pokerrpc.GetGameStateResponse\"\x00\x12O\n" +
@@ -2966,7 +3086,7 @@ func file_poker_proto_rawDescGZIP() []byte {
 }
 
 var file_poker_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_poker_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
+var file_poker_proto_msgTypes = make([]protoimpl.MessageInfo, 42)
 var file_poker_proto_goTypes = []any{
 	(GamePhase)(0),                         // 0: pokerrpc.GamePhase
 	(NotificationType)(0),                  // 1: pokerrpc.NotificationType
@@ -2979,97 +3099,101 @@ var file_poker_proto_goTypes = []any{
 	(*FoldResponse)(nil),                   // 8: pokerrpc.FoldResponse
 	(*CheckRequest)(nil),                   // 9: pokerrpc.CheckRequest
 	(*CheckResponse)(nil),                  // 10: pokerrpc.CheckResponse
-	(*GetGameStateRequest)(nil),            // 11: pokerrpc.GetGameStateRequest
-	(*GetGameStateResponse)(nil),           // 12: pokerrpc.GetGameStateResponse
-	(*EvaluateHandRequest)(nil),            // 13: pokerrpc.EvaluateHandRequest
-	(*EvaluateHandResponse)(nil),           // 14: pokerrpc.EvaluateHandResponse
-	(*GetWinnersRequest)(nil),              // 15: pokerrpc.GetWinnersRequest
-	(*GetWinnersResponse)(nil),             // 16: pokerrpc.GetWinnersResponse
-	(*Winner)(nil),                         // 17: pokerrpc.Winner
-	(*CreateTableRequest)(nil),             // 18: pokerrpc.CreateTableRequest
-	(*CreateTableResponse)(nil),            // 19: pokerrpc.CreateTableResponse
-	(*JoinTableRequest)(nil),               // 20: pokerrpc.JoinTableRequest
-	(*JoinTableResponse)(nil),              // 21: pokerrpc.JoinTableResponse
-	(*LeaveTableRequest)(nil),              // 22: pokerrpc.LeaveTableRequest
-	(*LeaveTableResponse)(nil),             // 23: pokerrpc.LeaveTableResponse
-	(*GetTablesRequest)(nil),               // 24: pokerrpc.GetTablesRequest
-	(*GetTablesResponse)(nil),              // 25: pokerrpc.GetTablesResponse
-	(*Table)(nil),                          // 26: pokerrpc.Table
-	(*GetBalanceRequest)(nil),              // 27: pokerrpc.GetBalanceRequest
-	(*GetBalanceResponse)(nil),             // 28: pokerrpc.GetBalanceResponse
-	(*UpdateBalanceRequest)(nil),           // 29: pokerrpc.UpdateBalanceRequest
-	(*UpdateBalanceResponse)(nil),          // 30: pokerrpc.UpdateBalanceResponse
-	(*ProcessTipRequest)(nil),              // 31: pokerrpc.ProcessTipRequest
-	(*ProcessTipResponse)(nil),             // 32: pokerrpc.ProcessTipResponse
-	(*StartNotificationStreamRequest)(nil), // 33: pokerrpc.StartNotificationStreamRequest
-	(*Notification)(nil),                   // 34: pokerrpc.Notification
-	(*Player)(nil),                         // 35: pokerrpc.Player
-	(*Card)(nil),                           // 36: pokerrpc.Card
-	(*SetPlayerReadyRequest)(nil),          // 37: pokerrpc.SetPlayerReadyRequest
-	(*SetPlayerReadyResponse)(nil),         // 38: pokerrpc.SetPlayerReadyResponse
-	(*SetPlayerUnreadyRequest)(nil),        // 39: pokerrpc.SetPlayerUnreadyRequest
-	(*SetPlayerUnreadyResponse)(nil),       // 40: pokerrpc.SetPlayerUnreadyResponse
-	(*GetPlayerCurrentTableRequest)(nil),   // 41: pokerrpc.GetPlayerCurrentTableRequest
-	(*GetPlayerCurrentTableResponse)(nil),  // 42: pokerrpc.GetPlayerCurrentTableResponse
+	(*CallRequest)(nil),                    // 11: pokerrpc.CallRequest
+	(*CallResponse)(nil),                   // 12: pokerrpc.CallResponse
+	(*GetGameStateRequest)(nil),            // 13: pokerrpc.GetGameStateRequest
+	(*GetGameStateResponse)(nil),           // 14: pokerrpc.GetGameStateResponse
+	(*EvaluateHandRequest)(nil),            // 15: pokerrpc.EvaluateHandRequest
+	(*EvaluateHandResponse)(nil),           // 16: pokerrpc.EvaluateHandResponse
+	(*GetWinnersRequest)(nil),              // 17: pokerrpc.GetWinnersRequest
+	(*GetWinnersResponse)(nil),             // 18: pokerrpc.GetWinnersResponse
+	(*Winner)(nil),                         // 19: pokerrpc.Winner
+	(*CreateTableRequest)(nil),             // 20: pokerrpc.CreateTableRequest
+	(*CreateTableResponse)(nil),            // 21: pokerrpc.CreateTableResponse
+	(*JoinTableRequest)(nil),               // 22: pokerrpc.JoinTableRequest
+	(*JoinTableResponse)(nil),              // 23: pokerrpc.JoinTableResponse
+	(*LeaveTableRequest)(nil),              // 24: pokerrpc.LeaveTableRequest
+	(*LeaveTableResponse)(nil),             // 25: pokerrpc.LeaveTableResponse
+	(*GetTablesRequest)(nil),               // 26: pokerrpc.GetTablesRequest
+	(*GetTablesResponse)(nil),              // 27: pokerrpc.GetTablesResponse
+	(*Table)(nil),                          // 28: pokerrpc.Table
+	(*GetBalanceRequest)(nil),              // 29: pokerrpc.GetBalanceRequest
+	(*GetBalanceResponse)(nil),             // 30: pokerrpc.GetBalanceResponse
+	(*UpdateBalanceRequest)(nil),           // 31: pokerrpc.UpdateBalanceRequest
+	(*UpdateBalanceResponse)(nil),          // 32: pokerrpc.UpdateBalanceResponse
+	(*ProcessTipRequest)(nil),              // 33: pokerrpc.ProcessTipRequest
+	(*ProcessTipResponse)(nil),             // 34: pokerrpc.ProcessTipResponse
+	(*StartNotificationStreamRequest)(nil), // 35: pokerrpc.StartNotificationStreamRequest
+	(*Notification)(nil),                   // 36: pokerrpc.Notification
+	(*Player)(nil),                         // 37: pokerrpc.Player
+	(*Card)(nil),                           // 38: pokerrpc.Card
+	(*SetPlayerReadyRequest)(nil),          // 39: pokerrpc.SetPlayerReadyRequest
+	(*SetPlayerReadyResponse)(nil),         // 40: pokerrpc.SetPlayerReadyResponse
+	(*SetPlayerUnreadyRequest)(nil),        // 41: pokerrpc.SetPlayerUnreadyRequest
+	(*SetPlayerUnreadyResponse)(nil),       // 42: pokerrpc.SetPlayerUnreadyResponse
+	(*GetPlayerCurrentTableRequest)(nil),   // 43: pokerrpc.GetPlayerCurrentTableRequest
+	(*GetPlayerCurrentTableResponse)(nil),  // 44: pokerrpc.GetPlayerCurrentTableResponse
 }
 var file_poker_proto_depIdxs = []int32{
 	0,  // 0: pokerrpc.GameUpdate.phase:type_name -> pokerrpc.GamePhase
-	35, // 1: pokerrpc.GameUpdate.players:type_name -> pokerrpc.Player
-	36, // 2: pokerrpc.GameUpdate.community_cards:type_name -> pokerrpc.Card
+	37, // 1: pokerrpc.GameUpdate.players:type_name -> pokerrpc.Player
+	38, // 2: pokerrpc.GameUpdate.community_cards:type_name -> pokerrpc.Card
 	4,  // 3: pokerrpc.GetGameStateResponse.game_state:type_name -> pokerrpc.GameUpdate
-	36, // 4: pokerrpc.EvaluateHandRequest.cards:type_name -> pokerrpc.Card
+	38, // 4: pokerrpc.EvaluateHandRequest.cards:type_name -> pokerrpc.Card
 	2,  // 5: pokerrpc.EvaluateHandResponse.rank:type_name -> pokerrpc.HandRank
-	36, // 6: pokerrpc.EvaluateHandResponse.best_hand:type_name -> pokerrpc.Card
-	17, // 7: pokerrpc.GetWinnersResponse.winners:type_name -> pokerrpc.Winner
+	38, // 6: pokerrpc.EvaluateHandResponse.best_hand:type_name -> pokerrpc.Card
+	19, // 7: pokerrpc.GetWinnersResponse.winners:type_name -> pokerrpc.Winner
 	2,  // 8: pokerrpc.Winner.hand_rank:type_name -> pokerrpc.HandRank
-	36, // 9: pokerrpc.Winner.best_hand:type_name -> pokerrpc.Card
-	26, // 10: pokerrpc.GetTablesResponse.tables:type_name -> pokerrpc.Table
-	35, // 11: pokerrpc.Table.players:type_name -> pokerrpc.Player
+	38, // 9: pokerrpc.Winner.best_hand:type_name -> pokerrpc.Card
+	28, // 10: pokerrpc.GetTablesResponse.tables:type_name -> pokerrpc.Table
+	37, // 11: pokerrpc.Table.players:type_name -> pokerrpc.Player
 	0,  // 12: pokerrpc.Table.phase:type_name -> pokerrpc.GamePhase
 	1,  // 13: pokerrpc.Notification.type:type_name -> pokerrpc.NotificationType
-	36, // 14: pokerrpc.Notification.cards:type_name -> pokerrpc.Card
+	38, // 14: pokerrpc.Notification.cards:type_name -> pokerrpc.Card
 	2,  // 15: pokerrpc.Notification.hand_rank:type_name -> pokerrpc.HandRank
-	26, // 16: pokerrpc.Notification.table:type_name -> pokerrpc.Table
-	17, // 17: pokerrpc.Notification.winners:type_name -> pokerrpc.Winner
-	36, // 18: pokerrpc.Player.hand:type_name -> pokerrpc.Card
+	28, // 16: pokerrpc.Notification.table:type_name -> pokerrpc.Table
+	19, // 17: pokerrpc.Notification.winners:type_name -> pokerrpc.Winner
+	38, // 18: pokerrpc.Player.hand:type_name -> pokerrpc.Card
 	3,  // 19: pokerrpc.PokerService.StartGameStream:input_type -> pokerrpc.StartGameStreamRequest
 	5,  // 20: pokerrpc.PokerService.MakeBet:input_type -> pokerrpc.MakeBetRequest
-	7,  // 21: pokerrpc.PokerService.Fold:input_type -> pokerrpc.FoldRequest
-	9,  // 22: pokerrpc.PokerService.Check:input_type -> pokerrpc.CheckRequest
-	11, // 23: pokerrpc.PokerService.GetGameState:input_type -> pokerrpc.GetGameStateRequest
-	13, // 24: pokerrpc.PokerService.EvaluateHand:input_type -> pokerrpc.EvaluateHandRequest
-	15, // 25: pokerrpc.PokerService.GetWinners:input_type -> pokerrpc.GetWinnersRequest
-	18, // 26: pokerrpc.LobbyService.CreateTable:input_type -> pokerrpc.CreateTableRequest
-	20, // 27: pokerrpc.LobbyService.JoinTable:input_type -> pokerrpc.JoinTableRequest
-	22, // 28: pokerrpc.LobbyService.LeaveTable:input_type -> pokerrpc.LeaveTableRequest
-	24, // 29: pokerrpc.LobbyService.GetTables:input_type -> pokerrpc.GetTablesRequest
-	41, // 30: pokerrpc.LobbyService.GetPlayerCurrentTable:input_type -> pokerrpc.GetPlayerCurrentTableRequest
-	27, // 31: pokerrpc.LobbyService.GetBalance:input_type -> pokerrpc.GetBalanceRequest
-	29, // 32: pokerrpc.LobbyService.UpdateBalance:input_type -> pokerrpc.UpdateBalanceRequest
-	31, // 33: pokerrpc.LobbyService.ProcessTip:input_type -> pokerrpc.ProcessTipRequest
-	37, // 34: pokerrpc.LobbyService.SetPlayerReady:input_type -> pokerrpc.SetPlayerReadyRequest
-	39, // 35: pokerrpc.LobbyService.SetPlayerUnready:input_type -> pokerrpc.SetPlayerUnreadyRequest
-	33, // 36: pokerrpc.LobbyService.StartNotificationStream:input_type -> pokerrpc.StartNotificationStreamRequest
-	4,  // 37: pokerrpc.PokerService.StartGameStream:output_type -> pokerrpc.GameUpdate
-	6,  // 38: pokerrpc.PokerService.MakeBet:output_type -> pokerrpc.MakeBetResponse
-	8,  // 39: pokerrpc.PokerService.Fold:output_type -> pokerrpc.FoldResponse
-	10, // 40: pokerrpc.PokerService.Check:output_type -> pokerrpc.CheckResponse
-	12, // 41: pokerrpc.PokerService.GetGameState:output_type -> pokerrpc.GetGameStateResponse
-	14, // 42: pokerrpc.PokerService.EvaluateHand:output_type -> pokerrpc.EvaluateHandResponse
-	16, // 43: pokerrpc.PokerService.GetWinners:output_type -> pokerrpc.GetWinnersResponse
-	19, // 44: pokerrpc.LobbyService.CreateTable:output_type -> pokerrpc.CreateTableResponse
-	21, // 45: pokerrpc.LobbyService.JoinTable:output_type -> pokerrpc.JoinTableResponse
-	23, // 46: pokerrpc.LobbyService.LeaveTable:output_type -> pokerrpc.LeaveTableResponse
-	25, // 47: pokerrpc.LobbyService.GetTables:output_type -> pokerrpc.GetTablesResponse
-	42, // 48: pokerrpc.LobbyService.GetPlayerCurrentTable:output_type -> pokerrpc.GetPlayerCurrentTableResponse
-	28, // 49: pokerrpc.LobbyService.GetBalance:output_type -> pokerrpc.GetBalanceResponse
-	30, // 50: pokerrpc.LobbyService.UpdateBalance:output_type -> pokerrpc.UpdateBalanceResponse
-	32, // 51: pokerrpc.LobbyService.ProcessTip:output_type -> pokerrpc.ProcessTipResponse
-	38, // 52: pokerrpc.LobbyService.SetPlayerReady:output_type -> pokerrpc.SetPlayerReadyResponse
-	40, // 53: pokerrpc.LobbyService.SetPlayerUnready:output_type -> pokerrpc.SetPlayerUnreadyResponse
-	34, // 54: pokerrpc.LobbyService.StartNotificationStream:output_type -> pokerrpc.Notification
-	37, // [37:55] is the sub-list for method output_type
-	19, // [19:37] is the sub-list for method input_type
+	11, // 21: pokerrpc.PokerService.Call:input_type -> pokerrpc.CallRequest
+	7,  // 22: pokerrpc.PokerService.Fold:input_type -> pokerrpc.FoldRequest
+	9,  // 23: pokerrpc.PokerService.Check:input_type -> pokerrpc.CheckRequest
+	13, // 24: pokerrpc.PokerService.GetGameState:input_type -> pokerrpc.GetGameStateRequest
+	15, // 25: pokerrpc.PokerService.EvaluateHand:input_type -> pokerrpc.EvaluateHandRequest
+	17, // 26: pokerrpc.PokerService.GetWinners:input_type -> pokerrpc.GetWinnersRequest
+	20, // 27: pokerrpc.LobbyService.CreateTable:input_type -> pokerrpc.CreateTableRequest
+	22, // 28: pokerrpc.LobbyService.JoinTable:input_type -> pokerrpc.JoinTableRequest
+	24, // 29: pokerrpc.LobbyService.LeaveTable:input_type -> pokerrpc.LeaveTableRequest
+	26, // 30: pokerrpc.LobbyService.GetTables:input_type -> pokerrpc.GetTablesRequest
+	43, // 31: pokerrpc.LobbyService.GetPlayerCurrentTable:input_type -> pokerrpc.GetPlayerCurrentTableRequest
+	29, // 32: pokerrpc.LobbyService.GetBalance:input_type -> pokerrpc.GetBalanceRequest
+	31, // 33: pokerrpc.LobbyService.UpdateBalance:input_type -> pokerrpc.UpdateBalanceRequest
+	33, // 34: pokerrpc.LobbyService.ProcessTip:input_type -> pokerrpc.ProcessTipRequest
+	39, // 35: pokerrpc.LobbyService.SetPlayerReady:input_type -> pokerrpc.SetPlayerReadyRequest
+	41, // 36: pokerrpc.LobbyService.SetPlayerUnready:input_type -> pokerrpc.SetPlayerUnreadyRequest
+	35, // 37: pokerrpc.LobbyService.StartNotificationStream:input_type -> pokerrpc.StartNotificationStreamRequest
+	4,  // 38: pokerrpc.PokerService.StartGameStream:output_type -> pokerrpc.GameUpdate
+	6,  // 39: pokerrpc.PokerService.MakeBet:output_type -> pokerrpc.MakeBetResponse
+	12, // 40: pokerrpc.PokerService.Call:output_type -> pokerrpc.CallResponse
+	8,  // 41: pokerrpc.PokerService.Fold:output_type -> pokerrpc.FoldResponse
+	10, // 42: pokerrpc.PokerService.Check:output_type -> pokerrpc.CheckResponse
+	14, // 43: pokerrpc.PokerService.GetGameState:output_type -> pokerrpc.GetGameStateResponse
+	16, // 44: pokerrpc.PokerService.EvaluateHand:output_type -> pokerrpc.EvaluateHandResponse
+	18, // 45: pokerrpc.PokerService.GetWinners:output_type -> pokerrpc.GetWinnersResponse
+	21, // 46: pokerrpc.LobbyService.CreateTable:output_type -> pokerrpc.CreateTableResponse
+	23, // 47: pokerrpc.LobbyService.JoinTable:output_type -> pokerrpc.JoinTableResponse
+	25, // 48: pokerrpc.LobbyService.LeaveTable:output_type -> pokerrpc.LeaveTableResponse
+	27, // 49: pokerrpc.LobbyService.GetTables:output_type -> pokerrpc.GetTablesResponse
+	44, // 50: pokerrpc.LobbyService.GetPlayerCurrentTable:output_type -> pokerrpc.GetPlayerCurrentTableResponse
+	30, // 51: pokerrpc.LobbyService.GetBalance:output_type -> pokerrpc.GetBalanceResponse
+	32, // 52: pokerrpc.LobbyService.UpdateBalance:output_type -> pokerrpc.UpdateBalanceResponse
+	34, // 53: pokerrpc.LobbyService.ProcessTip:output_type -> pokerrpc.ProcessTipResponse
+	40, // 54: pokerrpc.LobbyService.SetPlayerReady:output_type -> pokerrpc.SetPlayerReadyResponse
+	42, // 55: pokerrpc.LobbyService.SetPlayerUnready:output_type -> pokerrpc.SetPlayerUnreadyResponse
+	36, // 56: pokerrpc.LobbyService.StartNotificationStream:output_type -> pokerrpc.Notification
+	38, // [38:57] is the sub-list for method output_type
+	19, // [19:38] is the sub-list for method input_type
 	19, // [19:19] is the sub-list for extension type_name
 	19, // [19:19] is the sub-list for extension extendee
 	0,  // [0:19] is the sub-list for field type_name
@@ -3086,7 +3210,7 @@ func file_poker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_poker_proto_rawDesc), len(file_poker_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   40,
+			NumMessages:   42,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

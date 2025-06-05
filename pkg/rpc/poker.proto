@@ -11,6 +11,7 @@ service PokerService {
   
   // Player actions
   rpc MakeBet(MakeBetRequest) returns (MakeBetResponse) {}
+  rpc Call(CallRequest) returns (CallResponse) {}
   rpc Fold(FoldRequest) returns (FoldResponse) {}
   rpc Check(CheckRequest) returns (CheckResponse) {}
   
@@ -73,6 +74,8 @@ enum NotificationType {
   ALL_PLAYERS_READY = 15;
   SMALL_BLIND_POSTED = 16;
   BIG_BLIND_POSTED = 17;
+  CALL_MADE = 18;
+  CHECK_MADE = 19;
 }
 
 enum HandRank {
@@ -137,6 +140,16 @@ message CheckRequest {
 }
 
 message CheckResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message CallRequest {
+  string player_id = 1;
+  string table_id = 2;
+}
+
+message CallResponse {
   bool success = 1;
   string message = 2;
 }

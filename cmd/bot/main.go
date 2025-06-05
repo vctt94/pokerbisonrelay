@@ -95,7 +95,7 @@ func realMain() error {
 	defer db.Close()
 
 	// Initialize and start the gRPC poker server
-	grpcServer, grpcLis, err := bot.SetupGRPCServer(cfg.DataDir, cfg.CertFile, cfg.KeyFile, cfg.ServerAddress, db)
+	grpcServer, grpcLis, err := bot.SetupGRPCServer(cfg.DataDir, cfg.CertFile, cfg.KeyFile, cfg.ServerAddress, db, botInstance.LogBackend)
 	if err != nil {
 		return fmt.Errorf("failed to setup gRPC server: %v", err)
 	}

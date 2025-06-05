@@ -80,6 +80,9 @@ type PokerUI struct {
 	playersRequired int32
 	playersJoined   int32
 
+	// Table configuration tracking
+	currentTableBigBlind int64
+
 	// For betting input
 	betAmount string
 
@@ -135,6 +138,23 @@ func NewPokerUI(ctx context.Context, client *client.PokerClient) *PokerUI {
 
 func (m *PokerUI) Init() tea.Cmd {
 	return m.dispatcher.getBalanceCmd()
+}
+
+// GetCurrentTableBigBlind returns the big blind value for the current table
+func (m *PokerUI) GetCurrentTableBigBlind() int64 {
+	// Fallback: try to find current table in tables list
+	currentTableID := m.pc.GetCurrentTableID()
+	if currentTableID != "" {
+		for _, table := range m.tables {
+			if table.Id == currentTableID {
+				m.currentTableBigBlind = table.BigBlind
+				return table.BigBlind
+			}
+		}
+	}
+
+	// Default fallback (should not happen in normal operation)
+	return 20
 }
 
 func (m *PokerUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -237,6 +257,10 @@ func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cm
 		if notification.PlayerId == m.clientID {
 			m.state = stateGameLobby
 			m.message = fmt.Sprintf("Joined table %s", notification.TableId)
+			// Store the big blind value if table data is available
+			if notification.Table != nil {
+				m.currentTableBigBlind = notification.Table.BigBlind
+			}
 			m.updateMenuOptionsForGameState()
 			return nil
 		}
@@ -252,6 +276,10 @@ func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cm
 		if notification.PlayerId == m.clientID {
 			m.state = stateGameLobby
 			m.message = fmt.Sprintf("Created table %s", notification.TableId)
+			// Store the big blind value if table data is available
+			if notification.Table != nil {
+				m.currentTableBigBlind = notification.Table.BigBlind
+			}
 			m.updateMenuOptionsForGameState()
 			return nil
 		}
@@ -266,12 +294,10 @@ func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cm
 
 	case pokerrpc.NotificationType_SMALL_BLIND_POSTED:
 		m.message = fmt.Sprintf("Small blind posted: %d chips by %s", notification.Amount, notification.PlayerId)
-		// Game updates are now received via stream
 		return nil
 
 	case pokerrpc.NotificationType_BIG_BLIND_POSTED:
 		m.message = fmt.Sprintf("Big blind posted: %d chips by %s", notification.Amount, notification.PlayerId)
-		// Game updates are now received via stream
 		return nil
 
 	case pokerrpc.NotificationType_PLAYER_READY:

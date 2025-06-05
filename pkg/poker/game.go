@@ -12,6 +12,8 @@ import (
 type GameConfig struct {
 	NumPlayers    int
 	StartingChips int64 // Fixed number of chips each player starts with
+	SmallBlind    int64 // Small blind amount
+	BigBlind      int64 // Big blind amount
 	Seed          int64 // Optional seed for deterministic games
 }
 
@@ -31,6 +33,9 @@ type Game struct {
 	currentBet int64
 	round      int
 	betRound   int // Tracks which betting round (pre-flop, flop, turn, river)
+
+	// Configuration
+	config GameConfig
 
 	// For demonstration purposes
 	errorSimulation bool
@@ -69,6 +74,7 @@ func NewGame(cfg GameConfig) *Game {
 		currentBet:      0,
 		round:           0,
 		betRound:        0,
+		config:          cfg,
 		errorSimulation: false,
 		phase:           pokerrpc.GamePhase_WAITING,
 	}
@@ -96,7 +102,7 @@ func statePreDeal(g *Game) stateFn {
 
 	// Rotate dealer position
 	g.dealer = (g.dealer + 1) % len(g.players)
-	g.currentPlayer = (g.dealer + 1) % len(g.players)
+	// Don't set currentPlayer here - it will be set correctly in stateBlinds
 
 	// Set phase to PRE_FLOP (game about to start)
 	g.phase = pokerrpc.GamePhase_PRE_FLOP
@@ -106,7 +112,67 @@ func statePreDeal(g *Game) stateFn {
 
 // stateDeal deals initial cards to players
 func stateDeal(g *Game) stateFn {
-	// Move to first betting round (pre-flop)
+	// Note: Card dealing is handled by the table layer to maintain
+	// consistency with existing game flow. This state is mainly for
+	// state machine progression.
+
+	// After dealing (handled externally), move to blinds state
+	return stateBlinds
+}
+
+// stateBlinds handles posting small and big blinds and sets the current player
+func stateBlinds(g *Game) stateFn {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	numPlayers := len(g.players)
+	if numPlayers < 2 {
+		return stateEnd
+	}
+
+	// Calculate blind positions
+	smallBlindPos := (g.dealer + 1) % numPlayers
+	bigBlindPos := (g.dealer + 2) % numPlayers
+
+	// For heads-up (2 players), dealer posts small blind
+	if numPlayers == 2 {
+		smallBlindPos = g.dealer
+		bigBlindPos = (g.dealer + 1) % numPlayers
+	}
+
+	// Post small blind
+	if g.players[smallBlindPos] != nil {
+		smallBlindAmount := g.config.SmallBlind
+		if smallBlindAmount > g.players[smallBlindPos].Balance {
+			return stateEnd // Not enough balance for small blind
+		}
+		g.players[smallBlindPos].Balance -= smallBlindAmount
+		g.players[smallBlindPos].HasBet = smallBlindAmount
+		g.potManager.AddBet(smallBlindPos, smallBlindAmount)
+	}
+
+	// Post big blind
+	if g.players[bigBlindPos] != nil {
+		bigBlindAmount := g.config.BigBlind
+		if bigBlindAmount > g.players[bigBlindPos].Balance {
+			return stateEnd // Not enough balance for big blind
+		}
+		g.players[bigBlindPos].Balance -= bigBlindAmount
+		g.players[bigBlindPos].HasBet = bigBlindAmount
+		g.potManager.AddBet(bigBlindPos, bigBlindAmount)
+		g.currentBet = bigBlindAmount // Set current bet to big blind amount
+	}
+
+	// Set first player to act (after big blind for pre-flop)
+	if numPlayers == 2 {
+		// In heads-up, small blind acts first pre-flop
+		g.currentPlayer = smallBlindPos
+	} else {
+		// With 3+ players, first to act is after big blind
+		g.currentPlayer = (bigBlindPos + 1) % numPlayers
+	}
+
+	// Move to pre-flop betting
 	return stateBet
 }
 
@@ -318,5 +384,22 @@ func (g *Game) GetCommunityCards() []Card {
 func (g *Game) GetPlayers() []*Player {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
+	return g.players
+}
+
+// GetCurrentPlayer returns the index of the current player to act
+func (g *Game) GetCurrentPlayer() int {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.currentPlayer
+}
+
+// GetCurrentPlayerObject returns the current player object
+func (g *Game) GetCurrentPlayerObject() *Player {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if g.currentPlayer >= 0 && g.currentPlayer < len(g.players) {
+		return g.players[g.currentPlayer]
+	}
 	return nil
 }
