@@ -26,8 +26,8 @@ func TestEvaluateHand(t *testing.T) {
 				{suit: Clubs, value: Three},
 				{suit: Diamonds, value: Four},
 			},
-			wantRank:  RoyalFlush,
-			wantValue: 14, // Ace high
+			wantRank:  StraightFlush,
+			wantValue: 1,
 		},
 		{
 			name: "Straight Flush",
@@ -43,7 +43,7 @@ func TestEvaluateHand(t *testing.T) {
 				{suit: Diamonds, value: Three},
 			},
 			wantRank:  StraightFlush,
-			wantValue: 9, // Nine high
+			wantValue: 6,
 		},
 		{
 			name: "Four of a Kind",
@@ -59,7 +59,7 @@ func TestEvaluateHand(t *testing.T) {
 				{suit: Spades, value: Jack},
 			},
 			wantRank:  FourOfAKind,
-			wantValue: 14, // Four Aces
+			wantValue: 11,
 		},
 		{
 			name: "Full House",
@@ -75,7 +75,7 @@ func TestEvaluateHand(t *testing.T) {
 				{suit: Clubs, value: Three},
 			},
 			wantRank:  FullHouse,
-			wantValue: 13, // Kings full of Nines
+			wantValue: 183,
 		},
 		{
 			name: "Flush",
@@ -91,7 +91,7 @@ func TestEvaluateHand(t *testing.T) {
 				{suit: Diamonds, value: Queen},
 			},
 			wantRank:  Flush,
-			wantValue: 14, // Ace-high flush
+			wantValue: 718,
 		},
 		{
 			name: "Straight",
@@ -107,7 +107,7 @@ func TestEvaluateHand(t *testing.T) {
 				{suit: Clubs, value: Three},
 			},
 			wantRank:  Straight,
-			wantValue: 9, // Nine-high straight
+			wantValue: 1605,
 		},
 		{
 			name: "Three of a Kind",
@@ -123,7 +123,7 @@ func TestEvaluateHand(t *testing.T) {
 				{suit: Clubs, value: Three},
 			},
 			wantRank:  ThreeOfAKind,
-			wantValue: 12, // Three Queens
+			wantValue: 1798,
 		},
 		{
 			name: "Two Pair",
@@ -139,7 +139,7 @@ func TestEvaluateHand(t *testing.T) {
 				{suit: Clubs, value: Three},
 			},
 			wantRank:  TwoPair,
-			wantValue: 14, // Aces and Kings
+			wantValue: 2475,
 		},
 		{
 			name: "Pair",
@@ -155,7 +155,7 @@ func TestEvaluateHand(t *testing.T) {
 				{suit: Clubs, value: Three},
 			},
 			wantRank:  Pair,
-			wantValue: 11, // Pair of Jacks
+			wantValue: 3992,
 		},
 		{
 			name: "High Card",
@@ -171,7 +171,7 @@ func TestEvaluateHand(t *testing.T) {
 				{suit: Clubs, value: Two},
 			},
 			wantRank:  HighCard,
-			wantValue: 14, // Ace high
+			wantValue: 6505,
 		},
 	}
 
@@ -197,6 +197,7 @@ func TestEvaluateHand(t *testing.T) {
 
 func TestCompareHands(t *testing.T) {
 	// Test cases for comparing different hands
+	// NOTE: In chehsunliu/poker, lower rank values are better
 	tests := []struct {
 		name       string
 		handA      HandValue
@@ -206,64 +207,60 @@ func TestCompareHands(t *testing.T) {
 		{
 			name: "Royal Flush beats Straight Flush",
 			handA: HandValue{
-				Rank:      RoyalFlush,
-				RankValue: 14,
+				Rank:      StraightFlush, // chehsunliu classifies royal flush as straight flush
+				RankValue: 1,             // royal flush has rank 1 (best)
 			},
 			handB: HandValue{
 				Rank:      StraightFlush,
-				RankValue: 13,
+				RankValue: 6, // 9-high straight flush has higher rank value (worse)
 			},
-			wantResult: 1, // handA > handB
+			wantResult: 1, // handA > handB (lower rank value is better)
 		},
 		{
 			name: "Four of a Kind beats Full House",
 			handA: HandValue{
 				Rank:      FourOfAKind,
-				RankValue: 10,
+				RankValue: 11, // Four Aces
 			},
 			handB: HandValue{
 				Rank:      FullHouse,
-				RankValue: 14,
+				RankValue: 183, // Kings full of Nines
 			},
-			wantResult: 1, // handA > handB
+			wantResult: 1, // handA > handB (lower rank value is better)
 		},
 		{
 			name: "Higher Four of a Kind beats lower Four of a Kind",
 			handA: HandValue{
 				Rank:      FourOfAKind,
-				RankValue: 10,
+				RankValue: 11, // Four Aces (rank 11)
 			},
 			handB: HandValue{
 				Rank:      FourOfAKind,
-				RankValue: 9,
+				RankValue: 25, // Four Kings (higher rank value = worse)
 			},
-			wantResult: 1, // handA > handB
+			wantResult: 1, // handA > handB (lower rank value is better)
 		},
 		{
 			name: "Same rank with higher kicker wins",
 			handA: HandValue{
 				Rank:      Pair,
-				RankValue: 14,
-				Kickers:   []int{13, 12, 10},
+				RankValue: 3990, // Pair with better kickers
 			},
 			handB: HandValue{
 				Rank:      Pair,
-				RankValue: 14,
-				Kickers:   []int{13, 12, 9},
+				RankValue: 3992, // Pair with worse kickers (higher rank value)
 			},
-			wantResult: 1, // handA > handB
+			wantResult: 1, // handA > handB (lower rank value is better)
 		},
 		{
 			name: "Exact same hand is a tie",
 			handA: HandValue{
 				Rank:      FullHouse,
-				RankValue: 10,
-				Kickers:   []int{9},
+				RankValue: 183,
 			},
 			handB: HandValue{
 				Rank:      FullHouse,
-				RankValue: 10,
-				Kickers:   []int{9},
+				RankValue: 183,
 			},
 			wantResult: 0, // tie
 		},
@@ -282,38 +279,40 @@ func TestCompareHands(t *testing.T) {
 
 func TestHandDescriptions(t *testing.T) {
 	// Test that hand descriptions are correctly generated
+	// NOTE: chehsunliu/poker provides its own hand descriptions
 	tests := []struct {
 		name         string
-		handValue    HandValue
+		holeCards    []Card
+		community    []Card
 		wantContains string
 	}{
 		{
 			name: "Royal Flush description",
-			handValue: HandValue{
-				Rank:      RoyalFlush,
-				RankValue: 14,
-				BestHand: []Card{
-					{suit: Hearts, value: Ace},
-					{suit: Hearts, value: King},
-					{suit: Hearts, value: Queen},
-					{suit: Hearts, value: Jack},
-					{suit: Hearts, value: Ten},
-				},
+			holeCards: []Card{
+				{suit: Hearts, value: Ace},
+				{suit: Hearts, value: King},
 			},
-			wantContains: "Royal Flush",
+			community: []Card{
+				{suit: Hearts, value: Queen},
+				{suit: Hearts, value: Jack},
+				{suit: Hearts, value: Ten},
+				{suit: Clubs, value: Three},
+				{suit: Diamonds, value: Four},
+			},
+			wantContains: "Straight Flush", // chehsunliu describes royal flush as straight flush
 		},
 		{
 			name: "Four of a Kind description",
-			handValue: HandValue{
-				Rank:      FourOfAKind,
-				RankValue: 8,
-				BestHand: []Card{
-					{suit: Hearts, value: Eight},
-					{suit: Spades, value: Eight},
-					{suit: Diamonds, value: Eight},
-					{suit: Clubs, value: Eight},
-					{suit: Hearts, value: Ace},
-				},
+			holeCards: []Card{
+				{suit: Hearts, value: Eight},
+				{suit: Spades, value: Eight},
+			},
+			community: []Card{
+				{suit: Diamonds, value: Eight},
+				{suit: Clubs, value: Eight},
+				{suit: Hearts, value: Ace},
+				{suit: Clubs, value: King},
+				{suit: Spades, value: Queen},
 			},
 			wantContains: "Four of a Kind",
 		},
@@ -321,15 +320,33 @@ func TestHandDescriptions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			description := GetHandDescription(tt.handValue)
+			handValue := EvaluateHand(tt.holeCards, tt.community)
+			description := GetHandDescription(handValue)
 
 			if description == "" {
 				t.Error("GetHandDescription() returned empty string")
+				return
 			}
 
-			if description != tt.wantContains && description[:len(tt.wantContains)] != tt.wantContains {
+			if !contains(description, tt.wantContains) {
 				t.Errorf("GetHandDescription() = %v, want to contain %v", description, tt.wantContains)
 			}
 		})
 	}
+}
+
+// Helper function to check if a string contains a substring (case-insensitive)
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr ||
+		(len(s) > len(substr) && s[:len(substr)] == substr) ||
+		findSubstring(s, substr))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

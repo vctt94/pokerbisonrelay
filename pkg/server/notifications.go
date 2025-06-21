@@ -190,3 +190,18 @@ func (s *Server) BroadcastGameStateUpdate(tableID string) {
 		}(playerID, stream)
 	}
 }
+
+// SendShowdownResult sends SHOWDOWN_RESULT notification to all players at the table
+func (s *Server) SendShowdownResult(tableID string, winners []*pokerrpc.Winner, pot int64) {
+	notification := &pokerrpc.Notification{
+		Type:    pokerrpc.NotificationType_SHOWDOWN_RESULT,
+		Message: fmt.Sprintf("Showdown complete! Pot: %d chips", pot),
+		TableId: tableID,
+		Winners: winners,
+		Amount:  pot,
+	}
+
+	go func() {
+		s.broadcastNotificationToTable(tableID, notification)
+	}()
+}

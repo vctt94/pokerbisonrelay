@@ -1,6 +1,7 @@
 package poker
 
 import (
+	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -45,6 +46,9 @@ type Game struct {
 
 	// current game phase (pre-flop, flop, turn, river, showdown)
 	phase pokerrpc.GamePhase
+
+	// Winner tracking - set after showdown is complete
+	winners []string
 }
 
 // stateFn is a function that takes a Game and returns the next state function
@@ -64,8 +68,14 @@ func NewGame(cfg GameConfig) *Game {
 		rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
 
+	// Create actual Player objects for testing/standalone use
+	players := make([]*Player, cfg.NumPlayers)
+	for i := 0; i < cfg.NumPlayers; i++ {
+		players[i] = NewPlayer(fmt.Sprintf("player_%d", i), fmt.Sprintf("Player %d", i), cfg.StartingChips)
+	}
+
 	return &Game{
-		players:         make([]*Player, cfg.NumPlayers), // Will be populated by table with shared Player objects
+		players:         players,
 		currentPlayer:   0,
 		dealer:          0,
 		deck:            NewDeck(rng),
@@ -264,6 +274,73 @@ func stateShowdown(g *Game) stateFn {
 	// Update phase to SHOWDOWN
 	g.phase = pokerrpc.GamePhase_SHOWDOWN
 
+	// Count active (non-folded) players
+	activePlayers := make([]*Player, 0)
+	for _, player := range g.players {
+		if !player.HasFolded {
+			activePlayers = append(activePlayers, player)
+		}
+	}
+
+	// Track winners before distributing pots
+	g.winners = make([]string, 0)
+
+	// If only one player remains, they win automatically without hand evaluation
+	if len(activePlayers) <= 1 {
+		// Award the pot to the remaining player (if any)
+		if len(activePlayers) == 1 {
+			winnings := g.GetPot()
+			activePlayers[0].Balance += winnings
+			g.winners = append(g.winners, activePlayers[0].ID)
+		}
+	} else {
+		// Multiple players remain - need proper hand evaluation
+		// Only evaluate hands if we have enough cards (player hand + community cards >= 5)
+		validEvaluations := true
+
+		for _, player := range activePlayers {
+			totalCards := len(player.Hand) + len(g.communityCards)
+			if totalCards < 5 {
+				validEvaluations = false
+				break
+			}
+		}
+
+		if validEvaluations {
+			// Evaluate each active player's hand
+			for _, player := range activePlayers {
+				handValue := EvaluateHand(player.Hand, g.communityCards)
+				player.HandValue = &handValue
+				player.HandDescription = GetHandDescription(handValue)
+			}
+
+			// Check for any uncalled bets and return them
+			g.potManager.ReturnUncalledBet(g.players)
+
+			// Create side pots if needed
+			g.potManager.CreateSidePots(g.players)
+
+			// Distribute pots to winners
+			g.potManager.DistributePots(g.players)
+
+			// Track all winners who won money
+			for _, player := range activePlayers {
+				// Check if player received winnings by comparing balance before and after
+				if player.Balance > 0 {
+					g.winners = append(g.winners, player.ID)
+				}
+			}
+		} else {
+			// Can't properly evaluate hands - award pot to first active player
+			// This is a fallback for incomplete games
+			if len(activePlayers) > 0 {
+				winnings := g.GetPot()
+				activePlayers[0].Balance += winnings
+				g.winners = append(g.winners, activePlayers[0].ID)
+			}
+		}
+	}
+
 	// Return to pre-deal to start a new hand
 	return statePreDeal
 }
@@ -285,6 +362,21 @@ func (g *Game) GetPot() int64 {
 func (g *Game) DealCards() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+
+	// Deal 2 cards to each player
+	for _, player := range g.players {
+		if player != nil {
+			player.Hand = player.Hand[:0] // Clear any existing cards
+			for i := 0; i < 2; i++ {
+				card, ok := g.deck.Draw()
+				if !ok {
+					return fmt.Errorf("not enough cards in deck")
+				}
+				player.Hand = append(player.Hand, card)
+			}
+		}
+	}
+
 	g.currentBet = 0
 	return nil
 }
@@ -355,14 +447,6 @@ func (g *Game) GetCurrentBet() int64 {
 	return g.currentBet
 }
 
-// AddToPot adds the specified amount to the pot
-func (g *Game) AddToPot(amount int64) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	g.potManager.AddBet(g.currentPlayer, amount)
-}
-
 // AddToPotForPlayer adds the specified amount to the pot for a specific player
 func (g *Game) AddToPotForPlayer(playerIndex int, amount int64) {
 	g.mu.Lock()
@@ -402,4 +486,11 @@ func (g *Game) GetCurrentPlayerObject() *Player {
 		return g.players[g.currentPlayer]
 	}
 	return nil
+}
+
+// GetWinners returns the winners of the game
+func (g *Game) GetWinners() []string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.winners
 }

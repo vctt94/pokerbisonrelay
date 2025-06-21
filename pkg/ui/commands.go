@@ -179,7 +179,16 @@ func (d *CommandDispatcher) foldCmd() tea.Cmd {
 
 func (d *CommandDispatcher) callCmd() tea.Cmd {
 	return func() tea.Msg {
-		err := d.pc.Call(d.ctx, 0)
+		// Use the proper Call RPC method directly
+		currentTableID := d.pc.GetCurrentTableID()
+		if currentTableID == "" {
+			return errorMsg(fmt.Errorf("not at any table"))
+		}
+
+		_, err := d.pc.PokerService.Call(d.ctx, &pokerrpc.CallRequest{
+			PlayerId: d.clientID,
+			TableId:  currentTableID,
+		})
 		if err != nil {
 			return errorMsg(err)
 		}
@@ -188,7 +197,7 @@ func (d *CommandDispatcher) callCmd() tea.Cmd {
 		return notificationMsg(&pokerrpc.Notification{
 			Type:     pokerrpc.NotificationType_BET_MADE,
 			PlayerId: d.clientID,
-			TableId:  d.pc.GetCurrentTableID(),
+			TableId:  currentTableID,
 			Message:  "Player called",
 		})
 	}

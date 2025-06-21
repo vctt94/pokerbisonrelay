@@ -54,6 +54,9 @@ type PokerUI struct {
 	playersRequired int32
 	playersJoined   int32
 
+	// Showdown results
+	winners []*pokerrpc.Winner
+
 	// Table configuration tracking
 	currentTableBigBlind int64
 
@@ -415,7 +418,30 @@ func (m *PokerUI) getGameLobbyOptions() []string {
 }
 
 func (m *PokerUI) getActiveGameOptions() []string {
-	if isPlayerTurn(m.currentPlayerID, m.clientID) {
+	if !isPlayerTurn(m.currentPlayerID, m.clientID) {
+		return []string{"Leave Table"}
+	}
+
+	// Find the current player's bet amount
+	var playerCurrentBet int64 = 0
+	for _, player := range m.players {
+		if player.Id == m.clientID {
+			playerCurrentBet = player.CurrentBet
+			break
+		}
+	}
+
+	// Determine if player can check or needs to call
+	if playerCurrentBet < m.currentBet {
+		// Player has a bet to call - show Call instead of Check
+		return []string{
+			"Call",
+			"Bet", // This will be raise since there's a bet to call
+			"Fold",
+			"Leave Table",
+		}
+	} else {
+		// Player can check (no bet to call)
 		return []string{
 			"Check",
 			"Bet",
@@ -423,7 +449,6 @@ func (m *PokerUI) getActiveGameOptions() []string {
 			"Leave Table",
 		}
 	}
-	return []string{"Leave Table"}
 }
 
 // Selection handlers
@@ -475,6 +500,8 @@ func (m *PokerUI) handleActiveGameSelection(option string) (stateFn, tea.Cmd) {
 	switch option {
 	case "Check":
 		return m.stateActiveGame, m.dispatcher.checkCmd()
+	case "Call":
+		return m.stateActiveGame, m.dispatcher.callCmd()
 	case "Bet":
 		m.betAmount = ""
 		m.currentView = "betInput"
@@ -620,6 +647,12 @@ func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cm
 		m.currentView = "gameLobby"
 		m.message = "Game ended"
 		return m.dispatcher.getBalanceCmd()
+
+	case pokerrpc.NotificationType_SHOWDOWN_RESULT:
+		// Store showdown results for display
+		m.winners = notification.Winners
+		m.message = fmt.Sprintf("Showdown complete! Winners: %d players", len(notification.Winners))
+		return nil
 
 	default:
 		m.message = notification.Message

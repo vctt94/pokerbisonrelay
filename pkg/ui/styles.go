@@ -9,15 +9,13 @@ var (
 			Background(lipgloss.Color("255")).
 			Foreground(lipgloss.Color("0")).
 			Padding(0, 1).
-			Margin(0, 1).
-			Border(lipgloss.RoundedBorder())
+			Margin(0, 1)
 
 	redCardStyle = lipgloss.NewStyle().
 			Background(lipgloss.Color("255")).
 			Foreground(lipgloss.Color("196")).
 			Padding(0, 1).
-			Margin(0, 1).
-			Border(lipgloss.RoundedBorder())
+			Margin(0, 1)
 
 	playerBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -103,15 +101,13 @@ var (
 			Background(lipgloss.Color("255")).
 			Foreground(lipgloss.Color("0")).
 			Padding(0, 1).
-			Margin(0, 1).
-			Border(lipgloss.RoundedBorder())
+			Margin(0, 1)
 
 	RedCardStyle = lipgloss.NewStyle().
 			Background(lipgloss.Color("255")).
 			Foreground(lipgloss.Color("196")).
 			Padding(0, 1).
-			Margin(0, 1).
-			Border(lipgloss.RoundedBorder())
+			Margin(0, 1)
 )
 
 // Player styles

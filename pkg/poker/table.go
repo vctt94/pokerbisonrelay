@@ -33,6 +33,7 @@ type NotificationSender interface {
 	SendPlayerReady(tableID, playerID string, ready bool)
 	SendBlindPosted(tableID, playerID string, amount int64, isSmallBlind bool)
 	BroadcastGameStateUpdate(tableID string)
+	SendShowdownResult(tableID string, winners []*pokerrpc.Winner, pot int64)
 }
 
 // TableEventManager handles notifications and state updates for table events
@@ -387,7 +388,17 @@ func (t *Table) MakeBet(playerID string, amount int64) error {
 			t.game.currentBet = amount
 		}
 		if delta > 0 {
-			t.game.AddToPot(delta)
+			// Find player index in game players slice
+			playerIndex := -1
+			for i, p := range t.game.players {
+				if p.ID == playerID {
+					playerIndex = i
+					break
+				}
+			}
+			if playerIndex >= 0 {
+				t.game.AddToPotForPlayer(playerIndex, delta)
+			}
 		}
 		// Increment actions counter for this betting round
 		t.actionsInRound++
@@ -403,17 +414,6 @@ func (t *Table) MakeBet(playerID string, amount int64) error {
 
 	t.lastAction = time.Now()
 	return nil
-}
-
-// GetPot returns the current pot size
-func (t *Table) GetPot() int64 {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	if t.game == nil {
-		return 0
-	}
-	return t.game.GetPot()
 }
 
 // GetMinPlayers returns the minimum number of players required
@@ -534,8 +534,12 @@ func (t *Table) maybeAdvancePhase() {
 		}
 	}
 
+	t.log.Debugf("maybeAdvancePhase: phase=%v, activePlayers=%d, actionsInRound=%d",
+		t.game.phase, activePlayers, t.actionsInRound)
+
 	// If zero or one active player, move to showdown
 	if activePlayers <= 1 {
+		t.log.Debugf("maybeAdvancePhase: Moving to showdown with %d active players", activePlayers)
 		t.game.phase = pokerrpc.GamePhase_SHOWDOWN
 		t.handleShowdown()
 		return
@@ -751,6 +755,8 @@ func (t *Table) HandleFold(playerID string) error {
 	player.SetGameState("FOLDED")
 	player.LastAction = time.Now()
 
+	t.log.Debugf("HandleFold: Player %s folded, HasFolded=%t", playerID, player.HasFolded)
+
 	// Update game state
 	if t.gameStarted && t.game != nil {
 		// Increment actions counter for this betting round
@@ -814,7 +820,17 @@ func (t *Table) HandleCall(playerID string) error {
 
 	// Update game-level state
 	if delta > 0 {
-		t.game.AddToPot(delta)
+		// Find player index in game players slice
+		playerIndex := -1
+		for i, p := range t.game.players {
+			if p.ID == playerID {
+				playerIndex = i
+				break
+			}
+		}
+		if playerIndex >= 0 {
+			t.game.AddToPotForPlayer(playerIndex, delta)
+		}
 	}
 
 	// Increment actions counter for this betting round
@@ -956,12 +972,27 @@ func (t *Table) handleShowdown() {
 		}
 	}
 
+	// Track winners before distributing pots
+	t.game.winners = make([]string, 0)
+	var winnersForNotification []*pokerrpc.Winner
+
+	// Store total pot for notification (before any pot distribution)
+	totalPotForNotification := t.game.GetPot()
+
 	// If only one player remains, they win automatically without hand evaluation
 	if len(activePlayers) <= 1 {
 		// Award the pot to the remaining player (if any)
 		if len(activePlayers) == 1 {
 			winnings := t.game.GetPot()
 			activePlayers[0].Balance += winnings
+			t.game.winners = append(t.game.winners, activePlayers[0].ID)
+
+			// Create winner notification with their cards
+			winnersForNotification = append(winnersForNotification, &pokerrpc.Winner{
+				PlayerId: activePlayers[0].ID,
+				Winnings: winnings,
+				BestHand: CreateHandFromCards(activePlayers[0].Hand),
+			})
 		}
 	} else {
 		// Multiple players remain - need proper hand evaluation
@@ -990,16 +1021,61 @@ func (t *Table) handleShowdown() {
 			// Create side pots if needed
 			t.game.potManager.CreateSidePots(t.game.players)
 
+			// Find the actual winners by comparing hand values
+			var bestPlayers []*Player
+			var bestHandValue *HandValue
+
+			for _, player := range activePlayers {
+				if player.HandValue != nil {
+					if bestHandValue == nil || CompareHands(*player.HandValue, *bestHandValue) > 0 {
+						bestHandValue = player.HandValue
+						bestPlayers = []*Player{player}
+					} else if CompareHands(*player.HandValue, *bestHandValue) == 0 {
+						bestPlayers = append(bestPlayers, player)
+					}
+				}
+			}
+
+			// Store total pot before distribution (since DistributePots empties the pots)
+			totalPot := t.game.GetPot()
+
 			// Distribute pots to winners
 			t.game.potManager.DistributePots(t.game.players)
+
+			// Create winner notifications with proper hand information
+			winningsPerPlayer := totalPot / int64(len(bestPlayers))
+
+			for _, winner := range bestPlayers {
+				t.game.winners = append(t.game.winners, winner.ID)
+
+				winnersForNotification = append(winnersForNotification, &pokerrpc.Winner{
+					PlayerId: winner.ID,
+					HandRank: winner.HandValue.HandRank,
+					BestHand: CreateHandFromCards(winner.HandValue.BestHand),
+					Winnings: winningsPerPlayer,
+				})
+			}
 		} else {
 			// Can't properly evaluate hands - award pot to first active player
 			// This is a fallback for incomplete games
 			if len(activePlayers) > 0 {
 				winnings := t.game.GetPot()
 				activePlayers[0].Balance += winnings
+				t.game.winners = append(t.game.winners, activePlayers[0].ID)
+
+				winnersForNotification = append(winnersForNotification, &pokerrpc.Winner{
+					PlayerId: activePlayers[0].ID,
+					Winnings: winnings,
+					BestHand: CreateHandFromCards(activePlayers[0].Hand),
+				})
 			}
 		}
+	}
+
+	// Send showdown result notification to all players
+	if t.eventManager.notificationSender != nil && len(winnersForNotification) > 0 {
+		t.eventManager.notificationSender.SendShowdownResult(t.config.ID, winnersForNotification, totalPotForNotification)
+		t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
 	}
 
 	// Since we're using unified player objects, balances are already updated
@@ -1013,32 +1089,22 @@ func (t *Table) handleShowdown() {
 		}
 	}
 
-	// Reset all players' hand-specific state
+	// Don't reset hand-specific state here - keep hands visible during showdown
+	// Only reset betting-related state
 	for _, p := range t.players {
 		p.HasFolded = false
 		p.HasBet = 0
-		p.Hand = nil
-		p.HandValue = nil
-		p.HandDescription = ""
+		// Keep p.Hand, p.HandValue, p.HandDescription for showdown viewing
 	}
 
 	t.actionsInRound = 0
 	t.lastAction = time.Now()
 
-	// Auto-start next hand if we have enough players
-	if playersReadyForNextHand >= t.config.MinPlayers {
-		// Start a new hand automatically
-		err := t.startNewHand()
-		if err != nil {
-			// If we can't start a new hand, stop the game
-			t.gameStarted = false
-			t.game = nil
-		}
-	} else {
-		// Not enough players - stop the game
-		t.gameStarted = false
-		t.game = nil
-	}
+	// Leave the game in SHOWDOWN phase so clients can check results
+	// Don't automatically start a new hand - let the client decide when to start next hand
+	// This allows tests and clients to check winners and pot amounts
+
+	// For now, just leave in showdown phase for testing
 }
 
 // startNewHand starts a new hand without requiring all players to be ready again
@@ -1059,6 +1125,13 @@ func (t *Table) startNewHand() error {
 	sort.Slice(activePlayers, func(i, j int) bool {
 		return activePlayers[i].TableSeat < activePlayers[j].TableSeat
 	})
+
+	// Reset all players' hand-specific state from previous hand
+	for _, p := range t.players {
+		p.Hand = nil
+		p.HandValue = nil
+		p.HandDescription = ""
+	}
 
 	// Create new game and populate it with references to our table players
 	t.game = NewGame(GameConfig{

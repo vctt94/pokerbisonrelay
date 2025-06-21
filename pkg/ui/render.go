@@ -220,11 +220,25 @@ func (r *Renderer) RenderBetInput() string {
 	bigBlind := r.ui.GetCurrentTableBigBlind()
 	currentBet := r.ui.currentBet
 
+	// Find the current player's bet amount
+	var playerCurrentBet int64 = 0
+	for _, player := range r.ui.players {
+		if player.Id == r.ui.clientID {
+			playerCurrentBet = player.CurrentBet
+			break
+		}
+	}
+
 	if currentBet == 0 {
 		s += "No current bet\n"
 		s += fmt.Sprintf("Minimum bet (big blind): %d\n\n", bigBlind)
 	} else {
 		s += fmt.Sprintf("Current bet to call: %d\n", currentBet)
+		if playerCurrentBet < currentBet {
+			// Player has a bet to call
+			callAmount := currentBet - playerCurrentBet
+			s += fmt.Sprintf("Amount to call: %d (you have %d bet, need %d more)\n", callAmount, playerCurrentBet, callAmount)
+		}
 		s += fmt.Sprintf("Minimum to call: %d\n", currentBet)
 		s += fmt.Sprintf("Minimum to raise: %d\n\n", currentBet+bigBlind)
 	}
@@ -249,6 +263,11 @@ func (r *Renderer) RenderActiveGame() string {
 
 	// YOUR CARDS
 	s += r.renderYourCardsAndGameInfo() + "\n"
+
+	// SHOWDOWN RESULTS (if in showdown phase)
+	if r.ui.gamePhase == pokerrpc.GamePhase_SHOWDOWN {
+		s += r.renderShowdownResults() + "\n"
+	}
 
 	// Player information
 	s += r.renderPlayersCompact() + "\n"
@@ -299,7 +318,19 @@ func (r *Renderer) renderCommunityCardsSection() string {
 	case pokerrpc.GamePhase_WAITING, pokerrpc.GamePhase_PRE_FLOP:
 		// Show placeholders
 		for i := 0; i < 5; i++ {
-			cardElements = append(cardElements, CardStyle.Render("[  ]"))
+			cardElements = append(cardElements, CardStyle.Render("  "))
+		}
+	case pokerrpc.GamePhase_SHOWDOWN:
+		// During showdown, show all dealt community cards without placeholders
+		for _, card := range r.ui.communityCards {
+			cardDisplay := r.formatCard(card)
+			var styledCard string
+			if isRedSuit(card.Suit) {
+				styledCard = RedCardStyle.Render(cardDisplay)
+			} else {
+				styledCard = CardStyle.Render(cardDisplay)
+			}
+			cardElements = append(cardElements, styledCard)
 		}
 	default:
 		// Add dealt community cards
@@ -316,7 +347,7 @@ func (r *Renderer) renderCommunityCardsSection() string {
 
 		// Add placeholders for remaining cards
 		for i := len(r.ui.communityCards); i < 5; i++ {
-			cardElements = append(cardElements, CardStyle.Render("[  ]"))
+			cardElements = append(cardElements, CardStyle.Render("  "))
 		}
 	}
 
@@ -390,10 +421,10 @@ func (r *Renderer) renderYourCardsAndGameInfo() string {
 				cardElements = append(cardElements, styledCard)
 			}
 		} else {
-			cardElements = []string{CardStyle.Render("[  ]"), CardStyle.Render("[  ]")}
+			cardElements = []string{CardStyle.Render("  "), CardStyle.Render("  ")}
 		}
 	} else {
-		cardElements = []string{CardStyle.Render("[  ]"), CardStyle.Render("[  ]")}
+		cardElements = []string{CardStyle.Render("  "), CardStyle.Render("  ")}
 	}
 
 	cardsDisplay := strings.Join(cardElements, " ")
@@ -539,6 +570,8 @@ func (r *Renderer) renderActionButtons() string {
 		switch option {
 		case "Check":
 			buttonText = "✅ Check"
+		case "Call":
+			buttonText = "📞 Call"
 		case "Bet":
 			buttonText = "💸 Bet/Raise"
 		case "Fold":
@@ -562,7 +595,7 @@ func (r *Renderer) renderActionButtons() string {
 // formatCard creates a clean visual representation of a playing card
 func (r *Renderer) formatCard(card *pokerrpc.Card) string {
 	if card == nil {
-		return "[  ]"
+		return "  "
 	}
 
 	// Convert suit to symbol
@@ -574,7 +607,7 @@ func (r *Renderer) formatCard(card *pokerrpc.Card) string {
 		value = "10"
 	}
 
-	return fmt.Sprintf("[%s%s]", value, suitSymbol)
+	return fmt.Sprintf("%s%s", value, suitSymbol)
 }
 
 // getSuitSymbol returns the appropriate symbol for a suit
@@ -659,4 +692,146 @@ func (r *Renderer) renderPlayersCompact() string {
 
 	result.WriteString(strings.Join(playerLines, "\n"))
 	return result.String()
+}
+
+// renderShowdownResults displays the showdown results with winner cards and hand information
+func (r *Renderer) renderShowdownResults() string {
+	if r.ui.gamePhase != pokerrpc.GamePhase_SHOWDOWN {
+		return ""
+	}
+
+	var s string
+
+	// Showdown header
+	s += lipgloss.NewStyle().
+		Foreground(lipgloss.Color("255")).
+		Bold(true).
+		Background(lipgloss.Color("202")).
+		Padding(0, 2).
+		Align(lipgloss.Center).
+		Width(50).
+		Render("🏆 SHOWDOWN RESULTS 🏆") + "\n\n"
+
+	// Display all players' hands during showdown
+	s += lipgloss.NewStyle().
+		Foreground(lipgloss.Color("255")).
+		Bold(true).
+		Background(lipgloss.Color("22")).
+		Padding(0, 1).
+		Render("👥 ALL PLAYERS' HANDS") + "\n"
+
+	for _, player := range r.ui.players {
+		if player.Folded {
+			continue // Skip folded players
+		}
+
+		playerName := player.Id
+		if len(playerName) > 15 {
+			playerName = playerName[:15] + "..."
+		}
+
+		// Player info line
+		var playerLine string
+		var style lipgloss.Style
+
+		if player.Id == r.ui.clientID {
+			style = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("39")).
+				Bold(true)
+			playerLine = fmt.Sprintf("🔵 YOU (%s)", playerName)
+		} else {
+			style = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("255"))
+			playerLine = fmt.Sprintf("👤 %s", playerName)
+		}
+
+		s += style.Render(playerLine) + "\n"
+
+		// Show player's hole cards (their original 2 cards)
+		if len(player.Hand) > 0 {
+			var cardElements []string
+			for _, card := range player.Hand {
+				cardDisplay := r.formatCard(card)
+				var styledCard string
+				if isRedSuit(card.Suit) {
+					styledCard = RedCardStyle.Render(cardDisplay)
+				} else {
+					styledCard = CardStyle.Render(cardDisplay)
+				}
+				cardElements = append(cardElements, styledCard)
+			}
+			cardsDisplay := strings.Join(cardElements, " ")
+			s += "   Hole Cards: " + cardsDisplay + "\n"
+		}
+
+		// Show hand description if available from server during showdown
+		handDescription := "Evaluating..."
+		if player.GetHandDescription() != "" {
+			handDescription = player.GetHandDescription()
+		}
+		s += "   Hand: " + lipgloss.NewStyle().
+			Foreground(lipgloss.Color("214")).
+			Render(handDescription) + "\n\n"
+	}
+
+	// Display winners section
+	if len(r.ui.winners) > 0 {
+		s += lipgloss.NewStyle().
+			Foreground(lipgloss.Color("255")).
+			Bold(true).
+			Background(lipgloss.Color("22")).
+			Padding(0, 1).
+			Render("🏆 WINNERS") + "\n"
+
+		for _, winner := range r.ui.winners {
+			winnerName := winner.PlayerId
+			if len(winnerName) > 15 {
+				winnerName = winnerName[:15] + "..."
+			}
+
+			var winnerStyle lipgloss.Style
+			if winner.PlayerId == r.ui.clientID {
+				winnerStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("46")).
+					Bold(true).
+					Background(lipgloss.Color("22"))
+			} else {
+				winnerStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("46")).
+					Bold(true)
+			}
+
+			winnerLine := fmt.Sprintf("🎉 %s - Won %d chips", winnerName, winner.Winnings)
+			s += winnerStyle.Render(winnerLine) + "\n"
+
+			// Show winner's best 5-card hand
+			if len(winner.BestHand) > 0 {
+				var bestHandCards []string
+				for _, card := range winner.BestHand {
+					cardDisplay := r.formatCard(card)
+					var styledCard string
+					if isRedSuit(card.Suit) {
+						styledCard = RedCardStyle.Render(cardDisplay)
+					} else {
+						styledCard = CardStyle.Render(cardDisplay)
+					}
+					bestHandCards = append(bestHandCards, styledCard)
+				}
+				bestHandDisplay := strings.Join(bestHandCards, " ")
+				s += "   Best Hand: " + bestHandDisplay + "\n"
+			}
+
+			// Show hand rank
+			if winner.HandRank != pokerrpc.HandRank_HIGH_CARD {
+				rankText := winner.HandRank.String()
+				s += "   Rank: " + lipgloss.NewStyle().
+					Foreground(lipgloss.Color("214")).
+					Bold(true).
+					Render(rankText) + "\n"
+			}
+			s += "\n"
+		}
+	}
+
+	return s
 }

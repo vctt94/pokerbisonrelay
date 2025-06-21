@@ -313,6 +313,7 @@ message Player {
   bool is_all_in = 8;
   bool is_dealer = 9;
   bool is_ready = 10;
+  string hand_description = 11; // Hand evaluation description (available during showdown)
 }
 
 message Card {

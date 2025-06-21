@@ -2334,19 +2334,20 @@ func (x *Notification) GetWinners() []*Winner {
 
 // Common Messages
 type Player struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Balance       int64                  `protobuf:"varint,3,opt,name=balance,proto3" json:"balance,omitempty"` // Poker chips balance (in-game currency)
-	Hand          []*Card                `protobuf:"bytes,4,rep,name=hand,proto3" json:"hand,omitempty"`
-	CurrentBet    int64                  `protobuf:"varint,5,opt,name=current_bet,json=currentBet,proto3" json:"current_bet,omitempty"` // Current poker chips bet in this round
-	Folded        bool                   `protobuf:"varint,6,opt,name=folded,proto3" json:"folded,omitempty"`
-	IsTurn        bool                   `protobuf:"varint,7,opt,name=is_turn,json=isTurn,proto3" json:"is_turn,omitempty"`
-	IsAllIn       bool                   `protobuf:"varint,8,opt,name=is_all_in,json=isAllIn,proto3" json:"is_all_in,omitempty"`
-	IsDealer      bool                   `protobuf:"varint,9,opt,name=is_dealer,json=isDealer,proto3" json:"is_dealer,omitempty"`
-	IsReady       bool                   `protobuf:"varint,10,opt,name=is_ready,json=isReady,proto3" json:"is_ready,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name            string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Balance         int64                  `protobuf:"varint,3,opt,name=balance,proto3" json:"balance,omitempty"` // Poker chips balance (in-game currency)
+	Hand            []*Card                `protobuf:"bytes,4,rep,name=hand,proto3" json:"hand,omitempty"`
+	CurrentBet      int64                  `protobuf:"varint,5,opt,name=current_bet,json=currentBet,proto3" json:"current_bet,omitempty"` // Current poker chips bet in this round
+	Folded          bool                   `protobuf:"varint,6,opt,name=folded,proto3" json:"folded,omitempty"`
+	IsTurn          bool                   `protobuf:"varint,7,opt,name=is_turn,json=isTurn,proto3" json:"is_turn,omitempty"`
+	IsAllIn         bool                   `protobuf:"varint,8,opt,name=is_all_in,json=isAllIn,proto3" json:"is_all_in,omitempty"`
+	IsDealer        bool                   `protobuf:"varint,9,opt,name=is_dealer,json=isDealer,proto3" json:"is_dealer,omitempty"`
+	IsReady         bool                   `protobuf:"varint,10,opt,name=is_ready,json=isReady,proto3" json:"is_ready,omitempty"`
+	HandDescription string                 `protobuf:"bytes,11,opt,name=hand_description,json=handDescription,proto3" json:"hand_description,omitempty"` // Hand evaluation description (available during showdown)
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *Player) Reset() {
@@ -2447,6 +2448,13 @@ func (x *Player) GetIsReady() bool {
 		return x.IsReady
 	}
 	return false
+}
+
+func (x *Player) GetHandDescription() string {
+	if x != nil {
+		return x.HandDescription
+	}
+	return ""
 }
 
 type Card struct {
@@ -2970,7 +2978,7 @@ const file_poker_proto_rawDesc = "" +
 	"\astarted\x18\v \x01(\bR\astarted\x12+\n" +
 	"\x12game_ready_to_play\x18\f \x01(\bR\x0fgameReadyToPlay\x12\x1c\n" +
 	"\tcountdown\x18\r \x01(\x05R\tcountdown\x12*\n" +
-	"\awinners\x18\x0e \x03(\v2\x10.pokerrpc.WinnerR\awinners\"\x90\x02\n" +
+	"\awinners\x18\x0e \x03(\v2\x10.pokerrpc.WinnerR\awinners\"\xbb\x02\n" +
 	"\x06Player\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
@@ -2983,7 +2991,8 @@ const file_poker_proto_rawDesc = "" +
 	"\tis_all_in\x18\b \x01(\bR\aisAllIn\x12\x1b\n" +
 	"\tis_dealer\x18\t \x01(\bR\bisDealer\x12\x19\n" +
 	"\bis_ready\x18\n" +
-	" \x01(\bR\aisReady\"0\n" +
+	" \x01(\bR\aisReady\x12)\n" +
+	"\x10hand_description\x18\v \x01(\tR\x0fhandDescription\"0\n" +
 	"\x04Card\x12\x12\n" +
 	"\x04suit\x18\x01 \x01(\tR\x04suit\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\"O\n" +
