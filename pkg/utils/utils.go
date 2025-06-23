@@ -4,26 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 )
-
-// FormatCards is a helper function for displaying cards
-func FormatCards(cards []*pokerrpc.Card) string {
-	if len(cards) == 0 {
-		return "None"
-	}
-
-	result := ""
-	for i, card := range cards {
-		if i > 0 {
-			result += " "
-		}
-		result += card.Value + card.Suit
-	}
-
-	return result
-}
 
 // EnsureDataDirExists creates the datadir and necessary subdirectories if they don't exist
 func EnsureDataDirExists(datadir string) error {
