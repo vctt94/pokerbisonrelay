@@ -255,8 +255,8 @@ func (t *Table) StartGame() error {
 	// Populate game.players with references to the same Player objects from the table
 	copy(t.game.players, activePlayers)
 
-	// Use centralized hand setup logic
-	err := t.setupNewHandLocked(activePlayers)
+	// Use centralized hand setup logic (this assumes lock is held)
+	err := t.setupNewHand(activePlayers)
 	if err != nil {
 		return err
 	}
@@ -268,69 +268,48 @@ func (t *Table) StartGame() error {
 	return nil
 }
 
-// setupNewHandLocked handles the complete setup process for a new hand including phase transitions
-// This method assumes the lock is already held and should only be called from locked contexts
-func (t *Table) setupNewHandLocked(activePlayers []*Player) error {
+// setupNewHand handles the complete setup process for a new hand (assumes lock is held)
+func (t *Table) setupNewHand(activePlayers []*Player) error {
 	if t.game == nil {
 		return fmt.Errorf("game not initialized")
 	}
 
-	t.log.Debugf("setupNewHandLocked: Starting hand setup for %d players", len(activePlayers))
+	t.log.Debugf("setupNewHand: Starting hand setup for %d players", len(activePlayers))
 
 	// Phase 1: Set to dealing phase (no broadcast yet - wait until setup is complete)
 	t.game.phase = pokerrpc.GamePhase_NEW_HAND_DEALING
-	t.log.Debugf("setupNewHandLocked: Phase 1 - Set to NEW_HAND_DEALING, setup in progress")
+	t.log.Debugf("setupNewHand: Phase 1 - Set to NEW_HAND_DEALING, setup in progress")
 
 	// Phase 2: Deal cards and post blinds (the actual setup work)
-	t.log.Debugf("setupNewHandLocked: Phase 2 - Dealing cards to %d players", len(activePlayers))
+	t.log.Debugf("setupNewHand: Phase 2 - Dealing cards to %d players", len(activePlayers))
 	err := t.dealCardsToPlayers(activePlayers)
 	if err != nil {
 		return fmt.Errorf("failed to deal cards: %v", err)
 	}
 
-	t.log.Debugf("setupNewHandLocked: Phase 2 - Posting blinds")
+	// Phase 2 continued: Post blinds
+	t.log.Debugf("setupNewHand: Phase 2 - Posting blinds")
 	err = t.postBlindsFromGame()
 	if err != nil {
 		return fmt.Errorf("failed to post blinds: %v", err)
 	}
 
-	// Phase 3: Transition to active play phase
-	t.log.Debugf("setupNewHandLocked: Phase 3 - Transitioning to PRE_FLOP and setting current player")
+	// Phase 3: Transition to PRE_FLOP and set current player
+	t.log.Debugf("setupNewHand: Phase 3 - Transitioning to PRE_FLOP and setting current player")
 	t.game.phase = pokerrpc.GamePhase_PRE_FLOP
 	t.initializeCurrentPlayer()
+	t.log.Debugf("setupNewHand: Current player set to %s (index %d)", t.currentPlayerID(), t.game.currentPlayer)
 
-	// Verify current player is set correctly
-	if t.game.currentPlayer >= 0 && t.game.currentPlayer < len(t.game.players) {
-		currentPlayer := t.game.players[t.game.currentPlayer]
-		t.log.Debugf("setupNewHandLocked: Current player set to %s (index %d)", currentPlayer.ID, t.game.currentPlayer)
-	} else {
-		t.log.Errorf("setupNewHandLocked: Failed to set current player - index %d, total players %d", t.game.currentPlayer, len(t.game.players))
+	// Phase 4: Set up timing and player states
+	t.log.Debugf("setupNewHand: Phase 4 - Setting up timing and player states")
+	for _, p := range activePlayers {
+		p.LastAction = time.Now()
 	}
 
-	// Phase 4: Set up timing and final state
-	t.log.Debugf("setupNewHandLocked: Phase 4 - Setting up timing and player states")
-	gameStartTime := time.Now()
-	earlyTime := gameStartTime.Add(-t.config.TimeBank)
+	// Phase 5: Setup complete notification
+	t.log.Debugf("setupNewHand: Phase 5 - Setup complete, ready for notification sequence")
+	t.log.Debugf("setupNewHand: Hand setup completed successfully")
 
-	// Reset all players' LastAction for timeout management
-	for _, p := range t.players {
-		if p.IsAtTable() {
-			p.LastAction = earlyTime
-		}
-	}
-
-	// Set the current player's LastAction to now so their timeout timer starts
-	if t.game.currentPlayer >= 0 && t.game.currentPlayer < len(t.game.players) {
-		if !t.game.players[t.game.currentPlayer].HasFolded {
-			t.game.players[t.game.currentPlayer].LastAction = gameStartTime
-		}
-	}
-
-	// Phase 5: Final broadcast with complete game state (only broadcast during setup)
-	// Note: Don't broadcast here - let startNewHandLocked handle the notification sequence
-	t.log.Debugf("setupNewHandLocked: Phase 5 - Setup complete, ready for notification sequence")
-
-	t.log.Debugf("setupNewHandLocked: Hand setup completed successfully")
 	return nil
 }
 
@@ -391,7 +370,7 @@ func (t *Table) MakeBet(playerID string, amount int64) error {
 
 	// Validate that it's this player's turn to act
 	if t.gameStarted && t.game != nil {
-		currentPlayerID := t.getCurrentPlayerIDLocked()
+		currentPlayerID := t.currentPlayerID()
 		t.log.Debugf("MakeBet: playerID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v, amount=%d",
 			playerID, currentPlayerID, t.game.currentPlayer, t.game.phase, amount)
 		if currentPlayerID != playerID {
@@ -442,7 +421,7 @@ func (t *Table) MakeBet(playerID string, amount int64) error {
 		// Increment actions counter for this betting round
 		t.actionsInRound++
 		// Advance to next player after action
-		t.advanceToNextPlayerLocked()
+		t.advanceToNextPlayer()
 	}
 
 	// Possibly advance phase if betting round is complete
@@ -545,13 +524,13 @@ func (t *Table) HandleTimeouts() {
 			t.actionsInRound++
 
 			// Advance to next player after check action
-			t.advanceToNextPlayerLocked()
+			t.advanceToNextPlayer()
 		} else {
 			// Auto-fold the current player
 			currentPlayer.HasFolded = true
 
 			// Advance to next player
-			t.advanceToNextPlayerLocked()
+			t.advanceToNextPlayer()
 		}
 
 		// Check if this action completes the betting round
@@ -678,11 +657,11 @@ func (t *Table) GetCurrentBet() int64 {
 func (t *Table) GetCurrentPlayerID() string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.getCurrentPlayerIDLocked()
+	return t.currentPlayerID()
 }
 
-// getCurrentPlayerIDLocked returns the current player ID without acquiring locks
-func (t *Table) getCurrentPlayerIDLocked() string {
+// currentPlayerID returns the current player ID without acquiring locks (private helper)
+func (t *Table) currentPlayerID() string {
 	if t.game == nil || len(t.game.players) == 0 {
 		return ""
 	}
@@ -694,15 +673,8 @@ func (t *Table) getCurrentPlayerIDLocked() string {
 	return t.game.players[t.game.currentPlayer].ID
 }
 
-// AdvanceToNextPlayer moves to the next active player
-func (t *Table) AdvanceToNextPlayer() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.advanceToNextPlayerLocked()
-}
-
-// advanceToNextPlayerLocked is the internal implementation that assumes the lock is already held
-func (t *Table) advanceToNextPlayerLocked() {
+// advanceToNextPlayer moves to the next active player (assumes lock is held)
+func (t *Table) advanceToNextPlayer() {
 	if t.game == nil || len(t.game.players) == 0 {
 		return
 	}
@@ -791,7 +763,7 @@ func (t *Table) HandleFold(playerID string) error {
 
 	// Validate that it's this player's turn to act
 	if t.gameStarted && t.game != nil {
-		currentPlayerID := t.getCurrentPlayerIDLocked()
+		currentPlayerID := t.currentPlayerID()
 		t.log.Debugf("HandleFold: playerID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v",
 			playerID, currentPlayerID, t.game.currentPlayer, t.game.phase)
 		if currentPlayerID != playerID {
@@ -810,7 +782,7 @@ func (t *Table) HandleFold(playerID string) error {
 		// Increment actions counter for this betting round
 		t.actionsInRound++
 		// Advance to next player after fold action
-		t.advanceToNextPlayerLocked()
+		t.advanceToNextPlayer()
 	}
 
 	// Possibly advance phase if betting round is complete
@@ -835,7 +807,7 @@ func (t *Table) HandleCall(playerID string) error {
 
 	// Validate that it's this player's turn to act
 	if t.gameStarted && t.game != nil {
-		currentPlayerID := t.getCurrentPlayerIDLocked()
+		currentPlayerID := t.currentPlayerID()
 		t.log.Debugf("HandleCall: playerID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v",
 			playerID, currentPlayerID, t.game.currentPlayer, t.game.phase)
 		if currentPlayerID != playerID {
@@ -885,7 +857,7 @@ func (t *Table) HandleCall(playerID string) error {
 	t.actionsInRound++
 
 	// Advance to next player after call action
-	t.advanceToNextPlayerLocked()
+	t.advanceToNextPlayer()
 
 	// Check if this action completes the betting round
 	t.maybeAdvancePhase()
@@ -911,7 +883,7 @@ func (t *Table) HandleCheck(playerID string) error {
 
 	// Validate that it's this player's turn to act
 	if t.gameStarted && t.game != nil {
-		currentPlayerID := t.getCurrentPlayerIDLocked()
+		currentPlayerID := t.currentPlayerID()
 		t.log.Debugf("HandleCheck: playerID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v",
 			playerID, currentPlayerID, t.game.currentPlayer, t.game.phase)
 		if currentPlayerID != playerID {
@@ -935,7 +907,7 @@ func (t *Table) HandleCheck(playerID string) error {
 		// Increment actions counter for this betting round
 		t.actionsInRound++
 		// Advance to next player after check action
-		t.advanceToNextPlayerLocked()
+		t.advanceToNextPlayer()
 	}
 
 	// Possibly advance phase if betting round is complete
@@ -1155,15 +1127,15 @@ func (t *Table) handleShowdown() {
 	}
 }
 
-// startNewHand starts a new hand without requiring all players to be ready again
-func (t *Table) startNewHand() error {
+// StartNewHand starts a new hand without requiring all players to be ready again (public API)
+func (t *Table) StartNewHand() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.startNewHandLocked()
+	return t.startNewHand()
 }
 
-// startNewHandLocked is the internal implementation that assumes the lock is already held
-func (t *Table) startNewHandLocked() error {
+// startNewHand is the internal implementation that assumes the lock is already held
+func (t *Table) startNewHand() error {
 	// Ensure game exists - if not, this is a bug
 	if t.game == nil {
 		return fmt.Errorf("startNewHand called but game is nil - this should not happen")
@@ -1210,8 +1182,8 @@ func (t *Table) startNewHandLocked() error {
 	// Reset existing game for new hand
 	t.game.ResetForNewHand(activePlayers)
 
-	// Use centralized hand setup logic
-	err := t.setupNewHandLocked(activePlayers)
+	// Use centralized hand setup logic (this assumes lock is held)
+	err := t.setupNewHand(activePlayers)
 	if err != nil {
 		return err
 	}
@@ -1223,9 +1195,13 @@ func (t *Table) startNewHandLocked() error {
 	}
 
 	// Then broadcast the complete game state AFTER notification is sent
+	// Add a small delay to ensure setup is completely finished before broadcast
 	t.log.Debugf("startNewHand: broadcasting complete game state")
 	if t.eventManager.notificationSender != nil {
-		go t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
+		go func() {
+			time.Sleep(10 * time.Millisecond) // Small delay to ensure setup completion
+			t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
+		}()
 	}
 
 	return nil
@@ -1310,7 +1286,7 @@ func (t *Table) scheduleAutoStart() {
 
 		if playersReadyForNextHand >= t.config.MinPlayers {
 			t.log.Debugf("Auto-starting new hand with %d players after showdown", playersReadyForNextHand)
-			err := t.startNewHandLocked() // Use locked version since we already hold the lock
+			err := t.startNewHand() // Use internal version since we already hold the lock
 			if err != nil {
 				t.log.Debugf("Auto-start new hand failed: %v", err)
 			} else {

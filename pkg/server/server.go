@@ -773,10 +773,18 @@ func (s *Server) buildPlayerForUpdate(p *poker.Player, requestingPlayerID string
 		CurrentBet: p.HasBet,
 	}
 
-	// Only include hand cards if this is the requesting player's own data
-	// or if the game is in showdown phase
-	// But exclude hands when game is nil (transition state) to ensure clean UI updates
-	if game != nil && ((p.ID == requestingPlayerID) || game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN) {
+	// Early return if game doesn't exist or player has no cards
+	if game == nil {
+		return player
+	}
+
+	// Don't show cards during dealing phase to avoid race conditions
+	if game.GetPhase() == pokerrpc.GamePhase_NEW_HAND_DEALING {
+		return player
+	}
+
+	// Show cards if it's the requesting player's own data or during showdown
+	if p.ID == requestingPlayerID || game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN {
 		player.Hand = make([]*pokerrpc.Card, len(p.Hand))
 		for i, card := range p.Hand {
 			player.Hand[i] = &pokerrpc.Card{
