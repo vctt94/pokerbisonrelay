@@ -413,6 +413,8 @@ const (
 	LobbyService_ProcessTip_FullMethodName              = "/pokerrpc.LobbyService/ProcessTip"
 	LobbyService_SetPlayerReady_FullMethodName          = "/pokerrpc.LobbyService/SetPlayerReady"
 	LobbyService_SetPlayerUnready_FullMethodName        = "/pokerrpc.LobbyService/SetPlayerUnready"
+	LobbyService_ShowCards_FullMethodName               = "/pokerrpc.LobbyService/ShowCards"
+	LobbyService_HideCards_FullMethodName               = "/pokerrpc.LobbyService/HideCards"
 	LobbyService_StartNotificationStream_FullMethodName = "/pokerrpc.LobbyService/StartNotificationStream"
 )
 
@@ -435,6 +437,9 @@ type LobbyServiceClient interface {
 	// Ready state management
 	SetPlayerReady(ctx context.Context, in *SetPlayerReadyRequest, opts ...grpc.CallOption) (*SetPlayerReadyResponse, error)
 	SetPlayerUnready(ctx context.Context, in *SetPlayerUnreadyRequest, opts ...grpc.CallOption) (*SetPlayerUnreadyResponse, error)
+	// Card visibility management
+	ShowCards(ctx context.Context, in *ShowCardsRequest, opts ...grpc.CallOption) (*ShowCardsResponse, error)
+	HideCards(ctx context.Context, in *HideCardsRequest, opts ...grpc.CallOption) (*HideCardsResponse, error)
 	// Notification stream
 	StartNotificationStream(ctx context.Context, in *StartNotificationStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Notification], error)
 }
@@ -547,6 +552,26 @@ func (c *lobbyServiceClient) SetPlayerUnready(ctx context.Context, in *SetPlayer
 	return out, nil
 }
 
+func (c *lobbyServiceClient) ShowCards(ctx context.Context, in *ShowCardsRequest, opts ...grpc.CallOption) (*ShowCardsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ShowCardsResponse)
+	err := c.cc.Invoke(ctx, LobbyService_ShowCards_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *lobbyServiceClient) HideCards(ctx context.Context, in *HideCardsRequest, opts ...grpc.CallOption) (*HideCardsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HideCardsResponse)
+	err := c.cc.Invoke(ctx, LobbyService_HideCards_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *lobbyServiceClient) StartNotificationStream(ctx context.Context, in *StartNotificationStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Notification], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &LobbyService_ServiceDesc.Streams[0], LobbyService_StartNotificationStream_FullMethodName, cOpts...)
@@ -585,6 +610,9 @@ type LobbyServiceServer interface {
 	// Ready state management
 	SetPlayerReady(context.Context, *SetPlayerReadyRequest) (*SetPlayerReadyResponse, error)
 	SetPlayerUnready(context.Context, *SetPlayerUnreadyRequest) (*SetPlayerUnreadyResponse, error)
+	// Card visibility management
+	ShowCards(context.Context, *ShowCardsRequest) (*ShowCardsResponse, error)
+	HideCards(context.Context, *HideCardsRequest) (*HideCardsResponse, error)
 	// Notification stream
 	StartNotificationStream(*StartNotificationStreamRequest, grpc.ServerStreamingServer[Notification]) error
 	mustEmbedUnimplementedLobbyServiceServer()
@@ -626,6 +654,12 @@ func (UnimplementedLobbyServiceServer) SetPlayerReady(context.Context, *SetPlaye
 }
 func (UnimplementedLobbyServiceServer) SetPlayerUnready(context.Context, *SetPlayerUnreadyRequest) (*SetPlayerUnreadyResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetPlayerUnready not implemented")
+}
+func (UnimplementedLobbyServiceServer) ShowCards(context.Context, *ShowCardsRequest) (*ShowCardsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ShowCards not implemented")
+}
+func (UnimplementedLobbyServiceServer) HideCards(context.Context, *HideCardsRequest) (*HideCardsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HideCards not implemented")
 }
 func (UnimplementedLobbyServiceServer) StartNotificationStream(*StartNotificationStreamRequest, grpc.ServerStreamingServer[Notification]) error {
 	return status.Errorf(codes.Unimplemented, "method StartNotificationStream not implemented")
@@ -831,6 +865,42 @@ func _LobbyService_SetPlayerUnready_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _LobbyService_ShowCards_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ShowCardsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LobbyServiceServer).ShowCards(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LobbyService_ShowCards_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LobbyServiceServer).ShowCards(ctx, req.(*ShowCardsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LobbyService_HideCards_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HideCardsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LobbyServiceServer).HideCards(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LobbyService_HideCards_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LobbyServiceServer).HideCards(ctx, req.(*HideCardsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _LobbyService_StartNotificationStream_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(StartNotificationStreamRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -888,6 +958,14 @@ var LobbyService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetPlayerUnready",
 			Handler:    _LobbyService_SetPlayerUnready_Handler,
+		},
+		{
+			MethodName: "ShowCards",
+			Handler:    _LobbyService_ShowCards_Handler,
+		},
+		{
+			MethodName: "HideCards",
+			Handler:    _LobbyService_HideCards_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

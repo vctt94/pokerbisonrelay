@@ -641,6 +641,56 @@ func (pc *PokerClient) SetPlayerUnready(ctx context.Context) error {
 	return nil
 }
 
+// ShowCards notifies other players that this player is showing their cards
+func (pc *PokerClient) ShowCards(ctx context.Context) error {
+	pc.RLock()
+	tableID := pc.tableID
+	pc.RUnlock()
+
+	if tableID == "" {
+		return fmt.Errorf("not currently in a table")
+	}
+
+	resp, err := pc.LobbyService.ShowCards(ctx, &pokerrpc.ShowCardsRequest{
+		PlayerId: pc.ID,
+		TableId:  tableID,
+	})
+	if err != nil {
+		return err
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("failed to show cards: %s", resp.Message)
+	}
+
+	return nil
+}
+
+// HideCards notifies other players that this player is hiding their cards
+func (pc *PokerClient) HideCards(ctx context.Context) error {
+	pc.RLock()
+	tableID := pc.tableID
+	pc.RUnlock()
+
+	if tableID == "" {
+		return fmt.Errorf("not currently in a table")
+	}
+
+	resp, err := pc.LobbyService.HideCards(ctx, &pokerrpc.HideCardsRequest{
+		PlayerId: pc.ID,
+		TableId:  tableID,
+	})
+	if err != nil {
+		return err
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("failed to hide cards: %s", resp.Message)
+	}
+
+	return nil
+}
+
 // GetTables returns all available tables
 func (pc *PokerClient) GetTables(ctx context.Context) ([]*pokerrpc.Table, error) {
 	resp, err := pc.LobbyService.GetTables(ctx, &pokerrpc.GetTablesRequest{})

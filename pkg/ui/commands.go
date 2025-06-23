@@ -239,6 +239,40 @@ func (d *CommandDispatcher) betCmd(amount int64) tea.Cmd {
 	}
 }
 
+func (d *CommandDispatcher) showCardsCmd() tea.Cmd {
+	return func() tea.Msg {
+		err := d.pc.ShowCards(d.ctx)
+		if err != nil {
+			return errorMsg(err)
+		}
+
+		// Return as cards shown notification (the server will broadcast to others)
+		return notificationMsg(&pokerrpc.Notification{
+			Type:     pokerrpc.NotificationType_CARDS_SHOWN,
+			PlayerId: d.clientID,
+			TableId:  d.pc.GetCurrentTableID(),
+			Message:  "Cards shown to other players",
+		})
+	}
+}
+
+func (d *CommandDispatcher) hideCardsCmd() tea.Cmd {
+	return func() tea.Msg {
+		err := d.pc.HideCards(d.ctx)
+		if err != nil {
+			return errorMsg(err)
+		}
+
+		// Return as cards hidden notification (the server will broadcast to others)
+		return notificationMsg(&pokerrpc.Notification{
+			Type:     pokerrpc.NotificationType_CARDS_HIDDEN,
+			PlayerId: d.clientID,
+			TableId:  d.pc.GetCurrentTableID(),
+			Message:  "Cards hidden from other players",
+		})
+	}
+}
+
 // Utility functions
 func min(a, b int) int {
 	if a < b {

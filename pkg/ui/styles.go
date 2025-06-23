@@ -168,6 +168,13 @@ var (
 				BorderForeground(lipgloss.Color("46")).
 				Bold(true)
 
+	// New pleasant style for YOUR TURN indicator
+	YourTurnStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("255")).
+			Bold(true).
+			Background(lipgloss.Color("33")). // Nice blue instead of harsh red
+			Padding(0, 2)
+
 	TableStyle = lipgloss.NewStyle().
 			Border(lipgloss.DoubleBorder()).
 			BorderForeground(lipgloss.Color("28")).

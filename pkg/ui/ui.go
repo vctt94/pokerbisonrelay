@@ -63,6 +63,12 @@ type PokerUI struct {
 	// For betting input
 	betAmount string
 
+	// Card visibility toggle
+	showMyCards bool
+
+	// Track card visibility for all players
+	playersShowingCards map[string]bool
+
 	// Component handlers
 	dispatcher *CommandDispatcher
 	renderer   *Renderer
@@ -78,13 +84,15 @@ func NewPokerUI(ctx context.Context, client *client.PokerClient) *PokerUI {
 		clientID: client.ID,
 		pc:       client,
 
-		smallBlind:      "10",
-		bigBlind:        "20",
-		requiredPlayers: "2",
-		buyIn:           "100",
-		minBalance:      "100",
-		startingChips:   "1000",
-		currentView:     "mainMenu",
+		smallBlind:          "10",
+		bigBlind:            "20",
+		requiredPlayers:     "2",
+		buyIn:               "100",
+		minBalance:          "100",
+		startingChips:       "1000",
+		currentView:         "mainMenu",
+		showMyCards:         false, // Default to not showing cards
+		playersShowingCards: make(map[string]bool),
 	}
 
 	// Create component handlers
@@ -418,6 +426,18 @@ func (m *PokerUI) getGameLobbyOptions() []string {
 }
 
 func (m *PokerUI) getActiveGameOptions() []string {
+	// During showdown, show card visibility toggle and leave table option
+	if m.gamePhase == pokerrpc.GamePhase_SHOWDOWN {
+		cardToggleText := "Hide My Cards"
+		if !m.showMyCards {
+			cardToggleText = "Show My Cards"
+		}
+		return []string{
+			cardToggleText,
+			"Leave Table",
+		}
+	}
+
 	if !isPlayerTurn(m.currentPlayerID, m.clientID) {
 		return []string{"Leave Table"}
 	}
@@ -508,6 +528,14 @@ func (m *PokerUI) handleActiveGameSelection(option string) (stateFn, tea.Cmd) {
 		return m.stateBetInput, nil
 	case "Fold":
 		return m.stateActiveGame, m.dispatcher.foldCmd()
+	case "Show My Cards":
+		// Toggle card visibility and send notification
+		m.showMyCards = true
+		return m.stateActiveGame, m.dispatcher.showCardsCmd()
+	case "Hide My Cards":
+		// Toggle card visibility and send notification
+		m.showMyCards = false
+		return m.stateActiveGame, m.dispatcher.hideCardsCmd()
 	case "Leave Table":
 		return m.stateActiveGame, m.dispatcher.leaveTableCmd()
 	}
@@ -654,6 +682,32 @@ func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cm
 		m.message = fmt.Sprintf("Showdown complete! Winners: %d players", len(notification.Winners))
 		return nil
 
+	case pokerrpc.NotificationType_CARDS_SHOWN:
+		// Track that this player is showing their cards
+		if notification.PlayerId != "" {
+			m.playersShowingCards[notification.PlayerId] = true
+		}
+
+		if notification.PlayerId != m.clientID {
+			m.message = fmt.Sprintf("%s is showing their cards", notification.PlayerId)
+		} else {
+			m.message = "Cards shown to other players"
+		}
+		return nil
+
+	case pokerrpc.NotificationType_CARDS_HIDDEN:
+		// Track that this player is hiding their cards
+		if notification.PlayerId != "" {
+			m.playersShowingCards[notification.PlayerId] = false
+		}
+
+		if notification.PlayerId != m.clientID {
+			m.message = fmt.Sprintf("%s is hiding their cards", notification.PlayerId)
+		} else {
+			m.message = "Cards hidden from other players"
+		}
+		return nil
+
 	default:
 		m.message = notification.Message
 		return nil
@@ -742,4 +796,7 @@ func (m *PokerUI) resetGameState() {
 	m.currentPlayerID = ""
 	m.playersRequired = 0
 	m.playersJoined = 0
+	m.winners = nil
+	m.showMyCards = true                          // Reset to show cards by default for new games
+	m.playersShowingCards = make(map[string]bool) // Reset card visibility tracking
 }

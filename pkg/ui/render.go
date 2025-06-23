@@ -16,7 +16,7 @@ type Renderer struct {
 // RenderMainMenu renders the main menu screen
 func (r *Renderer) RenderMainMenu() string {
 	var s string
-	s += TitleStyle.Render("Poker Client - Main Menu") + "\n\n"
+	s += TitleStyle.Render("Poker Client - Main Menu") + "\n"
 	s += fmt.Sprintf("Client ID: %s\n", r.ui.clientID)
 
 	// Display cached balance in DCR
@@ -48,13 +48,13 @@ func (r *Renderer) RenderMainMenu() string {
 // RenderTableList renders the table list screen with compact styling to show more tables
 func (r *Renderer) RenderTableList() string {
 	var s string
-	s += TitleStyle.Render("Available Tables") + "\n\n"
+	s += TitleStyle.Render("Available Tables") + "\n"
 
 	if len(r.ui.tables) == 0 {
 		s += BlurredStyle.Render("No tables available.") + "\n"
 	} else {
 		// Add header for better organization
-		s += TitleStyle.Render("SELECT A TABLE TO JOIN") + "\n\n"
+		s += TitleStyle.Render("SELECT A TABLE TO JOIN") + "\n"
 
 		for i, table := range r.ui.tables {
 			isSelected := i == r.ui.selectedTable
@@ -107,7 +107,7 @@ func (r *Renderer) RenderTableList() string {
 // RenderCreateTable renders the create table form screen
 func (r *Renderer) RenderCreateTable() string {
 	var s string
-	s += TitleStyle.Render("Create New Table") + "\n\n"
+	s += TitleStyle.Render("Create New Table") + "\n"
 
 	fields := []struct {
 		label string
@@ -144,8 +144,8 @@ func (r *Renderer) RenderCreateTable() string {
 // RenderJoinTable renders the join table screen
 func (r *Renderer) RenderJoinTable() string {
 	var s string
-	s += TitleStyle.Render("Join Table") + "\n\n"
-	s += FocusedStyle.Render(fmt.Sprintf("Table ID: %s", r.ui.tableIdInput)) + "\n\n"
+	s += TitleStyle.Render("Join Table") + "\n"
+	s += FocusedStyle.Render(fmt.Sprintf("Table ID: %s", r.ui.tableIdInput)) + "\n"
 	s += HelpStyle.Render("Enter table ID and press Enter to join")
 	return s
 }
@@ -153,16 +153,16 @@ func (r *Renderer) RenderJoinTable() string {
 // RenderGameLobby renders the game lobby screen
 func (r *Renderer) RenderGameLobby() string {
 	var s string
-	s += TitleStyle.Render(fmt.Sprintf("Game Lobby - Table %s", r.ui.pc.GetCurrentTableID())) + "\n\n"
+	s += TitleStyle.Render(fmt.Sprintf("Game Lobby - Table %s", r.ui.pc.GetCurrentTableID())) + "\n"
 
 	// Show client ID
 	s += fmt.Sprintf("Client ID: %s\n", r.ui.clientID)
 
 	// Display cached balance in DCR
 	if r.ui.balance > 0 {
-		s += fmt.Sprintf("Account Balance: %.8f DCR\n\n", float64(r.ui.balance)/1e8)
+		s += fmt.Sprintf("Account Balance: %.8f DCR\n", float64(r.ui.balance)/1e8)
 	} else {
-		s += "Account Balance: (loading...)\n\n"
+		s += "Account Balance: (loading...)\n"
 	}
 
 	// Show table information if we have game update data
@@ -194,7 +194,7 @@ func (r *Renderer) RenderGameLobby() string {
 		}
 		s += "\n"
 	} else {
-		s += "Loading table information...\n\n"
+		s += "Loading table information...\n"
 	}
 
 	options := r.ui.getGameLobbyOptions()
@@ -212,7 +212,7 @@ func (r *Renderer) RenderGameLobby() string {
 // RenderBetInput renders the bet input screen
 func (r *Renderer) RenderBetInput() string {
 	var s string
-	s += TitleStyle.Render("Enter Bet Amount") + "\n\n"
+	s += TitleStyle.Render("Enter Bet Amount") + "\n"
 
 	// Show client ID
 	s += fmt.Sprintf("Client ID: %s\n", r.ui.clientID)
@@ -231,7 +231,7 @@ func (r *Renderer) RenderBetInput() string {
 
 	if currentBet == 0 {
 		s += "No current bet\n"
-		s += fmt.Sprintf("Minimum bet (big blind): %d\n\n", bigBlind)
+		s += fmt.Sprintf("Minimum bet (big blind): %d\n", bigBlind)
 	} else {
 		s += fmt.Sprintf("Current bet to call: %d\n", currentBet)
 		if playerCurrentBet < currentBet {
@@ -240,10 +240,10 @@ func (r *Renderer) RenderBetInput() string {
 			s += fmt.Sprintf("Amount to call: %d (you have %d bet, need %d more)\n", callAmount, playerCurrentBet, callAmount)
 		}
 		s += fmt.Sprintf("Minimum to call: %d\n", currentBet)
-		s += fmt.Sprintf("Minimum to raise: %d\n\n", currentBet+bigBlind)
+		s += fmt.Sprintf("Minimum to raise: %d\n", currentBet+bigBlind)
 	}
 
-	s += FocusedStyle.Render(fmt.Sprintf("Bet Amount: %s", r.ui.betAmount)) + "\n\n"
+	s += FocusedStyle.Render(fmt.Sprintf("Bet Amount: %s", r.ui.betAmount)) + "\n"
 	s += HelpStyle.Render("Type amount and press Enter to bet, or 'q' to cancel")
 	return s
 }
@@ -299,17 +299,64 @@ func (r *Renderer) RenderActiveGame() string {
 	return s
 }
 
-// renderCommunityCardsSection creates a clear, prominent display of community cards
+// renderCommunityCardsSection creates a clear, prominent display of community cards with game info in the header
 func (r *Renderer) renderCommunityCardsSection() string {
 	var s string
 
-	// Clean header with subtle icon
-	s += lipgloss.NewStyle().
+	// Phase indicator - cleaner with minimal icons
+	var phaseText string
+	switch r.ui.gamePhase {
+	case pokerrpc.GamePhase_WAITING:
+		phaseText = "⏳ WAITING FOR PLAYERS"
+	case pokerrpc.GamePhase_PRE_FLOP:
+		phaseText = "🎯 PRE-FLOP"
+	case pokerrpc.GamePhase_FLOP:
+		phaseText = "FLOP"
+	case pokerrpc.GamePhase_TURN:
+		phaseText = "TURN"
+	case pokerrpc.GamePhase_RIVER:
+		phaseText = "RIVER"
+	case pokerrpc.GamePhase_SHOWDOWN:
+		phaseText = "🏆 SHOWDOWN"
+	default:
+		phaseText = r.ui.gamePhase.String()
+	}
+
+	// Create header with game info
+	headerSection := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("255")).
 		Bold(true).
 		Background(lipgloss.Color("22")).
 		Padding(0, 2).
-		Render("🃏 COMMUNITY CARDS") + "\n"
+		MarginTop(1).
+		MarginBottom(1).
+		Render("🃏 COMMUNITY CARDS")
+
+	// Game info section with phase and pot info
+	var gameInfo string
+	gameInfo += lipgloss.NewStyle().
+		Foreground(lipgloss.Color("214")).
+		Bold(true).
+		Render(phaseText)
+
+	// Add pot and bet info
+	potDisplay := fmt.Sprintf("💰 Pot: %d", r.ui.pot)
+	if r.ui.currentBet > 0 {
+		potDisplay += fmt.Sprintf(" | Current Bet: %d", r.ui.currentBet)
+	}
+
+	gameInfo += " | " + lipgloss.NewStyle().
+		Foreground(lipgloss.Color("140")).
+		Render(potDisplay)
+
+	gameInfoSection := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("214")).
+		Bold(true).
+		MarginLeft(3).
+		Render(gameInfo)
+
+	// Join header and game info horizontally
+	s += lipgloss.JoinHorizontal(lipgloss.Center, headerSection, gameInfoSection) + "\n"
 
 	// Cards display
 	var cardElements []string
@@ -355,37 +402,12 @@ func (r *Renderer) renderCommunityCardsSection() string {
 	cardsDisplay := strings.Join(cardElements, " ")
 	s += lipgloss.NewStyle().
 		Align(lipgloss.Center).
-		Render(cardsDisplay) + "\n"
-
-	// Phase indicator - cleaner with minimal icons
-	var phaseText string
-	switch r.ui.gamePhase {
-	case pokerrpc.GamePhase_WAITING:
-		phaseText = "⏳ WAITING FOR PLAYERS"
-	case pokerrpc.GamePhase_PRE_FLOP:
-		phaseText = "🎯 PRE-FLOP"
-	case pokerrpc.GamePhase_FLOP:
-		phaseText = "FLOP"
-	case pokerrpc.GamePhase_TURN:
-		phaseText = "TURN"
-	case pokerrpc.GamePhase_RIVER:
-		phaseText = "RIVER"
-	case pokerrpc.GamePhase_SHOWDOWN:
-		phaseText = "🏆 SHOWDOWN"
-	default:
-		phaseText = r.ui.gamePhase.String()
-	}
-
-	s += lipgloss.NewStyle().
-		Foreground(lipgloss.Color("214")).
-		Bold(true).
-		Align(lipgloss.Center).
-		Render(phaseText)
+		Render(cardsDisplay)
 
 	return s
 }
 
-// renderYourCardsAndGameInfo creates a compact display combining player cards and game info
+// renderYourCardsAndGameInfo creates a compact display of player cards
 func (r *Renderer) renderYourCardsAndGameInfo() string {
 	var s string
 
@@ -395,6 +417,8 @@ func (r *Renderer) renderYourCardsAndGameInfo() string {
 		Bold(true).
 		Background(lipgloss.Color("17")).
 		Padding(0, 2).
+		MarginTop(1).
+		MarginBottom(1).
 		Render("🂠 YOUR HAND") + "\n"
 
 	var cardElements []string
@@ -432,16 +456,6 @@ func (r *Renderer) renderYourCardsAndGameInfo() string {
 		Align(lipgloss.Center).
 		Render(cardsDisplay)
 
-	// Game info - cleaner format with chip icon
-	potDisplay := fmt.Sprintf("💰 Pot: %d", r.ui.pot)
-	if r.ui.currentBet > 0 {
-		potDisplay += fmt.Sprintf(" | Current Bet: %d", r.ui.currentBet)
-	}
-
-	s += " | " + lipgloss.NewStyle().
-		Foreground(lipgloss.Color("140")).
-		Render(potDisplay)
-
 	return s
 }
 
@@ -452,7 +466,7 @@ func (r *Renderer) renderPlayersAroundTable() string {
 	}
 
 	var result string
-	result += TitleStyle.Render("👥 Players at Table 👥") + "\n\n"
+	result += TitleStyle.Render("👥 Players at Table 👥")
 
 	// Arrange players in a visual table layout
 	for i, player := range r.ui.players {
@@ -538,6 +552,43 @@ func (r *Renderer) formatPlayerInfo(player *pokerrpc.Player) string {
 
 // renderActionButtons creates clear action buttons with better UX
 func (r *Renderer) renderActionButtons() string {
+	// During showdown, show card visibility options for all players
+	if r.ui.gamePhase == pokerrpc.GamePhase_SHOWDOWN {
+		var result string
+
+		// Card visibility toggle section
+		result += lipgloss.NewStyle().
+			Foreground(lipgloss.Color("214")).
+			Bold(true).
+			MarginTop(1).
+			MarginBottom(1).
+			Render("🎴 CARD VISIBILITY OPTIONS") + "\n"
+
+		options := r.ui.getActiveGameOptions()
+		for i, option := range options {
+			var buttonText string
+			switch option {
+			case "Show My Cards":
+				buttonText = "👁️ Show My Cards"
+			case "Hide My Cards":
+				buttonText = "🙈 Hide My Cards"
+			case "Leave Table":
+				buttonText = "🚪 Leave Table"
+			default:
+				buttonText = option
+			}
+
+			if i == r.ui.selectedItem {
+				result += FocusedStyle.
+					Render(fmt.Sprintf("> %s", buttonText)) + "\n"
+			} else {
+				result += BlurredStyle.
+					Render(fmt.Sprintf("  %s", buttonText)) + "\n"
+			}
+		}
+		return result
+	}
+
 	// Check if it's player's turn and they're in an active game phase
 	if !isPlayerTurn(r.ui.currentPlayerID, r.ui.clientID) {
 		return ""
@@ -548,19 +599,17 @@ func (r *Renderer) renderActionButtons() string {
 	case pokerrpc.GamePhase_PRE_FLOP, pokerrpc.GamePhase_FLOP, pokerrpc.GamePhase_TURN, pokerrpc.GamePhase_RIVER:
 		// These are valid phases for player actions
 	default:
-		// In other phases (WAITING, SHOWDOWN), don't show action buttons
+		// In other phases (WAITING), don't show action buttons
 		return ""
 	}
 
 	var result string
 
 	// Very clear turn indicator with icon
-	result += lipgloss.NewStyle().
-		Foreground(lipgloss.Color("255")).
-		Bold(true).
-		Background(lipgloss.Color("196")).
-		Padding(0, 2).
-		Render("⚡ YOUR TURN - CHOOSE ACTION") + "\n\n"
+	result += YourTurnStyle.
+		MarginTop(1).
+		MarginBottom(1).
+		Render("⚡ YOUR TURN - CHOOSE ACTION") + "\n"
 
 	// Clean action buttons with minimal icons
 	options := r.ui.getActiveGameOptions()
@@ -576,6 +625,10 @@ func (r *Renderer) renderActionButtons() string {
 			buttonText = "💸 Bet/Raise"
 		case "Fold":
 			buttonText = "❌ Fold"
+		case "Show My Cards":
+			buttonText = "👁️ Show My Cards"
+		case "Hide My Cards":
+			buttonText = "🙈 Hide My Cards"
 		case "Leave Table":
 			buttonText = "🚪 Leave Table"
 		default:
@@ -583,9 +636,11 @@ func (r *Renderer) renderActionButtons() string {
 		}
 
 		if i == r.ui.selectedItem {
-			result += FocusedStyle.Render(fmt.Sprintf("> %s", buttonText)) + "\n"
+			result += FocusedStyle.
+				Render(fmt.Sprintf("> %s", buttonText)) + "\n"
 		} else {
-			result += BlurredStyle.Render(fmt.Sprintf("  %s", buttonText)) + "\n"
+			result += BlurredStyle.
+				Render(fmt.Sprintf("  %s", buttonText)) + "\n"
 		}
 	}
 
@@ -642,6 +697,8 @@ func (r *Renderer) renderPlayersCompact() string {
 	result.WriteString(lipgloss.NewStyle().
 		Foreground(lipgloss.Color("255")).
 		Bold(true).
+		MarginTop(1).
+		MarginBottom(1).
 		Render("👥 PLAYERS") + "\n")
 
 	var playerLines []string
@@ -694,7 +751,7 @@ func (r *Renderer) renderPlayersCompact() string {
 	return result.String()
 }
 
-// renderShowdownResults displays the showdown results with winner cards and hand information
+// renderShowdownResults displays the showdown results with players side by side
 func (r *Renderer) renderShowdownResults() string {
 	if r.ui.gamePhase != pokerrpc.GamePhase_SHOWDOWN {
 		return ""
@@ -710,45 +767,57 @@ func (r *Renderer) renderShowdownResults() string {
 		Padding(0, 2).
 		Align(lipgloss.Center).
 		Width(50).
-		Render("🏆 SHOWDOWN RESULTS 🏆") + "\n\n"
+		MarginTop(1).
+		MarginBottom(1).
+		Render("🏆 SHOWDOWN RESULTS 🏆") + "\n"
 
-	// Display all players' hands during showdown
-	s += lipgloss.NewStyle().
-		Foreground(lipgloss.Color("255")).
-		Bold(true).
-		Background(lipgloss.Color("22")).
-		Padding(0, 1).
-		Render("👥 ALL PLAYERS' HANDS") + "\n"
-
+	// Get active players - show all players who made it to showdown (didn't fold)
+	var activePlayers []*pokerrpc.Player
 	for _, player := range r.ui.players {
-		if player.Folded {
-			continue // Skip folded players
+		if !player.Folded {
+			activePlayers = append(activePlayers, player)
 		}
+	}
 
+	if len(activePlayers) == 0 {
+		return s + "No active players\n"
+	}
+
+	// Create player boxes side by side
+	var playerBoxes []string
+	for _, player := range activePlayers {
 		playerName := player.Id
-		if len(playerName) > 15 {
-			playerName = playerName[:15] + "..."
+		if len(playerName) > 12 {
+			playerName = playerName[:12] + "..."
 		}
 
-		// Player info line
-		var playerLine string
-		var style lipgloss.Style
+		// Build player box content
+		var boxContent strings.Builder
 
+		// Player name with icon
 		if player.Id == r.ui.clientID {
-			style = lipgloss.NewStyle().
+			boxContent.WriteString(lipgloss.NewStyle().
 				Foreground(lipgloss.Color("39")).
-				Bold(true)
-			playerLine = fmt.Sprintf("🔵 YOU (%s)", playerName)
+				Bold(true).
+				Render("🔵 YOU") + "\n")
 		} else {
-			style = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("255"))
-			playerLine = fmt.Sprintf("👤 %s", playerName)
+			boxContent.WriteString(lipgloss.NewStyle().
+				Foreground(lipgloss.Color("255")).
+				Bold(true).
+				Render("👤 "+playerName) + "\n")
 		}
 
-		s += style.Render(playerLine) + "\n"
+		// Show player's hole cards (check visibility for each player)
+		shouldShowCards := false
+		if player.Id == r.ui.clientID {
+			// For current client, use their showMyCards setting
+			shouldShowCards = r.ui.showMyCards
+		} else {
+			// For other players, check if they have chosen to show their cards
+			shouldShowCards = r.ui.playersShowingCards[player.Id]
+		}
 
-		// Show player's hole cards (their original 2 cards)
-		if len(player.Hand) > 0 {
+		if len(player.Hand) > 0 && shouldShowCards {
 			var cardElements []string
 			for _, card := range player.Hand {
 				cardDisplay := r.formatCard(card)
@@ -761,28 +830,109 @@ func (r *Renderer) renderShowdownResults() string {
 				cardElements = append(cardElements, styledCard)
 			}
 			cardsDisplay := strings.Join(cardElements, " ")
-			s += "   Hole Cards: " + cardsDisplay + "\n"
+			boxContent.WriteString(cardsDisplay + "\n")
+		} else if !shouldShowCards {
+			// Show hidden cards for current player who chose to hide
+			hiddenCards := CardStyle.Render("??") + " " + CardStyle.Render("??")
+			boxContent.WriteString(hiddenCards + "\n")
 		}
 
-		// Show hand description if available from server during showdown
+		// Show hand description (respect each player's card visibility setting)
 		handDescription := "Evaluating..."
 		if player.GetHandDescription() != "" {
 			handDescription = player.GetHandDescription()
 		}
-		s += "   Hand: " + lipgloss.NewStyle().
+
+		// Hide hand description if player has chosen to hide cards
+		if player.Id == r.ui.clientID && !r.ui.showMyCards {
+			handDescription = "Cards Hidden"
+		} else if player.Id != r.ui.clientID && !r.ui.playersShowingCards[player.Id] {
+			handDescription = "Cards Hidden"
+		}
+
+		boxContent.WriteString(lipgloss.NewStyle().
 			Foreground(lipgloss.Color("214")).
-			Render(handDescription) + "\n\n"
+			Render(handDescription))
+
+		// Style the player box
+		var boxStyle lipgloss.Style
+		if player.Id == r.ui.clientID {
+			boxStyle = lipgloss.NewStyle().
+				Border(lipgloss.DoubleBorder()).
+				BorderForeground(lipgloss.Color("39")).
+				Padding(0, 1).
+				Margin(0, 1).
+				Background(lipgloss.Color("17")).
+				Width(14)
+		} else {
+			boxStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("255")).
+				Padding(0, 1).
+				Margin(0, 1).
+				Width(14)
+		}
+
+		playerBoxes = append(playerBoxes, boxStyle.Render(boxContent.String()))
+	}
+
+	// Join player boxes horizontally
+	s += lipgloss.JoinHorizontal(lipgloss.Top, playerBoxes...) + "\n"
+
+	// Show folded players section
+	var foldedPlayers []*pokerrpc.Player
+	for _, player := range r.ui.players {
+		if player.Folded {
+			foldedPlayers = append(foldedPlayers, player)
+		}
+	}
+
+	if len(foldedPlayers) > 0 {
+		s += lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241")).
+			Bold(true).
+			Background(lipgloss.Color("52")).
+			Padding(0, 1).
+			MarginTop(1).
+			MarginBottom(1).
+			Render("❌ FOLDED PLAYERS") + "\n"
+
+		var foldedLines []string
+		for _, player := range foldedPlayers {
+			playerName := player.Id
+			if len(playerName) > 15 {
+				playerName = playerName[:15] + "..."
+			}
+
+			var foldedStyle lipgloss.Style
+			if player.Id == r.ui.clientID {
+				foldedStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("241")).
+					Bold(true)
+			} else {
+				foldedStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("241"))
+			}
+
+			foldedLine := fmt.Sprintf("❌ %s - FOLDED", playerName)
+			foldedLines = append(foldedLines, foldedStyle.Render(foldedLine))
+		}
+
+		s += strings.Join(foldedLines, "  ") + "\n"
 	}
 
 	// Display winners section
 	if len(r.ui.winners) > 0 {
-		s += lipgloss.NewStyle().
+		// Create the winners line with title and winner info on same line
+		winnersLine := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("255")).
 			Bold(true).
 			Background(lipgloss.Color("22")).
 			Padding(0, 1).
-			Render("🏆 WINNERS") + "\n"
+			MarginTop(1).
+			Render("🏆 WINNERS")
 
+		// Add winner info directly to the same line
 		for _, winner := range r.ui.winners {
 			winnerName := winner.PlayerId
 			if len(winnerName) > 15 {
@@ -793,16 +943,21 @@ func (r *Renderer) renderShowdownResults() string {
 			if winner.PlayerId == r.ui.clientID {
 				winnerStyle = lipgloss.NewStyle().
 					Foreground(lipgloss.Color("46")).
-					Bold(true).
-					Background(lipgloss.Color("22"))
+					Bold(true)
 			} else {
 				winnerStyle = lipgloss.NewStyle().
 					Foreground(lipgloss.Color("46")).
 					Bold(true)
 			}
 
-			winnerLine := fmt.Sprintf("🎉 %s - Won %d chips", winnerName, winner.Winnings)
-			s += winnerStyle.Render(winnerLine) + "\n"
+			winnerInfo := fmt.Sprintf(" 🎉 %s - Won %d chips", winnerName, winner.Winnings)
+			winnersLine += winnerStyle.Render(winnerInfo)
+		}
+
+		s += winnersLine + "\n"
+
+		// Continue with the rest of winner details on separate lines
+		for _, winner := range r.ui.winners {
 
 			// Show winner's best 5-card hand
 			if len(winner.BestHand) > 0 {
@@ -822,14 +977,12 @@ func (r *Renderer) renderShowdownResults() string {
 			}
 
 			// Show hand rank
-			if winner.HandRank != pokerrpc.HandRank_HIGH_CARD {
-				rankText := winner.HandRank.String()
-				s += "   Rank: " + lipgloss.NewStyle().
-					Foreground(lipgloss.Color("214")).
-					Bold(true).
-					Render(rankText) + "\n"
-			}
-			s += "\n"
+			rankText := winner.HandRank.String()
+			s += "   Rank: " + lipgloss.NewStyle().
+				Foreground(lipgloss.Color("214")).
+				Bold(true).
+				Render(rankText)
+
 		}
 	}
 

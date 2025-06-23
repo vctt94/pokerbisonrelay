@@ -387,6 +387,64 @@ func (s *Server) GetPlayerCurrentTable(ctx context.Context, req *pokerrpc.GetPla
 	}, nil
 }
 
+func (s *Server) ShowCards(ctx context.Context, req *pokerrpc.ShowCardsRequest) (*pokerrpc.ShowCardsResponse, error) {
+	s.mu.RLock()
+	table, ok := s.tables[req.TableId]
+	s.mu.RUnlock()
+
+	if !ok {
+		return nil, status.Error(codes.NotFound, "table not found")
+	}
+
+	// Verify player is at the table
+	player := table.GetPlayer(req.PlayerId)
+	if player == nil {
+		return nil, status.Error(codes.FailedPrecondition, "player not at table")
+	}
+
+	// Broadcast card visibility notification to all players at the table
+	s.broadcastNotificationToTable(req.TableId, &pokerrpc.Notification{
+		Type:     pokerrpc.NotificationType_CARDS_SHOWN,
+		PlayerId: req.PlayerId,
+		TableId:  req.TableId,
+		Message:  fmt.Sprintf("%s is showing their cards", req.PlayerId),
+	})
+
+	return &pokerrpc.ShowCardsResponse{
+		Success: true,
+		Message: "Cards shown to other players",
+	}, nil
+}
+
+func (s *Server) HideCards(ctx context.Context, req *pokerrpc.HideCardsRequest) (*pokerrpc.HideCardsResponse, error) {
+	s.mu.RLock()
+	table, ok := s.tables[req.TableId]
+	s.mu.RUnlock()
+
+	if !ok {
+		return nil, status.Error(codes.NotFound, "table not found")
+	}
+
+	// Verify player is at the table
+	player := table.GetPlayer(req.PlayerId)
+	if player == nil {
+		return nil, status.Error(codes.FailedPrecondition, "player not at table")
+	}
+
+	// Broadcast card visibility notification to all players at the table
+	s.broadcastNotificationToTable(req.TableId, &pokerrpc.Notification{
+		Type:     pokerrpc.NotificationType_CARDS_HIDDEN,
+		PlayerId: req.PlayerId,
+		TableId:  req.TableId,
+		Message:  fmt.Sprintf("%s is hiding their cards", req.PlayerId),
+	})
+
+	return &pokerrpc.HideCardsResponse{
+		Success: true,
+		Message: "Cards hidden from other players",
+	}, nil
+}
+
 // PokerService methods
 
 func (s *Server) StartGameStream(req *pokerrpc.StartGameStreamRequest, stream pokerrpc.PokerService_StartGameStreamServer) error {

@@ -41,6 +41,10 @@ service LobbyService {
   rpc SetPlayerReady(SetPlayerReadyRequest) returns (SetPlayerReadyResponse) {}
   rpc SetPlayerUnready(SetPlayerUnreadyRequest) returns (SetPlayerUnreadyResponse) {}
   
+  // Card visibility management
+  rpc ShowCards(ShowCardsRequest) returns (ShowCardsResponse) {}
+  rpc HideCards(HideCardsRequest) returns (HideCardsResponse) {}
+  
   // Notification stream
   rpc StartNotificationStream(StartNotificationStreamRequest) returns (stream Notification) {}
 }
@@ -76,6 +80,8 @@ enum NotificationType {
   BIG_BLIND_POSTED = 17;
   CALL_MADE = 18;
   CHECK_MADE = 19;
+  CARDS_SHOWN = 20;
+  CARDS_HIDDEN = 21;
 }
 
 enum HandRank {
@@ -348,4 +354,24 @@ message GetPlayerCurrentTableRequest {
 
 message GetPlayerCurrentTableResponse {
   string table_id = 1;
+}
+
+message ShowCardsRequest {
+  string player_id = 1;
+  string table_id = 2;
+}
+
+message ShowCardsResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message HideCardsRequest {
+  string player_id = 1;
+  string table_id = 2;
+}
+
+message HideCardsResponse {
+  bool success = 1;
+  string message = 2;
 } 
