@@ -115,6 +115,19 @@ func (s *Server) SendGameStarted(tableID string) {
 	}()
 }
 
+// SendNewHandStarted sends NEW_HAND_STARTED notification to all players at the table
+func (s *Server) SendNewHandStarted(tableID string) {
+	notification := &pokerrpc.Notification{
+		Type:    pokerrpc.NotificationType_NEW_HAND_STARTED,
+		Message: "New hand started!",
+		TableId: tableID,
+	}
+
+	go func() {
+		s.broadcastNotificationToTable(tableID, notification)
+	}()
+}
+
 // SendPlayerReady sends PLAYER_READY notification to all players at the table
 func (s *Server) SendPlayerReady(tableID, playerID string, ready bool) {
 	var notificationType pokerrpc.NotificationType
@@ -176,6 +189,8 @@ func (s *Server) BroadcastGameStateUpdate(tableID string) {
 	if !exists || len(playerStreams) == 0 {
 		return
 	}
+
+	s.log.Debugf("BroadcastGameStateUpdate: broadcasting to %d players on table %s", len(playerStreams), tableID)
 
 	// Send game state update to each player with an active stream
 	for playerID, stream := range playerStreams {

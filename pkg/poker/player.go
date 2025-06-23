@@ -117,7 +117,8 @@ func NewPlayer(id, name string, balance int64) *Player {
 
 // ResetForNewHand resets the player's game-level state for a new hand while preserving table-level state
 func (p *Player) ResetForNewHand(startingChips int64) {
-	p.Hand = p.Hand[:0]
+	// Clear hand completely - create new slice to ensure old references are lost
+	p.Hand = make([]Card, 0, 2)
 	p.Balance = startingChips
 	p.StartingBalance = startingChips
 	p.HasBet = 0
@@ -126,6 +127,7 @@ func (p *Player) ResetForNewHand(startingChips int64) {
 	p.IsTurn = false
 	p.HandValue = nil
 	p.HandDescription = ""
+	p.HasFolded = false // Ensure folded state is reset
 	p.LastAction = time.Now()
 }
 

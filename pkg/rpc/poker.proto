@@ -52,11 +52,12 @@ service LobbyService {
 // Enums
 enum GamePhase {
   WAITING = 0;
-  PRE_FLOP = 1;
-  FLOP = 2;
-  TURN = 3;
-  RIVER = 4;
-  SHOWDOWN = 5;
+  NEW_HAND_DEALING = 1;
+  PRE_FLOP = 2;
+  FLOP = 3;
+  TURN = 4;
+  RIVER = 5;
+  SHOWDOWN = 6;
 }
 
 enum NotificationType {
@@ -82,6 +83,7 @@ enum NotificationType {
   CHECK_MADE = 19;
   CARDS_SHOWN = 20;
   CARDS_HIDDEN = 21;
+  NEW_HAND_STARTED = 22;
 }
 
 enum HandRank {

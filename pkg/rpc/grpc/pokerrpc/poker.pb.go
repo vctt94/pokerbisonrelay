@@ -25,31 +25,34 @@ const (
 type GamePhase int32
 
 const (
-	GamePhase_WAITING  GamePhase = 0
-	GamePhase_PRE_FLOP GamePhase = 1
-	GamePhase_FLOP     GamePhase = 2
-	GamePhase_TURN     GamePhase = 3
-	GamePhase_RIVER    GamePhase = 4
-	GamePhase_SHOWDOWN GamePhase = 5
+	GamePhase_WAITING          GamePhase = 0
+	GamePhase_NEW_HAND_DEALING GamePhase = 1
+	GamePhase_PRE_FLOP         GamePhase = 2
+	GamePhase_FLOP             GamePhase = 3
+	GamePhase_TURN             GamePhase = 4
+	GamePhase_RIVER            GamePhase = 5
+	GamePhase_SHOWDOWN         GamePhase = 6
 )
 
 // Enum value maps for GamePhase.
 var (
 	GamePhase_name = map[int32]string{
 		0: "WAITING",
-		1: "PRE_FLOP",
-		2: "FLOP",
-		3: "TURN",
-		4: "RIVER",
-		5: "SHOWDOWN",
+		1: "NEW_HAND_DEALING",
+		2: "PRE_FLOP",
+		3: "FLOP",
+		4: "TURN",
+		5: "RIVER",
+		6: "SHOWDOWN",
 	}
 	GamePhase_value = map[string]int32{
-		"WAITING":  0,
-		"PRE_FLOP": 1,
-		"FLOP":     2,
-		"TURN":     3,
-		"RIVER":    4,
-		"SHOWDOWN": 5,
+		"WAITING":          0,
+		"NEW_HAND_DEALING": 1,
+		"PRE_FLOP":         2,
+		"FLOP":             3,
+		"TURN":             4,
+		"RIVER":            5,
+		"SHOWDOWN":         6,
 	}
 )
 
@@ -105,6 +108,7 @@ const (
 	NotificationType_CHECK_MADE         NotificationType = 19
 	NotificationType_CARDS_SHOWN        NotificationType = 20
 	NotificationType_CARDS_HIDDEN       NotificationType = 21
+	NotificationType_NEW_HAND_STARTED   NotificationType = 22
 )
 
 // Enum value maps for NotificationType.
@@ -132,6 +136,7 @@ var (
 		19: "CHECK_MADE",
 		20: "CARDS_SHOWN",
 		21: "CARDS_HIDDEN",
+		22: "NEW_HAND_STARTED",
 	}
 	NotificationType_value = map[string]int32{
 		"UNKNOWN":            0,
@@ -156,6 +161,7 @@ var (
 		"CHECK_MADE":         19,
 		"CARDS_SHOWN":        20,
 		"CARDS_HIDDEN":       21,
+		"NEW_HAND_STARTED":   22,
 	}
 )
 
@@ -3238,14 +3244,15 @@ const file_poker_proto_rawDesc = "" +
 	"\btable_id\x18\x02 \x01(\tR\atableId\"G\n" +
 	"\x11HideCardsResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage*S\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage*i\n" +
 	"\tGamePhase\x12\v\n" +
-	"\aWAITING\x10\x00\x12\f\n" +
-	"\bPRE_FLOP\x10\x01\x12\b\n" +
-	"\x04FLOP\x10\x02\x12\b\n" +
-	"\x04TURN\x10\x03\x12\t\n" +
-	"\x05RIVER\x10\x04\x12\f\n" +
-	"\bSHOWDOWN\x10\x05*\xa4\x03\n" +
+	"\aWAITING\x10\x00\x12\x14\n" +
+	"\x10NEW_HAND_DEALING\x10\x01\x12\f\n" +
+	"\bPRE_FLOP\x10\x02\x12\b\n" +
+	"\x04FLOP\x10\x03\x12\b\n" +
+	"\x04TURN\x10\x04\x12\t\n" +
+	"\x05RIVER\x10\x05\x12\f\n" +
+	"\bSHOWDOWN\x10\x06*\xba\x03\n" +
 	"\x10NotificationType\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x11\n" +
 	"\rPLAYER_JOINED\x10\x01\x12\x0f\n" +
@@ -3271,7 +3278,8 @@ const file_poker_proto_rawDesc = "" +
 	"\n" +
 	"CHECK_MADE\x10\x13\x12\x0f\n" +
 	"\vCARDS_SHOWN\x10\x14\x12\x10\n" +
-	"\fCARDS_HIDDEN\x10\x15*\xa8\x01\n" +
+	"\fCARDS_HIDDEN\x10\x15\x12\x14\n" +
+	"\x10NEW_HAND_STARTED\x10\x16*\xa8\x01\n" +
 	"\bHandRank\x12\r\n" +
 	"\tHIGH_CARD\x10\x00\x12\b\n" +
 	"\x04PAIR\x10\x01\x12\f\n" +

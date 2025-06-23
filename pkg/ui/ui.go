@@ -611,6 +611,10 @@ func (m *PokerUI) updateGameState(gameUpdate *pokerrpc.GameUpdate) {
 	case pokerrpc.GamePhase_WAITING:
 		m.currentState = m.stateGameLobby
 		m.currentView = "gameLobby"
+	case pokerrpc.GamePhase_NEW_HAND_DEALING:
+		// During dealing phase, stay in active game view but show dealing status
+		m.currentState = m.stateActiveGame
+		m.currentView = "activeGame"
 	default:
 		m.currentState = m.stateActiveGame
 		m.currentView = "activeGame"
@@ -681,6 +685,16 @@ func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cm
 		m.winners = notification.Winners
 		m.message = fmt.Sprintf("Showdown complete! Winners: %d players", len(notification.Winners))
 		return nil
+
+	case pokerrpc.NotificationType_NEW_HAND_STARTED:
+		// Clear all previous hand state before the new game state update arrives
+		m.resetGameState()
+		m.playersShowingCards = make(map[string]bool) // Reset card visibility tracking
+		m.message = "New hand started!"
+		// Stay in active game view - the game state update will follow with new cards
+		m.currentState = m.stateActiveGame
+		m.currentView = "activeGame"
+		return tea.ClearScreen
 
 	case pokerrpc.NotificationType_CARDS_SHOWN:
 		// Track that this player is showing their cards

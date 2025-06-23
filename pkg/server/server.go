@@ -85,17 +85,18 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 
 	// Create table config
 	cfg := poker.TableConfig{
-		ID:            fmt.Sprintf("table-%d", time.Now().UnixNano()),
-		Log:           s.logBackend.Logger("TABLE"),
-		HostID:        req.PlayerId,
-		BuyIn:         req.BuyIn, // DCR amount (in atoms) to join table
-		MinPlayers:    int(req.MinPlayers),
-		MaxPlayers:    int(req.MaxPlayers),
-		SmallBlind:    req.SmallBlind, // Poker chips
-		BigBlind:      req.BigBlind,   // Poker chips
-		MinBalance:    req.MinBalance, // Minimum DCR balance required
-		StartingChips: startingChips,  // Poker chips given to each player
-		TimeBank:      timeBankDuration,
+		ID:             fmt.Sprintf("table-%d", time.Now().UnixNano()),
+		Log:            s.logBackend.Logger("TABLE"),
+		HostID:         req.PlayerId,
+		BuyIn:          req.BuyIn, // DCR amount (in atoms) to join table
+		MinPlayers:     int(req.MinPlayers),
+		MaxPlayers:     int(req.MaxPlayers),
+		SmallBlind:     req.SmallBlind, // Poker chips
+		BigBlind:       req.BigBlind,   // Poker chips
+		MinBalance:     req.MinBalance, // Minimum DCR balance required
+		StartingChips:  startingChips,  // Poker chips given to each player
+		TimeBank:       timeBankDuration,
+		AutoStartDelay: 3 * time.Second, // Auto-start next hand after 3 seconds
 	}
 
 	// Create new table
@@ -500,38 +501,20 @@ func (s *Server) buildGameState(tableID, requestingPlayerID string) (*pokerrpc.G
 
 	game := table.GetGame()
 
-	// Use table players as the single source of truth
-	tablePlayers := table.GetPlayers()
-	players := make([]*pokerrpc.Player, 0, len(tablePlayers))
-	for _, p := range tablePlayers {
-		// Create player update with complete information
-		player := &pokerrpc.Player{
-			Id:         p.ID,
-			Balance:    p.Balance,
-			IsReady:    p.IsReady,
-			Folded:     p.HasFolded,
-			CurrentBet: p.HasBet,
-		}
-
-		// Only include hand cards if this is the requesting player's own data
-		// or if the game is in showdown phase
-		if (p.ID == requestingPlayerID) || (game != nil && game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN) {
-			player.Hand = make([]*pokerrpc.Card, len(p.Hand))
-			for i, card := range p.Hand {
-				player.Hand[i] = &pokerrpc.Card{
-					Suit:  card.GetSuit(),
-					Value: card.GetValue(),
-				}
-			}
-		}
-
-		// Include hand description during showdown
-		if game != nil && game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN && p.HandDescription != "" {
-			player.HandDescription = p.HandDescription
-		}
-
-		players = append(players, player)
+	// Debug logging for game state transitions
+	if game == nil {
+		s.log.Debugf("buildGameState: game is nil for table %s, player %s - transition state", tableID, requestingPlayerID)
+	} else {
+		s.log.Debugf("buildGameState: game exists for table %s, player %s, phase: %v", tableID, requestingPlayerID, game.GetPhase())
 	}
+
+	return s.buildGameStateForPlayer(table, game, requestingPlayerID), nil
+}
+
+// buildGameStateForPlayer creates a GameUpdate with all the necessary data for a specific player
+func (s *Server) buildGameStateForPlayer(table *poker.Table, game *poker.Game, requestingPlayerID string) *pokerrpc.GameUpdate {
+	// Build players list
+	players := s.buildPlayers(table.GetPlayers(), game, requestingPlayerID)
 
 	// Build community cards slice
 	communityCards := make([]*pokerrpc.Card, 0)
@@ -551,8 +534,8 @@ func (s *Server) buildGameState(tableID, requestingPlayerID string) (*pokerrpc.G
 		currentPlayerID = table.GetCurrentPlayerID()
 	}
 
-	gameUpdate := &pokerrpc.GameUpdate{
-		TableId:         tableID,
+	return &pokerrpc.GameUpdate{
+		TableId:         table.GetConfig().ID,
 		Phase:           table.GetGamePhase(),
 		Players:         players,
 		CommunityCards:  communityCards,
@@ -563,8 +546,6 @@ func (s *Server) buildGameState(tableID, requestingPlayerID string) (*pokerrpc.G
 		PlayersRequired: int32(table.GetMinPlayers()),
 		PlayersJoined:   int32(len(table.GetPlayers())),
 	}
-
-	return gameUpdate, nil
 }
 
 func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*pokerrpc.MakeBetResponse, error) {
@@ -772,6 +753,16 @@ func (s *Server) Check(ctx context.Context, req *pokerrpc.CheckRequest) (*pokerr
 	}, nil
 }
 
+// buildPlayers creates a slice of Player proto messages with appropriate card visibility
+func (s *Server) buildPlayers(tablePlayers []*poker.Player, game *poker.Game, requestingPlayerID string) []*pokerrpc.Player {
+	players := make([]*pokerrpc.Player, 0, len(tablePlayers))
+	for _, p := range tablePlayers {
+		player := s.buildPlayerForUpdate(p, requestingPlayerID, game)
+		players = append(players, player)
+	}
+	return players
+}
+
 // buildPlayerForUpdate creates a Player proto message with appropriate card visibility
 func (s *Server) buildPlayerForUpdate(p *poker.Player, requestingPlayerID string, game *poker.Game) *pokerrpc.Player {
 	player := &pokerrpc.Player{
@@ -784,7 +775,8 @@ func (s *Server) buildPlayerForUpdate(p *poker.Player, requestingPlayerID string
 
 	// Only include hand cards if this is the requesting player's own data
 	// or if the game is in showdown phase
-	if (p.ID == requestingPlayerID) || (game != nil && game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN) {
+	// But exclude hands when game is nil (transition state) to ensure clean UI updates
+	if game != nil && ((p.ID == requestingPlayerID) || game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN) {
 		player.Hand = make([]*pokerrpc.Card, len(p.Hand))
 		for i, card := range p.Hand {
 			player.Hand[i] = &pokerrpc.Card{
@@ -824,65 +816,8 @@ func (s *Server) GetGameState(ctx context.Context, req *pokerrpc.GetGameStateReq
 
 	game := table.GetGame()
 
-	// Use table players as the single source of truth
-	tablePlayers := table.GetPlayers()
-	players := make([]*pokerrpc.Player, 0, len(tablePlayers))
-	for _, p := range tablePlayers {
-		// Create player update with complete information
-		player := &pokerrpc.Player{
-			Id:         p.ID,
-			Balance:    p.Balance,
-			IsReady:    p.IsReady,
-			Folded:     p.HasFolded,
-			CurrentBet: p.HasBet,
-		}
-
-		// Only include hand cards if this is the requesting player's own data
-		// or if the game is in showdown phase
-		if (p.ID == requestingPlayerID) || (game != nil && game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN) {
-			player.Hand = make([]*pokerrpc.Card, len(p.Hand))
-			for i, card := range p.Hand {
-				player.Hand[i] = &pokerrpc.Card{
-					Suit:  card.GetSuit(),
-					Value: card.GetValue(),
-				}
-			}
-		}
-
-		// Include hand description during showdown
-		if game != nil && game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN && p.HandDescription != "" {
-			player.HandDescription = p.HandDescription
-		}
-
-		players = append(players, player)
-	}
-
-	// Build community cards slice
-	communityCards := make([]*pokerrpc.Card, 0)
-	var pot int64 = 0
-	if game != nil {
-		pot = game.GetPot()
-		for _, c := range game.GetCommunityCards() {
-			communityCards = append(communityCards, &pokerrpc.Card{
-				Suit:  c.GetSuit(),
-				Value: c.GetValue(),
-			})
-		}
-	}
-
 	return &pokerrpc.GetGameStateResponse{
-		GameState: &pokerrpc.GameUpdate{
-			TableId:         req.TableId,
-			Phase:           table.GetGamePhase(),
-			Players:         players,
-			CommunityCards:  communityCards,
-			Pot:             pot,
-			CurrentBet:      table.GetCurrentBet(),
-			CurrentPlayer:   table.GetCurrentPlayerID(),
-			GameStarted:     table.IsGameStarted(),
-			PlayersRequired: int32(table.GetMinPlayers()),
-			PlayersJoined:   int32(len(tablePlayers)),
-		},
+		GameState: s.buildGameStateForPlayer(table, game, requestingPlayerID),
 	}, nil
 }
 

@@ -173,15 +173,16 @@ func (s *State) handleCreateTable(ctx context.Context, bot *kit.Bot, pm *types.R
 	// Create new table
 	tableID := fmt.Sprintf("table-%d", time.Now().Unix())
 	table := poker.NewTable(poker.TableConfig{
-		ID:            tableID,
-		HostID:        playerID,
-		BuyIn:         int64(buyIn), // DCR buy-in amount (in atoms)
-		MinPlayers:    2,
-		MaxPlayers:    6,
-		SmallBlind:    10,            // Fixed chip amount for small blind
-		BigBlind:      20,            // Fixed chip amount for big blind
-		StartingChips: startingChips, // Poker chips given to each player
-		TimeBank:      6 * time.Second,
+		ID:             tableID,
+		HostID:         playerID,
+		BuyIn:          int64(buyIn), // DCR buy-in amount (in atoms)
+		MinPlayers:     2,
+		MaxPlayers:     6,
+		SmallBlind:     10,            // Fixed chip amount for small blind
+		BigBlind:       20,            // Fixed chip amount for big blind
+		StartingChips:  startingChips, // Poker chips given to each player
+		TimeBank:       6 * time.Second,
+		AutoStartDelay: 3 * time.Second, // Auto-start next hand after 3 seconds
 	})
 
 	// Add creator to table with starting chips (DCR buy-in handled separately)

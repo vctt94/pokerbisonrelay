@@ -86,16 +86,25 @@ func NewGame(cfg GameConfig) *Game {
 		betRound:        0,
 		config:          cfg,
 		errorSimulation: false,
-		phase:           pokerrpc.GamePhase_WAITING,
+		phase:           pokerrpc.GamePhase_NEW_HAND_DEALING,
 	}
 }
 
 // Run executes the state machine until a nil state is returned
 func (g *Game) Run() {
-	for state := statePreDeal; state != nil; {
+	for state := stateNewHandDealing; state != nil; {
 		state = state(g)
 		time.Sleep(500 * time.Millisecond) // Slow down for demo purposes
 	}
+}
+
+// stateNewHandDealing handles the NEW_HAND_DEALING phase
+func stateNewHandDealing(g *Game) stateFn {
+	// This state is primarily managed by the table layer
+	// The table handles card dealing and blind posting, then transitions to PRE_FLOP
+	// This state function is mainly for completeness in the state machine
+	g.phase = pokerrpc.GamePhase_NEW_HAND_DEALING
+	return statePreDeal
 }
 
 // statePreDeal prepares the game for a new hand
@@ -493,4 +502,36 @@ func (g *Game) GetWinners() []string {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return g.winners
+}
+
+// ResetForNewHand resets the game state for a new hand while preserving the game instance
+func (g *Game) ResetForNewHand(activePlayers []*Player) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// Update player references for this hand - replace the slice properly
+	g.players = make([]*Player, len(activePlayers))
+	copy(g.players, activePlayers)
+
+	// Reset hand-specific state
+	g.communityCards = nil
+	g.potManager = NewPotManager()
+	g.currentBet = 0
+	g.round++
+	g.betRound = 0
+	g.winners = nil
+
+	// Advance dealer position for new hand
+	if len(activePlayers) > 0 {
+		g.dealer = (g.dealer + 1) % len(activePlayers)
+	}
+
+	// Create new shuffled deck for new hand
+	g.deck = NewDeck(g.deck.rng)
+
+	// Set phase to NEW_HAND_DEALING to signal setup in progress
+	g.phase = pokerrpc.GamePhase_NEW_HAND_DEALING
+
+	// Reset current player to -1 to force initialization
+	g.currentPlayer = -1
 }

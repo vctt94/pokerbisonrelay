@@ -308,18 +308,20 @@ func (r *Renderer) renderCommunityCardsSection() string {
 	switch r.ui.gamePhase {
 	case pokerrpc.GamePhase_WAITING:
 		phaseText = "⏳ WAITING FOR PLAYERS"
+	case pokerrpc.GamePhase_NEW_HAND_DEALING:
+		phaseText = "🃏 DEALING NEW HAND"
 	case pokerrpc.GamePhase_PRE_FLOP:
 		phaseText = "🎯 PRE-FLOP"
 	case pokerrpc.GamePhase_FLOP:
-		phaseText = "FLOP"
+		phaseText = "🎲 FLOP"
 	case pokerrpc.GamePhase_TURN:
-		phaseText = "TURN"
+		phaseText = "♠️ TURN"
 	case pokerrpc.GamePhase_RIVER:
-		phaseText = "RIVER"
+		phaseText = "♥️ RIVER"
 	case pokerrpc.GamePhase_SHOWDOWN:
 		phaseText = "🏆 SHOWDOWN"
 	default:
-		phaseText = r.ui.gamePhase.String()
+		phaseText = "❓ UNKNOWN"
 	}
 
 	// Create header with game info
@@ -362,7 +364,7 @@ func (r *Renderer) renderCommunityCardsSection() string {
 	var cardElements []string
 
 	switch r.ui.gamePhase {
-	case pokerrpc.GamePhase_WAITING, pokerrpc.GamePhase_PRE_FLOP:
+	case pokerrpc.GamePhase_WAITING, pokerrpc.GamePhase_NEW_HAND_DEALING, pokerrpc.GamePhase_PRE_FLOP:
 		// Show placeholders
 		for i := 0; i < 5; i++ {
 			cardElements = append(cardElements, CardStyle.Render("  "))
@@ -423,7 +425,10 @@ func (r *Renderer) renderYourCardsAndGameInfo() string {
 
 	var cardElements []string
 
-	if r.ui.gamePhase != pokerrpc.GamePhase_WAITING {
+	// Show empty cards during WAITING phase or when no players data is available
+	if r.ui.gamePhase == pokerrpc.GamePhase_WAITING || r.ui.gamePhase == pokerrpc.GamePhase_NEW_HAND_DEALING || len(r.ui.players) == 0 {
+		cardElements = []string{CardStyle.Render("  "), CardStyle.Render("  ")}
+	} else {
 		// Find player's cards
 		var playerCards []*pokerrpc.Card
 		for _, player := range r.ui.players {
@@ -445,10 +450,9 @@ func (r *Renderer) renderYourCardsAndGameInfo() string {
 				cardElements = append(cardElements, styledCard)
 			}
 		} else {
+			// Show empty cards if no cards found or cards list is empty
 			cardElements = []string{CardStyle.Render("  "), CardStyle.Render("  ")}
 		}
-	} else {
-		cardElements = []string{CardStyle.Render("  "), CardStyle.Render("  ")}
 	}
 
 	cardsDisplay := strings.Join(cardElements, " ")
@@ -531,10 +535,10 @@ func (r *Renderer) formatPlayerInfo(player *pokerrpc.Player) string {
 		status = append(status, "FOLDED")
 	} else {
 		// Player is active in the game
-		if r.ui.gamePhase != pokerrpc.GamePhase_WAITING {
+		if r.ui.gamePhase != pokerrpc.GamePhase_WAITING && r.ui.gamePhase != pokerrpc.GamePhase_NEW_HAND_DEALING {
 			status = append(status, "ACTIVE")
 		} else {
-			// In waiting phase, show ready status
+			// In waiting or dealing phase, show ready status
 			if player.IsReady {
 				status = append(status, "READY")
 			} else {
@@ -598,8 +602,10 @@ func (r *Renderer) renderActionButtons() string {
 	switch r.ui.gamePhase {
 	case pokerrpc.GamePhase_PRE_FLOP, pokerrpc.GamePhase_FLOP, pokerrpc.GamePhase_TURN, pokerrpc.GamePhase_RIVER:
 		// These are valid phases for player actions
+	case pokerrpc.GamePhase_SHOWDOWN:
+		// Show limited actions during showdown (card visibility, leave table)
 	default:
-		// In other phases (WAITING), don't show action buttons
+		// In other phases (WAITING, NEW_HAND_DEALING), don't show action buttons
 		return ""
 	}
 
@@ -987,4 +993,20 @@ func (r *Renderer) renderShowdownResults() string {
 	}
 
 	return s
+}
+
+func (r *Renderer) renderGamePhase() string {
+	switch r.ui.gamePhase {
+	case pokerrpc.GamePhase_WAITING, pokerrpc.GamePhase_NEW_HAND_DEALING, pokerrpc.GamePhase_PRE_FLOP:
+		return fmt.Sprintf("Players: %d/%d", int(r.ui.playersJoined), int(r.ui.playersRequired))
+	case pokerrpc.GamePhase_FLOP, pokerrpc.GamePhase_TURN, pokerrpc.GamePhase_RIVER:
+		return fmt.Sprintf("Pot: %d chips | Current Bet: %d chips", r.ui.pot, r.ui.currentBet)
+	case pokerrpc.GamePhase_SHOWDOWN:
+		if len(r.ui.winners) > 0 {
+			return fmt.Sprintf("Pot: %d chips | Winners: %d", r.ui.pot, len(r.ui.winners))
+		}
+		return fmt.Sprintf("Pot: %d chips", r.ui.pot)
+	default:
+		return ""
+	}
 }
