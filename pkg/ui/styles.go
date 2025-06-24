@@ -9,15 +9,13 @@ var (
 			Background(lipgloss.Color("255")).
 			Foreground(lipgloss.Color("0")).
 			Padding(0, 1).
-			Margin(0, 1).
-			Border(lipgloss.RoundedBorder())
+			Margin(0, 1)
 
 	redCardStyle = lipgloss.NewStyle().
 			Background(lipgloss.Color("255")).
 			Foreground(lipgloss.Color("196")).
 			Padding(0, 1).
-			Margin(0, 1).
-			Border(lipgloss.RoundedBorder())
+			Margin(0, 1)
 
 	playerBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -103,15 +101,13 @@ var (
 			Background(lipgloss.Color("255")).
 			Foreground(lipgloss.Color("0")).
 			Padding(0, 1).
-			Margin(0, 1).
-			Border(lipgloss.RoundedBorder())
+			Margin(0, 1)
 
 	RedCardStyle = lipgloss.NewStyle().
 			Background(lipgloss.Color("255")).
 			Foreground(lipgloss.Color("196")).
 			Padding(0, 1).
-			Margin(0, 1).
-			Border(lipgloss.RoundedBorder())
+			Margin(0, 1)
 )
 
 // Player styles
@@ -171,6 +167,13 @@ var (
 				Border(lipgloss.ThickBorder()).
 				BorderForeground(lipgloss.Color("46")).
 				Bold(true)
+
+	// New pleasant style for YOUR TURN indicator
+	YourTurnStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("255")).
+			Bold(true).
+			Background(lipgloss.Color("33")). // Nice blue instead of harsh red
+			Padding(0, 2)
 
 	TableStyle = lipgloss.NewStyle().
 			Border(lipgloss.DoubleBorder()).

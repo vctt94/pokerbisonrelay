@@ -3,6 +3,9 @@ package bot
 import (
 	"context"
 	"fmt"
+	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,8 +15,12 @@ import (
 	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/decred/dcrd/dcrutil/v4"
 	kit "github.com/vctt94/bisonbotkit"
+	"github.com/vctt94/bisonbotkit/logging"
 	"github.com/vctt94/poker-bisonrelay/pkg/poker"
+	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 	"github.com/vctt94/poker-bisonrelay/pkg/server"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 const STARTING_CHIPS = 1000
@@ -31,6 +38,51 @@ func NewState(db server.Database) *State {
 		db:     db,
 		tables: make(map[string]*poker.Table),
 	}
+}
+
+// SetupGRPCServer sets up and returns a configured GRPC server with TLS
+func SetupGRPCServer(datadir, certFile, keyFile, serverAddress string, db server.Database, logBackend *logging.LogBackend) (*grpc.Server, net.Listener, error) {
+	// Determine certificate and key file paths
+	grpcCertFile := certFile
+	grpcKeyFile := keyFile
+
+	// If paths are still empty, use defaults
+	if grpcCertFile == "" {
+		grpcCertFile = filepath.Join(datadir, "server.cert")
+	}
+	if grpcKeyFile == "" {
+		grpcKeyFile = filepath.Join(datadir, "server.key")
+	}
+
+	// Check if certificate files exist
+	if _, err := os.Stat(grpcCertFile); os.IsNotExist(err) {
+		return nil, nil, fmt.Errorf("certificate file not found: %s", grpcCertFile)
+	}
+	if _, err := os.Stat(grpcKeyFile); os.IsNotExist(err) {
+		return nil, nil, fmt.Errorf("key file not found: %s", grpcKeyFile)
+	}
+
+	// Load TLS credentials
+	creds, err := credentials.NewServerTLSFromFile(grpcCertFile, grpcKeyFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load TLS credentials: %v", err)
+	}
+
+	// Create gRPC server with TLS credentials
+	grpcServer := grpc.NewServer(grpc.Creds(creds))
+
+	// Create listener
+	grpcLis, err := net.Listen("tcp", serverAddress)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to listen for gRPC poker server: %v", err)
+	}
+
+	// Initialize and register the poker server
+	pokerServer := server.NewServer(db, logBackend)
+	pokerrpc.RegisterLobbyServiceServer(grpcServer, pokerServer)
+	pokerrpc.RegisterPokerServiceServer(grpcServer, pokerServer)
+
+	return grpcServer, grpcLis, nil
 }
 
 // HandlePM handles incoming PM commands.
@@ -121,15 +173,16 @@ func (s *State) handleCreateTable(ctx context.Context, bot *kit.Bot, pm *types.R
 	// Create new table
 	tableID := fmt.Sprintf("table-%d", time.Now().Unix())
 	table := poker.NewTable(poker.TableConfig{
-		ID:            tableID,
-		HostID:        playerID,
-		BuyIn:         int64(buyIn), // DCR buy-in amount (in atoms)
-		MinPlayers:    2,
-		MaxPlayers:    6,
-		SmallBlind:    10,            // Fixed chip amount for small blind
-		BigBlind:      20,            // Fixed chip amount for big blind
-		StartingChips: startingChips, // Poker chips given to each player
-		TimeBank:      6 * time.Second,
+		ID:             tableID,
+		HostID:         playerID,
+		BuyIn:          int64(buyIn), // DCR buy-in amount (in atoms)
+		MinPlayers:     2,
+		MaxPlayers:     6,
+		SmallBlind:     10,            // Fixed chip amount for small blind
+		BigBlind:       20,            // Fixed chip amount for big blind
+		StartingChips:  startingChips, // Poker chips given to each player
+		TimeBank:       6 * time.Second,
+		AutoStartDelay: 3 * time.Second, // Auto-start next hand after 3 seconds
 	})
 
 	// Add creator to table with starting chips (DCR buy-in handled separately)

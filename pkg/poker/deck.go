@@ -105,6 +105,12 @@ func (d *Deck) Size() int {
 	return len(d.cards)
 }
 
+// NewCardFromSuitValue creates a new Card with the given suit and value
+// This is needed because Card fields are unexported
+func NewCardFromSuitValue(suit Suit, value Value) Card {
+	return Card{suit: suit, value: value}
+}
+
 // initializeDeck creates a new deck of cards
 func initializeDeck() []Card {
 	// Create a new deck with a deterministic seed for testing

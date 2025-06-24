@@ -179,7 +179,16 @@ func (d *CommandDispatcher) foldCmd() tea.Cmd {
 
 func (d *CommandDispatcher) callCmd() tea.Cmd {
 	return func() tea.Msg {
-		err := d.pc.Call(d.ctx, 0)
+		// Use the proper Call RPC method directly
+		currentTableID := d.pc.GetCurrentTableID()
+		if currentTableID == "" {
+			return errorMsg(fmt.Errorf("not at any table"))
+		}
+
+		_, err := d.pc.PokerService.Call(d.ctx, &pokerrpc.CallRequest{
+			PlayerId: d.clientID,
+			TableId:  currentTableID,
+		})
 		if err != nil {
 			return errorMsg(err)
 		}
@@ -188,7 +197,7 @@ func (d *CommandDispatcher) callCmd() tea.Cmd {
 		return notificationMsg(&pokerrpc.Notification{
 			Type:     pokerrpc.NotificationType_BET_MADE,
 			PlayerId: d.clientID,
-			TableId:  d.pc.GetCurrentTableID(),
+			TableId:  currentTableID,
 			Message:  "Player called",
 		})
 	}
@@ -226,6 +235,40 @@ func (d *CommandDispatcher) betCmd(amount int64) tea.Cmd {
 			TableId:  d.pc.GetCurrentTableID(),
 			Amount:   amount,
 			Message:  "Bet placed",
+		})
+	}
+}
+
+func (d *CommandDispatcher) showCardsCmd() tea.Cmd {
+	return func() tea.Msg {
+		err := d.pc.ShowCards(d.ctx)
+		if err != nil {
+			return errorMsg(err)
+		}
+
+		// Return as cards shown notification (the server will broadcast to others)
+		return notificationMsg(&pokerrpc.Notification{
+			Type:     pokerrpc.NotificationType_CARDS_SHOWN,
+			PlayerId: d.clientID,
+			TableId:  d.pc.GetCurrentTableID(),
+			Message:  "Cards shown to other players",
+		})
+	}
+}
+
+func (d *CommandDispatcher) hideCardsCmd() tea.Cmd {
+	return func() tea.Msg {
+		err := d.pc.HideCards(d.ctx)
+		if err != nil {
+			return errorMsg(err)
+		}
+
+		// Return as cards hidden notification (the server will broadcast to others)
+		return notificationMsg(&pokerrpc.Notification{
+			Type:     pokerrpc.NotificationType_CARDS_HIDDEN,
+			PlayerId: d.clientID,
+			TableId:  d.pc.GetCurrentTableID(),
+			Message:  "Cards hidden from other players",
 		})
 	}
 }

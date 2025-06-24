@@ -18,6 +18,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vctt94/bisonbotkit/logging"
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 	"github.com/vctt94/poker-bisonrelay/pkg/server"
 	"google.golang.org/grpc"
@@ -37,6 +38,21 @@ type testEnv struct {
 	pokerClient pokerrpc.PokerServiceClient
 }
 
+// createTestLogBackend creates a LogBackend for testing
+func createTestLogBackend() *logging.LogBackend {
+	logBackend, err := logging.NewLogBackend(logging.LogConfig{
+		LogFile:        "",      // Empty for testing - will use stdout
+		DebugLevel:     "debug", // Set to debug to see detailed logging
+		MaxLogFiles:    1,
+		MaxBufferLines: 100,
+	})
+	if err != nil {
+		// Fallback to a minimal LogBackend if creation fails
+		return &logging.LogBackend{}
+	}
+	return logBackend
+}
+
 // newTestEnv creates, starts and returns a ready-to-use environment.
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
@@ -48,7 +64,8 @@ func newTestEnv(t *testing.T) *testEnv {
 	require.NoError(t, err)
 
 	// 2. GRPC SERVER ------------------------------------------------------------
-	pokerSrv := server.NewServer(database)
+	logBackend := createTestLogBackend()
+	pokerSrv := server.NewServer(database, logBackend)
 	lis, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 
@@ -1013,31 +1030,35 @@ func TestStartingChipsDefaultWithZeroBuyIn(t *testing.T) {
 	// Debug: Check who is the current player
 	t.Logf("Current player to act: %s, Current bet: %d", state.CurrentPlayer, state.CurrentBet)
 
-	// The current system has BB act first in heads-up (which is non-standard but we'll test as-is)
-	// Player2 (BB) raises to 40
+	// In heads-up pre-flop, small blind (dealer) acts first, which is correct poker rules
+	// So player1 (SB) should act first
+	expectedCurrentPlayer := "player1" // SB acts first in heads-up preflop
+	assert.Equal(t, expectedCurrentPlayer, state.CurrentPlayer, "Small blind should act first in heads-up preflop")
+
+	// Player1 (SB) raises to 40
 	_, err = env.pokerClient.MakeBet(ctx, &pokerrpc.MakeBetRequest{
-		PlayerId: state.CurrentPlayer, // Should be player2 (BB)
+		PlayerId: state.CurrentPlayer, // Should be player1 (SB)
 		TableId:  tableID,
 		Amount:   40, // Raise to 40
 	})
 	require.NoError(t, err)
 
-	// Verify pot is now 50 (30 + 20 additional from BB raising)
+	// Verify pot is now 60 (30 initial + 30 additional from SB raising from 10 to 40)
 	state = env.getGameState(ctx, tableID)
-	assert.Equal(t, int64(50), state.Pot, "pot should be 50 after BB's raise (30+20)")
+	assert.Equal(t, int64(60), state.Pot, "pot should be 60 after SB's raise (30+30)")
 
-	// Now it should be player1's (SB) turn to call, raise, or fold
-	t.Logf("After BB raise - Current player: %s, Current bet: %d", state.CurrentPlayer, state.CurrentBet)
+	// Now it should be player2's (BB) turn to call, raise, or fold
+	t.Logf("After SB raise - Current player: %s, Current bet: %d", state.CurrentPlayer, state.CurrentBet)
 
-	// Player1 (SB) calls by betting 40 total (adding 30 more to existing 10)
+	// Player2 (BB) calls by betting 40 total (adding 20 more to existing 20)
 	_, err = env.pokerClient.MakeBet(ctx, &pokerrpc.MakeBetRequest{
-		PlayerId: state.CurrentPlayer, // Should be player1 (SB)
+		PlayerId: state.CurrentPlayer, // Should be player2 (BB)
 		TableId:  tableID,
 		Amount:   40, // Call the raise
 	})
 	require.NoError(t, err)
 
-	// Verify pot is now 80 (50 + 30 additional from SB calling)
+	// Verify pot is now 80 (60 + 20 additional from BB calling)
 	state = env.getGameState(ctx, tableID)
-	assert.Equal(t, int64(80), state.Pot, "pot should be 80 after SB's call (50+30)")
+	assert.Equal(t, int64(80), state.Pot, "pot should be 80 after BB's call (60+20)")
 }

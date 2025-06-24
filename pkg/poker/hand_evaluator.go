@@ -3,6 +3,7 @@ package poker
 import (
 	"sort"
 
+	"github.com/chehsunliu/poker"
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
@@ -24,11 +25,12 @@ const (
 
 // HandValue represents a complete evaluation of a hand, including rank and kickers
 type HandValue struct {
-	Rank      HandRank
-	RankValue int    // Value of the primary cards (pair, trips, etc.)
-	Kickers   []int  // Values of kicker cards in descending order
-	BestHand  []Card // The 5 cards that make up the best hand
-	HandRank  pokerrpc.HandRank
+	Rank            HandRank
+	RankValue       int    // Value of the primary cards (pair, trips, etc.)
+	Kickers         []int  // Values of kicker cards in descending order
+	BestHand        []Card // The 5 cards that make up the best hand
+	HandRank        pokerrpc.HandRank
+	HandDescription string
 }
 
 // valueToInt converts a card Value to its integer representation
@@ -99,600 +101,220 @@ func intToValue(value int) Value {
 	}
 }
 
+// convertCardToChehsunliu converts our Card type to the chehsunliu/poker Card type
+func convertCardToChehsunliu(card Card) poker.Card {
+	// Convert our value to chehsunliu string format
+	var rankChar byte
+	switch Value(card.GetValue()) {
+	case Two:
+		rankChar = '2'
+	case Three:
+		rankChar = '3'
+	case Four:
+		rankChar = '4'
+	case Five:
+		rankChar = '5'
+	case Six:
+		rankChar = '6'
+	case Seven:
+		rankChar = '7'
+	case Eight:
+		rankChar = '8'
+	case Nine:
+		rankChar = '9'
+	case Ten:
+		rankChar = 'T'
+	case Jack:
+		rankChar = 'J'
+	case Queen:
+		rankChar = 'Q'
+	case King:
+		rankChar = 'K'
+	case Ace:
+		rankChar = 'A'
+	default:
+		rankChar = '2' // fallback
+	}
+
+	// Convert our suit to chehsunliu string format
+	var suitChar byte
+	switch Suit(card.GetSuit()) {
+	case Spades:
+		suitChar = 's'
+	case Hearts:
+		suitChar = 'h'
+	case Diamonds:
+		suitChar = 'd'
+	case Clubs:
+		suitChar = 'c'
+	default:
+		suitChar = 's' // fallback
+	}
+
+	cardStr := string([]byte{rankChar, suitChar})
+	return poker.NewCard(cardStr)
+}
+
+// convertRankClassToHandRank converts chehsunliu rank class to our HandRank
+func convertRankClassToHandRank(rankClass int32) HandRank {
+	switch rankClass {
+	case 1: // Straight flush
+		return StraightFlush
+	case 2: // Four of a kind
+		return FourOfAKind
+	case 3: // Full house
+		return FullHouse
+	case 4: // Flush
+		return Flush
+	case 5: // Straight
+		return Straight
+	case 6: // Three of a kind
+		return ThreeOfAKind
+	case 7: // Two pair
+		return TwoPair
+	case 8: // Pair
+		return Pair
+	case 9: // High card
+		return HighCard
+	default:
+		return HighCard
+	}
+}
+
+// convertRankClassToGRPCHandRank converts chehsunliu rank class to gRPC HandRank
+func convertRankClassToGRPCHandRank(rankClass int32) pokerrpc.HandRank {
+	switch rankClass {
+	case 1: // Straight flush
+		return pokerrpc.HandRank_STRAIGHT_FLUSH
+	case 2: // Four of a kind
+		return pokerrpc.HandRank_FOUR_OF_A_KIND
+	case 3: // Full house
+		return pokerrpc.HandRank_FULL_HOUSE
+	case 4: // Flush
+		return pokerrpc.HandRank_FLUSH
+	case 5: // Straight
+		return pokerrpc.HandRank_STRAIGHT
+	case 6: // Three of a kind
+		return pokerrpc.HandRank_THREE_OF_A_KIND
+	case 7: // Two pair
+		return pokerrpc.HandRank_TWO_PAIR
+	case 8: // Pair
+		return pokerrpc.HandRank_PAIR
+	case 9: // High card
+		return pokerrpc.HandRank_HIGH_CARD
+	default:
+		return pokerrpc.HandRank_HIGH_CARD
+	}
+}
+
 // EvaluateHand evaluates a player's best 5-card hand from their 2 hole cards and the 5 community cards
 func EvaluateHand(holeCards []Card, communityCards []Card) HandValue {
 	// Combine hole cards and community cards
-	cards := append([]Card{}, holeCards...)
-	cards = append(cards, communityCards...)
+	allCards := append([]Card{}, holeCards...)
+	allCards = append(allCards, communityCards...)
 
-	// Get all 5-card combinations from the 7 cards
-	handValue := findBestHand(cards)
+	// Convert to chehsunliu format
+	chehsunliuCards := make([]poker.Card, len(allCards))
+	for i, card := range allCards {
+		chehsunliuCards[i] = convertCardToChehsunliu(card)
+	}
 
-	// Convert internal HandRank to gRPC HandRank
-	handValue.HandRank = convertToGRPCHandRank(handValue.Rank)
+	// Evaluate using chehsunliu library
+	rank := poker.Evaluate(chehsunliuCards)
+	rankClass := poker.RankClass(rank)
+	rankString := poker.RankString(rank)
+
+	// Create HandValue with chehsunliu results
+	handValue := HandValue{
+		Rank:            convertRankClassToHandRank(rankClass),
+		RankValue:       int(rank),                  // Use the actual rank value for comparison
+		Kickers:         []int{},                    // Simplified - chehsunliu handles this internally
+		BestHand:        getBestFiveCards(allCards), // Get best 5 cards
+		HandRank:        convertRankClassToGRPCHandRank(rankClass),
+		HandDescription: rankString,
+	}
 
 	return handValue
 }
 
-// findBestHand finds the best 5-card hand from the given cards
-func findBestHand(cards []Card) HandValue {
-	// Convert cards to a more convenient format
-	values := make([]int, len(cards))
-	suits := make([]string, len(cards))
+// getBestFiveCards returns the best 5 cards from a hand using chehsunliu evaluation
+func getBestFiveCards(cards []Card) []Card {
+	if len(cards) <= 5 {
+		// If we have 5 or fewer cards, return them all
+		return cards
+	}
 
+	// Convert all cards to chehsunliu format
+	chehsunliuCards := make([]poker.Card, len(cards))
 	for i, card := range cards {
-		values[i] = valueToInt(card.value)
-		suits[i] = string(card.suit)
+		chehsunliuCards[i] = convertCardToChehsunliu(card)
 	}
 
-	// Check for each hand type, from best to worst
-	if handValue, ok := checkRoyalFlush(cards, values, suits); ok {
-		return handValue
-	}
-	if handValue, ok := checkStraightFlush(cards, values, suits); ok {
-		return handValue
-	}
-	if handValue, ok := checkFourOfAKind(cards, values); ok {
-		return handValue
-	}
-	if handValue, ok := checkFullHouse(cards, values); ok {
-		return handValue
-	}
-	if handValue, ok := checkFlush(cards, suits); ok {
-		return handValue
-	}
-	if handValue, ok := checkStraight(cards, values); ok {
-		return handValue
-	}
-	if handValue, ok := checkThreeOfAKind(cards, values); ok {
-		return handValue
-	}
-	if handValue, ok := checkTwoPair(cards, values); ok {
-		return handValue
-	}
-	if handValue, ok := checkPair(cards, values); ok {
-		return handValue
-	}
+	// Use chehsunliu to find the best 5-card combination
+	// Since chehsunliu.Evaluate takes all cards and finds the best 5,
+	// we can use it to determine which 5 cards form the best hand
+	bestRank := poker.Evaluate(chehsunliuCards)
 
-	// If no other hand type is found, it's a high card
-	return checkHighCard(cards, values)
-}
+	// For 6 or 7 cards, we need to try all combinations to find which 5 cards
+	// produce the best rank that matches our evaluation
+	bestCards := make([]Card, 0, 5)
 
-// checkRoyalFlush checks for a royal flush
-func checkRoyalFlush(cards []Card, values []int, suits []string) (HandValue, bool) {
-	// A royal flush is a straight flush with Ace high
-	if handValue, ok := checkStraightFlush(cards, values, suits); ok {
-		if handValue.RankValue == 14 { // Ace high
-			return HandValue{
-				Rank:      RoyalFlush,
-				RankValue: 14,
-				Kickers:   []int{},
-				BestHand:  handValue.BestHand,
-			}, true
+	// Generate all possible 5-card combinations and find the one that matches our best rank
+	combinations := generateCombinations(cards, 5)
+	for _, combo := range combinations {
+		// Convert this combination to chehsunliu format
+		comboChehsunliu := make([]poker.Card, 5)
+		for i, card := range combo {
+			comboChehsunliu[i] = convertCardToChehsunliu(card)
 		}
-	}
-	return HandValue{}, false
-}
 
-// checkStraightFlush checks for a straight flush
-func checkStraightFlush(cards []Card, values []int, suits []string) (HandValue, bool) {
-	// Group cards by suit
-	suitGroups := make(map[string][]Card)
-	for i, card := range cards {
-		suit := suits[i]
-		suitGroups[suit] = append(suitGroups[suit], card)
-	}
-
-	// Look for a suit with at least 5 cards
-	for _, suitedCards := range suitGroups {
-		if len(suitedCards) >= 5 {
-			// Check for a straight within this suit
-			sortCardsByValue(suitedCards)
-			if handValue, ok := findStraight(suitedCards); ok {
-				return HandValue{
-					Rank:      StraightFlush,
-					RankValue: handValue.RankValue,
-					Kickers:   []int{},
-					BestHand:  handValue.BestHand,
-				}, true
-			}
-		}
-	}
-
-	return HandValue{}, false
-}
-
-// checkFourOfAKind checks for four of a kind
-func checkFourOfAKind(cards []Card, values []int) (HandValue, bool) {
-	valueCount := make(map[int]int)
-	for _, value := range values {
-		valueCount[value]++
-	}
-
-	var fourOfAKindValue int
-	var kicker int
-
-	// Find the value that appears 4 times
-	for value, count := range valueCount {
-		if count == 4 {
-			fourOfAKindValue = value
-		}
-	}
-
-	if fourOfAKindValue == 0 {
-		return HandValue{}, false
-	}
-
-	// Find the highest card that isn't part of the four of a kind
-	sortedValues := make([]int, 0, len(values))
-	for value := range valueCount {
-		if value != fourOfAKindValue {
-			sortedValues = append(sortedValues, value)
-		}
-	}
-
-	sort.Slice(sortedValues, func(i, j int) bool {
-		return sortedValues[i] > sortedValues[j]
-	})
-
-	if len(sortedValues) > 0 {
-		kicker = sortedValues[0]
-	}
-
-	// Build the best hand
-	bestHand := make([]Card, 0, 5)
-
-	// Add the four cards of the same value
-	for _, card := range cards {
-		if valueToInt(card.value) == fourOfAKindValue && len(bestHand) < 4 {
-			bestHand = append(bestHand, card)
-		}
-	}
-
-	// Add the kicker
-	for _, card := range cards {
-		if valueToInt(card.value) == kicker && len(bestHand) < 5 {
-			bestHand = append(bestHand, card)
+		// Check if this combination produces the same rank as our best
+		if poker.Evaluate(comboChehsunliu) == bestRank {
+			bestCards = combo
 			break
 		}
 	}
 
-	return HandValue{
-		Rank:      FourOfAKind,
-		RankValue: fourOfAKindValue,
-		Kickers:   []int{kicker},
-		BestHand:  bestHand,
-	}, true
+	// If we couldn't find the exact match (shouldn't happen), fall back to sorted cards
+	if len(bestCards) == 0 {
+		sortedCards := make([]Card, len(cards))
+		copy(sortedCards, cards)
+		sortCardsByValue(sortedCards)
+		bestCards = sortedCards[:5]
+	}
+
+	return bestCards
 }
 
-// checkFullHouse checks for a full house
-func checkFullHouse(cards []Card, values []int) (HandValue, bool) {
-	valueCount := make(map[int]int)
-	for _, value := range values {
-		valueCount[value]++
+// generateCombinations generates all possible k-combinations from a slice of cards
+func generateCombinations(cards []Card, k int) [][]Card {
+	var combinations [][]Card
+
+	if k > len(cards) || k <= 0 {
+		return combinations
 	}
 
-	var threeOfAKindValue int
-	var pairValue int
+	if k == len(cards) {
+		return [][]Card{cards}
+	}
 
-	// Find values that appear 3 and 2 times
-	for value, count := range valueCount {
-		if count >= 3 {
-			if threeOfAKindValue == 0 || value > threeOfAKindValue {
-				// If we already had a three of a kind, demote it to a pair if it's higher
-				if threeOfAKindValue > 0 && threeOfAKindValue > pairValue {
-					pairValue = threeOfAKindValue
-				}
-				threeOfAKindValue = value
-			} else if pairValue == 0 || value > pairValue {
-				pairValue = value
-			}
-		} else if count >= 2 {
-			if pairValue == 0 || value > pairValue {
-				pairValue = value
-			}
+	// Generate combinations recursively
+	var generate func(start int, current []Card)
+	generate = func(start int, current []Card) {
+		if len(current) == k {
+			combination := make([]Card, k)
+			copy(combination, current)
+			combinations = append(combinations, combination)
+			return
+		}
+
+		for i := start; i <= len(cards)-(k-len(current)); i++ {
+			generate(i+1, append(current, cards[i]))
 		}
 	}
 
-	if threeOfAKindValue == 0 || pairValue == 0 {
-		return HandValue{}, false
-	}
-
-	// Build the best hand
-	bestHand := make([]Card, 0, 5)
-
-	// Add the three cards of the same value
-	for _, card := range cards {
-		if valueToInt(card.value) == threeOfAKindValue && len(bestHand) < 3 {
-			bestHand = append(bestHand, card)
-		}
-	}
-
-	// Add the pair
-	for _, card := range cards {
-		if valueToInt(card.value) == pairValue && len(bestHand) < 5 {
-			bestHand = append(bestHand, card)
-		}
-	}
-
-	return HandValue{
-		Rank:      FullHouse,
-		RankValue: threeOfAKindValue,
-		Kickers:   []int{pairValue},
-		BestHand:  bestHand,
-	}, true
-}
-
-// checkFlush checks for a flush
-func checkFlush(cards []Card, suits []string) (HandValue, bool) {
-	suitCount := make(map[string]int)
-	suitCards := make(map[string][]Card)
-
-	for i, suit := range suits {
-		suitCount[suit]++
-		suitCards[suit] = append(suitCards[suit], cards[i])
-	}
-
-	for suit, count := range suitCount {
-		if count >= 5 {
-			// Get the 5 highest cards of the suit
-			flushCards := suitCards[suit]
-			sortCardsByValue(flushCards)
-
-			// Take the 5 highest cards
-			bestHand := flushCards[:5]
-
-			values := make([]int, 5)
-			for i, card := range bestHand {
-				values[i] = valueToInt(card.value)
-			}
-
-			return HandValue{
-				Rank:      Flush,
-				RankValue: values[0], // Highest card value
-				Kickers:   values[1:],
-				BestHand:  bestHand,
-			}, true
-		}
-	}
-
-	return HandValue{}, false
-}
-
-// checkStraight checks for a straight
-func checkStraight(cards []Card, values []int) (HandValue, bool) {
-	// Create a copy of the cards and sort by value
-	sortedCards := make([]Card, len(cards))
-	copy(sortedCards, cards)
-	sortCardsByValue(sortedCards)
-
-	if result, ok := findStraight(sortedCards); ok {
-		return result, true
-	}
-
-	return HandValue{}, false
-}
-
-// findStraight helper to find a straight in a sorted set of cards
-func findStraight(sortedCards []Card) (HandValue, bool) {
-	// Get unique values in descending order
-	uniqueValues := make([]int, 0)
-	seen := make(map[int]bool)
-
-	for _, card := range sortedCards {
-		val := valueToInt(card.value)
-		if !seen[val] {
-			uniqueValues = append(uniqueValues, val)
-			seen[val] = true
-		}
-	}
-
-	sort.Slice(uniqueValues, func(i, j int) bool {
-		return uniqueValues[i] > uniqueValues[j]
-	})
-
-	// Handle Ace-low straight (A-2-3-4-5)
-	if seen[14] && seen[2] && seen[3] && seen[4] && seen[5] {
-		// Create the straight hand
-		bestHand := make([]Card, 0, 5)
-
-		// Find the 5, 4, 3, 2 and Ace
-		values := []int{5, 4, 3, 2, 14}
-		for _, val := range values {
-			for _, card := range sortedCards {
-				if valueToInt(card.value) == val && !cardInSlice(card, bestHand) {
-					bestHand = append(bestHand, card)
-					break
-				}
-			}
-		}
-
-		return HandValue{
-			Rank:      Straight,
-			RankValue: 5, // The high card in an A-5 straight is 5
-			Kickers:   []int{},
-			BestHand:  bestHand,
-		}, true
-	}
-
-	// Check for regular straights
-	for i := 0; i <= len(uniqueValues)-5; i++ {
-		if uniqueValues[i] == uniqueValues[i+4]+4 {
-			// Create the straight hand
-			bestHand := make([]Card, 0, 5)
-
-			// Find the 5 cards that form the straight
-			for j := 0; j < 5; j++ {
-				targetValue := uniqueValues[i+j]
-				for _, card := range sortedCards {
-					if valueToInt(card.value) == targetValue && !cardInSlice(card, bestHand) {
-						bestHand = append(bestHand, card)
-						break
-					}
-				}
-			}
-
-			return HandValue{
-				Rank:      Straight,
-				RankValue: uniqueValues[i], // Highest card in the straight
-				Kickers:   []int{},
-				BestHand:  bestHand,
-			}, true
-		}
-	}
-
-	return HandValue{}, false
-}
-
-// checkThreeOfAKind checks for three of a kind
-func checkThreeOfAKind(cards []Card, values []int) (HandValue, bool) {
-	valueCount := make(map[int]int)
-	for _, value := range values {
-		valueCount[value]++
-	}
-
-	var threeOfAKindValue int
-
-	// Find the value that appears 3 times
-	for value, count := range valueCount {
-		if count >= 3 {
-			if threeOfAKindValue == 0 || value > threeOfAKindValue {
-				threeOfAKindValue = value
-			}
-		}
-	}
-
-	if threeOfAKindValue == 0 {
-		return HandValue{}, false
-	}
-
-	// Find the two highest cards that aren't part of the three of a kind
-	kickers := make([]int, 0)
-	for value := range valueCount {
-		if value != threeOfAKindValue {
-			kickers = append(kickers, value)
-		}
-	}
-
-	// Sort kickers in descending order
-	sort.Slice(kickers, func(i, j int) bool {
-		return kickers[i] > kickers[j]
-	})
-
-	if len(kickers) > 2 {
-		kickers = kickers[:2] // Keep only the top 2 kickers
-	}
-
-	// Build the best hand
-	bestHand := make([]Card, 0, 5)
-
-	// Add the three cards of the same value
-	for _, card := range cards {
-		if valueToInt(card.value) == threeOfAKindValue && len(bestHand) < 3 {
-			bestHand = append(bestHand, card)
-		}
-	}
-
-	// Add the kickers
-	for _, kicker := range kickers {
-		for _, card := range cards {
-			if valueToInt(card.value) == kicker && !cardInSlice(card, bestHand) && len(bestHand) < 5 {
-				bestHand = append(bestHand, card)
-				break
-			}
-		}
-	}
-
-	return HandValue{
-		Rank:      ThreeOfAKind,
-		RankValue: threeOfAKindValue,
-		Kickers:   kickers,
-		BestHand:  bestHand,
-	}, true
-}
-
-// checkTwoPair checks for two pairs
-func checkTwoPair(cards []Card, values []int) (HandValue, bool) {
-	valueCount := make(map[int]int)
-	for _, value := range values {
-		valueCount[value]++
-	}
-
-	pairs := make([]int, 0)
-
-	// Find all values that appear at least twice
-	for value, count := range valueCount {
-		if count >= 2 {
-			pairs = append(pairs, value)
-		}
-	}
-
-	// Sort pairs in descending order
-	sort.Slice(pairs, func(i, j int) bool {
-		return pairs[i] > pairs[j]
-	})
-
-	if len(pairs) < 2 {
-		return HandValue{}, false
-	}
-
-	// Take the two highest pairs
-	highPair := pairs[0]
-	lowPair := pairs[1]
-
-	// Find the highest card that isn't part of either pair
-	var kicker int
-	for value := range valueCount {
-		if value != highPair && value != lowPair && (kicker == 0 || value > kicker) {
-			kicker = value
-		}
-	}
-
-	// Build the best hand
-	bestHand := make([]Card, 0, 5)
-
-	// Add the high pair
-	for _, card := range cards {
-		if valueToInt(card.value) == highPair && len(bestHand) < 2 {
-			bestHand = append(bestHand, card)
-		}
-	}
-
-	// Add the low pair
-	for _, card := range cards {
-		if valueToInt(card.value) == lowPair && len(bestHand) < 4 {
-			bestHand = append(bestHand, card)
-		}
-	}
-
-	// Add the kicker
-	for _, card := range cards {
-		if valueToInt(card.value) == kicker && len(bestHand) < 5 {
-			bestHand = append(bestHand, card)
-			break
-		}
-	}
-
-	return HandValue{
-		Rank:      TwoPair,
-		RankValue: highPair,
-		Kickers:   []int{lowPair, kicker},
-		BestHand:  bestHand,
-	}, true
-}
-
-// checkPair checks for a pair
-func checkPair(cards []Card, values []int) (HandValue, bool) {
-	valueCount := make(map[int]int)
-	for _, value := range values {
-		valueCount[value]++
-	}
-
-	var pairValue int
-
-	// Find the value that appears twice
-	for value, count := range valueCount {
-		if count >= 2 {
-			if pairValue == 0 || value > pairValue {
-				pairValue = value
-			}
-		}
-	}
-
-	if pairValue == 0 {
-		return HandValue{}, false
-	}
-
-	// Find the three highest cards that aren't part of the pair
-	kickers := make([]int, 0)
-	for value := range valueCount {
-		if value != pairValue {
-			kickers = append(kickers, value)
-		}
-	}
-
-	// Sort kickers in descending order
-	sort.Slice(kickers, func(i, j int) bool {
-		return kickers[i] > kickers[j]
-	})
-
-	if len(kickers) > 3 {
-		kickers = kickers[:3] // Keep only the top 3 kickers
-	}
-
-	// Build the best hand
-	bestHand := make([]Card, 0, 5)
-
-	// Add the pair
-	for _, card := range cards {
-		if valueToInt(card.value) == pairValue && len(bestHand) < 2 {
-			bestHand = append(bestHand, card)
-		}
-	}
-
-	// Add the kickers
-	for _, kicker := range kickers {
-		for _, card := range cards {
-			if valueToInt(card.value) == kicker && !cardInSlice(card, bestHand) && len(bestHand) < 5 {
-				bestHand = append(bestHand, card)
-				break
-			}
-		}
-	}
-
-	return HandValue{
-		Rank:      Pair,
-		RankValue: pairValue,
-		Kickers:   kickers,
-		BestHand:  bestHand,
-	}, true
-}
-
-// checkHighCard determines the high card hand value
-func checkHighCard(cards []Card, values []int) HandValue {
-	// Create a copy of cards and sort by value
-	sortedCards := make([]Card, len(cards))
-	copy(sortedCards, cards)
-	sortCardsByValue(sortedCards)
-
-	// If we don't have enough cards, we can't properly evaluate
-	if len(sortedCards) < 5 {
-		// Return a minimal hand value for incomplete hands
-		highValue := 0
-		if len(sortedCards) > 0 {
-			highValue = valueToInt(sortedCards[0].value)
-		}
-
-		// Create kickers from available cards (excluding the high card)
-		kickers := make([]int, 0)
-		for i := 1; i < len(sortedCards) && i < 5; i++ {
-			kickers = append(kickers, valueToInt(sortedCards[i].value))
-		}
-
-		return HandValue{
-			Rank:      HighCard,
-			RankValue: highValue,
-			Kickers:   kickers,
-			BestHand:  sortedCards, // Use all available cards
-		}
-	}
-
-	// Take the 5 highest cards
-	bestHand := sortedCards[:5]
-
-	// Extract the values for the hand value
-	highValue := valueToInt(bestHand[0].value)
-	kickers := make([]int, 4)
-	for i := 0; i < 4; i++ {
-		kickers[i] = valueToInt(bestHand[i+1].value)
-	}
-
-	return HandValue{
-		Rank:      HighCard,
-		RankValue: highValue,
-		Kickers:   kickers,
-		BestHand:  bestHand,
-	}
+	generate(0, []Card{})
+	return combinations
 }
 
 // Helper function to sort cards by value (highest first)
@@ -712,105 +334,28 @@ func cardInSlice(card Card, cards []Card) bool {
 	return false
 }
 
-// convertToGRPCHandRank converts the internal HandRank to the gRPC HandRank
-func convertToGRPCHandRank(handRank HandRank) pokerrpc.HandRank {
-	switch handRank {
-	case HighCard:
-		return pokerrpc.HandRank_HIGH_CARD
-	case Pair:
-		return pokerrpc.HandRank_PAIR
-	case TwoPair:
-		return pokerrpc.HandRank_TWO_PAIR
-	case ThreeOfAKind:
-		return pokerrpc.HandRank_THREE_OF_A_KIND
-	case Straight:
-		return pokerrpc.HandRank_STRAIGHT
-	case Flush:
-		return pokerrpc.HandRank_FLUSH
-	case FullHouse:
-		return pokerrpc.HandRank_FULL_HOUSE
-	case FourOfAKind:
-		return pokerrpc.HandRank_FOUR_OF_A_KIND
-	case StraightFlush:
-		return pokerrpc.HandRank_STRAIGHT_FLUSH
-	case RoyalFlush:
-		return pokerrpc.HandRank_ROYAL_FLUSH
-	default:
-		return pokerrpc.HandRank_HIGH_CARD
-	}
-}
-
 // GetHandDescription returns a human-readable description of a hand
 func GetHandDescription(handValue HandValue) string {
-	switch handValue.Rank {
-	case RoyalFlush:
-		return "Royal Flush"
-	case StraightFlush:
-		highCard := intToValue(handValue.RankValue)
-		return "Straight Flush, " + string(highCard) + " high"
-	case FourOfAKind:
-		value := intToValue(handValue.RankValue)
-		return "Four of a Kind, " + string(value) + "s"
-	case FullHouse:
-		threeKind := intToValue(handValue.RankValue)
-		pair := intToValue(handValue.Kickers[0])
-		return "Full House, " + string(threeKind) + "s over " + string(pair) + "s"
-	case Flush:
-		suit := handValue.BestHand[0].suit
-		return "Flush, " + string(suit)
-	case Straight:
-		highCard := intToValue(handValue.RankValue)
-		return "Straight, " + string(highCard) + " high"
-	case ThreeOfAKind:
-		value := intToValue(handValue.RankValue)
-		return "Three of a Kind, " + string(value) + "s"
-	case TwoPair:
-		highPair := intToValue(handValue.RankValue)
-		lowPair := intToValue(handValue.Kickers[0])
-		return "Two Pair, " + string(highPair) + "s and " + string(lowPair) + "s"
-	case Pair:
-		value := intToValue(handValue.RankValue)
-		return "Pair of " + string(value) + "s"
-	case HighCard:
-		value := intToValue(handValue.RankValue)
-		return "High Card " + string(value)
-	default:
-		return "Unknown Hand"
-	}
+	return handValue.HandDescription
 }
 
 // CompareHands compares two hand values and returns:
-// -1 if handA < handB
-// 0 if handA == handB
-// 1 if handA > handB
+// -1 if handA < handB (handA is worse)
+// 0 if handA == handB (tie)
+// 1 if handA > handB (handA is better)
+// Note: In chehsunliu library, lower rank values are better
 func CompareHands(handA, handB HandValue) int {
-	// First compare hand ranks
-	if handA.Rank < handB.Rank {
-		return -1
-	}
-	if handA.Rank > handB.Rank {
-		return 1
-	}
-
-	// If ranks are the same, compare the rank value
-	if handA.RankValue < handB.RankValue {
-		return -1
-	}
+	// In chehsunliu library, lower values are better
+	// So we need to reverse the comparison
 	if handA.RankValue > handB.RankValue {
-		return 1
+		return -1 // handA is worse (higher rank value)
+	}
+	if handA.RankValue < handB.RankValue {
+		return 1 // handA is better (lower rank value)
 	}
 
-	// If rank values are the same, compare kickers in order
-	for i := 0; i < len(handA.Kickers) && i < len(handB.Kickers); i++ {
-		if handA.Kickers[i] < handB.Kickers[i] {
-			return -1
-		}
-		if handA.Kickers[i] > handB.Kickers[i] {
-			return 1
-		}
-	}
-
-	// If everything is the same, it's a tie
+	// If rank values are the same, it's a tie
+	// (chehsunliu handles all tiebreakers internally in the rank value)
 	return 0
 }
 
@@ -819,8 +364,8 @@ func CreateHandFromCards(cards []Card) []*pokerrpc.Card {
 	pbCards := make([]*pokerrpc.Card, len(cards))
 	for i, card := range cards {
 		pbCards[i] = &pokerrpc.Card{
-			Suit:  string(card.suit),
-			Value: string(card.value),
+			Suit:  card.GetSuit(),
+			Value: card.GetValue(),
 		}
 	}
 

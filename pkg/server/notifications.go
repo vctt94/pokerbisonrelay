@@ -115,6 +115,19 @@ func (s *Server) SendGameStarted(tableID string) {
 	}()
 }
 
+// SendNewHandStarted sends NEW_HAND_STARTED notification to all players at the table
+func (s *Server) SendNewHandStarted(tableID string) {
+	notification := &pokerrpc.Notification{
+		Type:    pokerrpc.NotificationType_NEW_HAND_STARTED,
+		Message: "New hand started!",
+		TableId: tableID,
+	}
+
+	go func() {
+		s.broadcastNotificationToTable(tableID, notification)
+	}()
+}
+
 // SendPlayerReady sends PLAYER_READY notification to all players at the table
 func (s *Server) SendPlayerReady(tableID, playerID string, ready bool) {
 	var notificationType pokerrpc.NotificationType
@@ -177,6 +190,8 @@ func (s *Server) BroadcastGameStateUpdate(tableID string) {
 		return
 	}
 
+	s.log.Debugf("BroadcastGameStateUpdate: broadcasting to %d players on table %s", len(playerStreams), tableID)
+
 	// Send game state update to each player with an active stream
 	for playerID, stream := range playerStreams {
 		go func(pid string, st pokerrpc.PokerService_StartGameStreamServer) {
@@ -189,4 +204,19 @@ func (s *Server) BroadcastGameStateUpdate(tableID string) {
 			st.Send(gameState)
 		}(playerID, stream)
 	}
+}
+
+// SendShowdownResult sends SHOWDOWN_RESULT notification to all players at the table
+func (s *Server) SendShowdownResult(tableID string, winners []*pokerrpc.Winner, pot int64) {
+	notification := &pokerrpc.Notification{
+		Type:    pokerrpc.NotificationType_SHOWDOWN_RESULT,
+		Message: fmt.Sprintf("Showdown complete! Pot: %d chips", pot),
+		TableId: tableID,
+		Winners: winners,
+		Amount:  pot,
+	}
+
+	go func() {
+		s.broadcastNotificationToTable(tableID, notification)
+	}()
 }

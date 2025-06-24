@@ -41,6 +41,10 @@ service LobbyService {
   rpc SetPlayerReady(SetPlayerReadyRequest) returns (SetPlayerReadyResponse) {}
   rpc SetPlayerUnready(SetPlayerUnreadyRequest) returns (SetPlayerUnreadyResponse) {}
   
+  // Card visibility management
+  rpc ShowCards(ShowCardsRequest) returns (ShowCardsResponse) {}
+  rpc HideCards(HideCardsRequest) returns (HideCardsResponse) {}
+  
   // Notification stream
   rpc StartNotificationStream(StartNotificationStreamRequest) returns (stream Notification) {}
 }
@@ -48,11 +52,12 @@ service LobbyService {
 // Enums
 enum GamePhase {
   WAITING = 0;
-  PRE_FLOP = 1;
-  FLOP = 2;
-  TURN = 3;
-  RIVER = 4;
-  SHOWDOWN = 5;
+  NEW_HAND_DEALING = 1;
+  PRE_FLOP = 2;
+  FLOP = 3;
+  TURN = 4;
+  RIVER = 5;
+  SHOWDOWN = 6;
 }
 
 enum NotificationType {
@@ -76,6 +81,9 @@ enum NotificationType {
   BIG_BLIND_POSTED = 17;
   CALL_MADE = 18;
   CHECK_MADE = 19;
+  CARDS_SHOWN = 20;
+  CARDS_HIDDEN = 21;
+  NEW_HAND_STARTED = 22;
 }
 
 enum HandRank {
@@ -313,6 +321,7 @@ message Player {
   bool is_all_in = 8;
   bool is_dealer = 9;
   bool is_ready = 10;
+  string hand_description = 11; // Hand evaluation description (available during showdown)
 }
 
 message Card {
@@ -347,4 +356,24 @@ message GetPlayerCurrentTableRequest {
 
 message GetPlayerCurrentTableResponse {
   string table_id = 1;
+}
+
+message ShowCardsRequest {
+  string player_id = 1;
+  string table_id = 2;
+}
+
+message ShowCardsResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message HideCardsRequest {
+  string player_id = 1;
+  string table_id = 2;
+}
+
+message HideCardsResponse {
+  bool success = 1;
+  string message = 2;
 } 

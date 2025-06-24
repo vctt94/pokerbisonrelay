@@ -5,6 +5,7 @@ go 1.24.1
 require (
 	github.com/charmbracelet/bubbletea v1.3.4
 	github.com/charmbracelet/lipgloss v1.1.0
+	github.com/chehsunliu/poker v0.1.0
 	github.com/companyzero/bisonrelay v0.2.4-0.20250321132913-c1cc5b0fd438
 	github.com/decred/dcrd/dcrutil/v4 v4.0.2
 	github.com/decred/slog v1.2.0

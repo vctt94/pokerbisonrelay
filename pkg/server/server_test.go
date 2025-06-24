@@ -11,6 +11,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vctt94/bisonbotkit/logging"
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 	"github.com/vctt94/poker-bisonrelay/pkg/server/internal/db"
 	"google.golang.org/grpc"
@@ -75,6 +76,21 @@ func (db *InMemoryDB) Close() error {
 	return nil
 }
 
+// createTestLogBackend creates a LogBackend for testing
+func createTestLogBackend() *logging.LogBackend {
+	logBackend, err := logging.NewLogBackend(logging.LogConfig{
+		LogFile:        "",      // Empty for testing - will use stdout
+		DebugLevel:     "error", // Set to error to reduce test output
+		MaxLogFiles:    1,
+		MaxBufferLines: 100,
+	})
+	if err != nil {
+		// Fallback to a minimal LogBackend if creation fails
+		return &logging.LogBackend{}
+	}
+	return logBackend
+}
+
 func TestPokerService(t *testing.T) {
 	// Create a temporary database file
 	dbPath := "test.db"
@@ -85,9 +101,13 @@ func TestPokerService(t *testing.T) {
 	require.NoError(t, err)
 	defer database.Close()
 
+	// Create a test log backend
+	logBackend := createTestLogBackend()
+	defer logBackend.Close()
+
 	// Create a new server
 	server := &TestServer{
-		Server: NewServer(database),
+		Server: NewServer(database, logBackend),
 	}
 
 	// Register the server with gRPC
@@ -183,32 +203,21 @@ func TestPokerService(t *testing.T) {
 		assert.NotEmpty(t, resp.TableId)
 		tableID := resp.TableId
 
-		// Test JoinTable
-		t.Run("JoinTable", func(t *testing.T) {
-			// Test joining non-existent table
-			resp, err := server.JoinTable(ctx, &pokerrpc.JoinTableRequest{
-				PlayerId: player2ID,
-				TableId:  "non-existent",
-			})
-			require.NoError(t, err)
-			assert.False(t, resp.Success)
-
-			// Add balance for player2
-			_, err = server.UpdateBalance(ctx, &pokerrpc.UpdateBalanceRequest{
-				PlayerId:    player2ID,
-				Amount:      1000,
-				Description: "initial deposit",
-			})
-			require.NoError(t, err)
-
-			// Test successful join
-			resp, err = server.JoinTable(ctx, &pokerrpc.JoinTableRequest{
-				PlayerId: player2ID,
-				TableId:  tableID,
-			})
-			require.NoError(t, err)
-			assert.True(t, resp.Success)
+		// Add balance for player2 and join table (needed for subsequent tests)
+		_, err = server.UpdateBalance(ctx, &pokerrpc.UpdateBalanceRequest{
+			PlayerId:    player2ID,
+			Amount:      1000,
+			Description: "initial deposit",
 		})
+		require.NoError(t, err)
+
+		// Player2 joins the table
+		joinResp, err := server.JoinTable(ctx, &pokerrpc.JoinTableRequest{
+			PlayerId: player2ID,
+			TableId:  tableID,
+		})
+		require.NoError(t, err)
+		require.True(t, joinResp.Success)
 
 		// Test GetGameState
 		t.Run("GetGameState", func(t *testing.T) {
@@ -237,9 +246,36 @@ func TestPokerService(t *testing.T) {
 			})
 			assert.Error(t, err)
 
-			// Test successful bet
-			resp, err := server.MakeBet(ctx, &pokerrpc.MakeBetRequest{
+			// Both players need to be ready before game can start
+			_, err = server.SetPlayerReady(ctx, &pokerrpc.SetPlayerReadyRequest{
 				PlayerId: player1ID,
+				TableId:  tableID,
+			})
+			require.NoError(t, err)
+
+			_, err = server.SetPlayerReady(ctx, &pokerrpc.SetPlayerReadyRequest{
+				PlayerId: player2ID,
+				TableId:  tableID,
+			})
+			require.NoError(t, err)
+
+			// Wait a brief moment for game to start
+			time.Sleep(50 * time.Millisecond)
+
+			// Verify game has started
+			gameState, err := server.GetGameState(ctx, &pokerrpc.GetGameStateRequest{
+				TableId: tableID,
+			})
+			require.NoError(t, err)
+			require.True(t, gameState.GameState.GameStarted, "game should have started after both players are ready")
+
+			// Get the current player to act
+			currentPlayer := gameState.GameState.CurrentPlayer
+			require.NotEmpty(t, currentPlayer, "there should be a current player to act")
+
+			// Test successful bet with the current player
+			resp, err := server.MakeBet(ctx, &pokerrpc.MakeBetRequest{
+				PlayerId: currentPlayer,
 				TableId:  tableID,
 				Amount:   20,
 			})
@@ -265,13 +301,34 @@ func TestPokerService(t *testing.T) {
 			require.NoError(t, err)
 			assert.True(t, resp.Success)
 		})
+
+		// Test JoinTable
+		t.Run("JoinTable", func(t *testing.T) {
+			// Test joining non-existent table
+			resp, err := server.JoinTable(ctx, &pokerrpc.JoinTableRequest{
+				PlayerId: player2ID,
+				TableId:  "non-existent",
+			})
+			require.NoError(t, err)
+			assert.False(t, resp.Success)
+
+			// Test joining when already at table
+			resp, err = server.JoinTable(ctx, &pokerrpc.JoinTableRequest{
+				PlayerId: player2ID,
+				TableId:  tableID,
+			})
+			require.NoError(t, err)
+			assert.False(t, resp.Success) // Should fail since player2 is already at table
+		})
 	})
 }
 
 func TestPokerGameFlow(t *testing.T) {
 	// Create a new server
 	db := NewInMemoryDB()
-	server := NewServer(db)
+	logBackend := createTestLogBackend()
+	defer logBackend.Close()
+	server := NewServer(db, logBackend)
 
 	// Start gRPC server
 	lis, err := net.Listen("tcp", ":0")
@@ -434,7 +491,9 @@ func TestPokerGameFlow(t *testing.T) {
 func TestHostLeavesTableClosure(t *testing.T) {
 	// Create a new server
 	db := NewInMemoryDB()
-	server := NewServer(db)
+	logBackend := createTestLogBackend()
+	defer logBackend.Close()
+	server := NewServer(db, logBackend)
 	ctx := context.Background()
 
 	// Create three players
@@ -519,7 +578,9 @@ func TestHostLeavesTableClosure(t *testing.T) {
 func TestNonHostLeavesTable(t *testing.T) {
 	// Create a new server
 	db := NewInMemoryDB()
-	server := NewServer(db)
+	logBackend := createTestLogBackend()
+	defer logBackend.Close()
+	server := NewServer(db, logBackend)
 	ctx := context.Background()
 
 	// Create two players
