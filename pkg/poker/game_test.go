@@ -8,20 +8,34 @@ import (
 func TestNewGame(t *testing.T) {
 	cfg := GameConfig{
 		NumPlayers:    2,
-		StartingChips: 100,
-		Seed:          42, // Use a fixed seed for deterministic testing
+		StartingChips: 1000, // Set to 1000 to match the expected balance
+		Seed:          42,   // Use a fixed seed for deterministic testing
 	}
 
 	game := NewGame(cfg)
 
+	// After refactor, game starts with empty players slice
+	// Table manages players and calls SetPlayers
+	if len(game.players) != 0 {
+		t.Errorf("Expected 0 players initially, got %d", len(game.players))
+	}
+
+	// Create test users and set them in the game
+	users := []*User{
+		NewUser("player1", "Player 1", 1000, 0),
+		NewUser("player2", "Player 2", 1000, 1),
+	}
+	game.SetPlayers(users)
+
+	// Now check that players were created correctly
 	if len(game.players) != 2 {
-		t.Errorf("Expected 2 players, got %d", len(game.players))
+		t.Errorf("Expected 2 players after SetPlayers, got %d", len(game.players))
 	}
 
 	// Check initial player state
 	for i, player := range game.players {
-		if player.Balance != 100 {
-			t.Errorf("Player %d: Expected 100 balance, got %d", i, player.Balance)
+		if player.Balance != 1000 {
+			t.Errorf("Player %d: Expected 1000 balance, got %d", i, player.Balance)
 		}
 		if player.HasFolded {
 			t.Errorf("Player %d: Expected not folded", i)
@@ -62,9 +76,23 @@ func TestDealCards(t *testing.T) {
 	}
 
 	game := NewGame(cfg)
-	err := game.DealCards()
-	if err != nil {
-		t.Fatalf("Failed to deal cards: %v", err)
+
+	// Create test users and set them in the game
+	users := []*User{
+		NewUser("player1", "Player 1", 100, 0),
+		NewUser("player2", "Player 2", 100, 1),
+	}
+	game.SetPlayers(users)
+
+	// Deal cards manually for testing (since DealCards was removed)
+	for _, player := range game.players {
+		for i := 0; i < 2; i++ {
+			card, ok := game.deck.Draw()
+			if !ok {
+				t.Fatalf("Failed to draw card from deck")
+			}
+			player.Hand = append(player.Hand, card)
+		}
 	}
 
 	// Check each player has 2 cards
@@ -88,9 +116,23 @@ func TestCommunityCards(t *testing.T) {
 	}
 
 	game := NewGame(cfg)
-	err := game.DealCards()
-	if err != nil {
-		t.Fatalf("Failed to deal cards: %v", err)
+
+	// Create test users and set them in the game
+	users := []*User{
+		NewUser("player1", "Player 1", 100, 0),
+		NewUser("player2", "Player 2", 100, 1),
+	}
+	game.SetPlayers(users)
+
+	// Deal cards manually for testing (since DealCards was removed)
+	for _, player := range game.players {
+		for i := 0; i < 2; i++ {
+			card, ok := game.deck.Draw()
+			if !ok {
+				t.Fatalf("Failed to draw card from deck")
+			}
+			player.Hand = append(player.Hand, card)
+		}
 	}
 
 	// Check initial community cards
@@ -126,13 +168,16 @@ func TestShowdown(t *testing.T) {
 
 	game := NewGame(cfg)
 
+	// Create test users and set them in the game
+	users := []*User{
+		NewUser("player1", "Player 1", 0, 0), // Start with 0 balance for clean test
+		NewUser("player2", "Player 2", 0, 1),
+	}
+	game.SetPlayers(users)
+
 	// Set up player hands manually
 	player1 := game.players[0]
 	player2 := game.players[1]
-
-	// Reset balances to 0 for this test
-	player1.Balance = 0
-	player2.Balance = 0
 
 	// Player 1 has a pair of Aces
 	player1.Hand = []Card{
@@ -161,7 +206,7 @@ func TestShowdown(t *testing.T) {
 	game.potManager.AddBet(1, 50) // Player 2 bet 50
 
 	// Run the showdown
-	stateShowdown(game)
+	stateShowdown(game, nil)
 
 	// Player 1 should win with pair of Aces
 	if player1.Balance != 100 {
@@ -192,15 +237,18 @@ func TestTieBreakerShowdown(t *testing.T) {
 
 	game := NewGame(cfg)
 
+	// Create test users and set them in the game
+	users := []*User{
+		NewUser("player1", "Player 1", 0, 0), // Start with 0 balance for clean test
+		NewUser("player2", "Player 2", 0, 1),
+		NewUser("player3", "Player 3", 0, 2),
+	}
+	game.SetPlayers(users)
+
 	// Set up player hands manually
 	player1 := game.players[0]
 	player2 := game.players[1]
 	player3 := game.players[2]
-
-	// Reset balances to 0 for this test
-	player1.Balance = 0
-	player2.Balance = 0
-	player3.Balance = 0
 
 	// All players have a pair of Aces but with different kickers
 	player1.Hand = []Card{
@@ -237,7 +285,7 @@ func TestTieBreakerShowdown(t *testing.T) {
 	// Player 3 folded, no bet
 
 	// Run the showdown
-	stateShowdown(game)
+	stateShowdown(game, nil)
 
 	// Players 1 and 2 should tie and split the pot (50 each)
 	if player1.Balance != 50 {
@@ -248,8 +296,8 @@ func TestTieBreakerShowdown(t *testing.T) {
 		t.Errorf("Expected player 2 to win 50 (half pot), got %d", player2.Balance)
 	}
 
-	// Player 3 folded so should not win anything
+	// Player 3 should not win anything (folded)
 	if player3.Balance != 0 {
-		t.Errorf("Expected player 3 to not win anything, got %d", player3.Balance)
+		t.Errorf("Expected player 3 to not win anything (folded), got %d", player3.Balance)
 	}
 }

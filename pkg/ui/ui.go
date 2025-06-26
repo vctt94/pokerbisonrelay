@@ -687,11 +687,9 @@ func (m *PokerUI) handleNotification(notification *pokerrpc.Notification) tea.Cm
 		return nil
 
 	case pokerrpc.NotificationType_NEW_HAND_STARTED:
-		// Clear all previous hand state before the new game state update arrives
-		m.resetGameState()
 		m.playersShowingCards = make(map[string]bool) // Reset card visibility tracking
 		m.message = "New hand started!"
-		// Stay in active game view - the game state update will follow with new cards
+		// Stay in active game view - the game state update already arrived with new cards
 		m.currentState = m.stateActiveGame
 		m.currentView = "activeGame"
 		return tea.ClearScreen

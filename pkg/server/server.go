@@ -59,54 +59,51 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check if player has enough DCR balance for the buy-in (buy-in is in DCR atoms)
-	dcrBalance, err := s.db.GetPlayerBalance(req.PlayerId)
+	// Get creator's DCR balance
+	creatorBalance, err := s.db.GetPlayerBalance(req.PlayerId)
 	if err != nil {
 		return nil, err
 	}
 
-	// req.BuyIn is the DCR amount required to join the table (in atoms)
-	// This is what gets deducted from the player's DCR account balance
-	if dcrBalance < req.BuyIn {
-		return nil, status.Error(codes.FailedPrecondition, "insufficient DCR balance for buy-in")
+	// Check if creator has enough DCR for the buy-in
+	if creatorBalance < req.BuyIn {
+		return nil, fmt.Errorf("insufficient DCR balance for buy-in: need %d, have %d", req.BuyIn, creatorBalance)
 	}
 
-	// Calculate starting chips (use request value or default to buy-in)
+	// Create table configuration
+	timeBank := time.Duration(req.TimeBankSeconds) * time.Second
+	if timeBank == 0 {
+		timeBank = 30 * time.Second // Default to 30 seconds if not specified
+	}
+
+	// Handle StartingChips default logic
 	startingChips := req.StartingChips
 	if startingChips == 0 {
-		startingChips = 1000 // Default fallback
+		startingChips = 1000 // Default to 1000 poker chips when not specified
 	}
 
-	// Calculate timebank duration (use request value or default to 30 seconds)
-	timeBankDuration := time.Duration(req.TimeBankSeconds) * time.Second
-	if req.TimeBankSeconds == 0 {
-		timeBankDuration = 30 * time.Second // Default 30 seconds
-	}
-
-	// Create table config
 	cfg := poker.TableConfig{
-		ID:             fmt.Sprintf("table-%d", time.Now().UnixNano()),
-		Log:            s.logBackend.Logger("TABLE"),
+		ID:             fmt.Sprintf("table_%d", time.Now().UnixNano()),
+		Log:            s.log,
 		HostID:         req.PlayerId,
-		BuyIn:          req.BuyIn, // DCR amount (in atoms) to join table
+		BuyIn:          req.BuyIn,
 		MinPlayers:     int(req.MinPlayers),
 		MaxPlayers:     int(req.MaxPlayers),
-		SmallBlind:     req.SmallBlind, // Poker chips
-		BigBlind:       req.BigBlind,   // Poker chips
-		MinBalance:     req.MinBalance, // Minimum DCR balance required
-		StartingChips:  startingChips,  // Poker chips given to each player
-		TimeBank:       timeBankDuration,
-		AutoStartDelay: 3 * time.Second, // Auto-start next hand after 3 seconds
+		SmallBlind:     req.SmallBlind,
+		BigBlind:       req.BigBlind,
+		MinBalance:     req.MinBalance,
+		StartingChips:  startingChips, // Chips amount for the game with default logic
+		TimeBank:       timeBank,
+		AutoStartDelay: 5 * time.Second,
 	}
 
-	// Create new table
 	table := poker.NewTable(cfg)
 
 	// Set up event manager with notification sender
 	table.SetNotificationSender(s)
 
-	// Add creator as first player with starting chips (not DCR balance)
-	err = table.AddPlayer(req.PlayerId, startingChips)
+	// Add creator as first user
+	_, err = table.AddNewUser(req.PlayerId, req.PlayerId, creatorBalance, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -147,8 +144,23 @@ func (s *Server) JoinTable(ctx context.Context, req *pokerrpc.JoinTableRequest) 
 		}, nil
 	}
 
-	// Add player to table with starting chips (not DCR balance)
-	err = table.AddPlayer(req.PlayerId, config.StartingChips)
+	// Find next available seat
+	users := table.GetUsers()
+	occupiedSeats := make(map[int]bool)
+	for _, user := range users {
+		occupiedSeats[user.TableSeat] = true
+	}
+
+	nextSeat := 0
+	for i := 0; i < config.MaxPlayers; i++ {
+		if !occupiedSeats[i] {
+			nextSeat = i
+			break
+		}
+	}
+
+	// Add user to table
+	_, err = table.AddNewUser(req.PlayerId, req.PlayerId, dcrBalance, nextSeat)
 	if err != nil {
 		return &pokerrpc.JoinTableResponse{Success: false, Message: err.Error()}, nil
 	}
@@ -157,7 +169,7 @@ func (s *Server) JoinTable(ctx context.Context, req *pokerrpc.JoinTableRequest) 
 	err = s.db.UpdatePlayerBalance(req.PlayerId, -config.BuyIn, "table buy-in", "joined table")
 	if err != nil {
 		// If balance update fails, remove player from table
-		table.RemovePlayer(req.PlayerId)
+		table.RemoveUser(req.PlayerId)
 		return nil, err
 	}
 
@@ -177,9 +189,9 @@ func (s *Server) LeaveTable(ctx context.Context, req *pokerrpc.LeaveTableRequest
 		return &pokerrpc.LeaveTableResponse{Success: false, Message: "Table not found"}, nil
 	}
 
-	// Get player's current balance
-	player := table.GetPlayer(req.PlayerId)
-	if player == nil {
+	// Get user's current balance
+	user := table.GetUser(req.PlayerId)
+	if user == nil {
 		return &pokerrpc.LeaveTableResponse{Success: false, Message: "Player not at table"}, nil
 	}
 
@@ -187,8 +199,8 @@ func (s *Server) LeaveTable(ctx context.Context, req *pokerrpc.LeaveTableRequest
 	config := table.GetConfig()
 	isHost := req.PlayerId == config.HostID
 
-	// Remove player from table
-	err := table.RemovePlayer(req.PlayerId)
+	// Remove user from table
+	err := table.RemoveUser(req.PlayerId)
 	if err != nil {
 		return &pokerrpc.LeaveTableResponse{Success: false, Message: err.Error()}, nil
 	}
@@ -208,10 +220,10 @@ func (s *Server) LeaveTable(ctx context.Context, req *pokerrpc.LeaveTableRequest
 	if isHost {
 		// Refund remaining players who haven't started playing
 		if !table.IsGameStarted() {
-			remainingPlayers := table.GetPlayers()
-			for _, p := range remainingPlayers {
+			remainingUsers := table.GetUsers()
+			for _, u := range remainingUsers {
 				// Refund their buy-in
-				err = s.db.UpdatePlayerBalance(p.ID, table.GetConfig().BuyIn, "table closed by host", "host left table")
+				err = s.db.UpdatePlayerBalance(u.ID, table.GetConfig().BuyIn, "table closed by host", "host left table")
 				if err != nil {
 					// Log error but continue with table closure
 					// In a production system, you might want better error handling here
@@ -249,7 +261,7 @@ func (s *Server) GetTables(ctx context.Context, req *pokerrpc.GetTablesRequest) 
 			BigBlind:        config.BigBlind,
 			MaxPlayers:      int32(table.GetMaxPlayers()),
 			MinPlayers:      int32(table.GetMinPlayers()),
-			CurrentPlayers:  int32(len(table.GetPlayers())),
+			CurrentPlayers:  int32(len(table.GetUsers())),
 			MinBalance:      config.MinBalance,
 			BuyIn:           config.BuyIn,
 			GameStarted:     table.IsGameStarted(),
@@ -320,12 +332,12 @@ func (s *Server) SetPlayerReady(ctx context.Context, req *pokerrpc.SetPlayerRead
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
 
-	player := table.GetPlayer(req.PlayerId)
-	if player == nil {
+	user := table.GetUser(req.PlayerId)
+	if user == nil {
 		return nil, status.Error(codes.NotFound, "player not found at table")
 	}
 
-	player.IsReady = true
+	user.IsReady = true
 
 	// Trigger player ready event so other players see the update immediately
 	table.TriggerPlayerReadyEvent(req.PlayerId, true)
@@ -353,12 +365,12 @@ func (s *Server) SetPlayerUnready(ctx context.Context, req *pokerrpc.SetPlayerUn
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
 
-	player := table.GetPlayer(req.PlayerId)
-	if player == nil {
+	user := table.GetUser(req.PlayerId)
+	if user == nil {
 		return nil, status.Error(codes.NotFound, "player not found at table")
 	}
 
-	player.IsReady = false
+	user.IsReady = false
 
 	// Trigger player unready event so other players see the update immediately
 	table.TriggerPlayerReadyEvent(req.PlayerId, false)
@@ -375,7 +387,7 @@ func (s *Server) GetPlayerCurrentTable(ctx context.Context, req *pokerrpc.GetPla
 
 	// Search through all tables to find if the player is in any table
 	for _, table := range s.tables {
-		if table.GetPlayer(req.PlayerId) != nil {
+		if table.GetUser(req.PlayerId) != nil {
 			return &pokerrpc.GetPlayerCurrentTableResponse{
 				TableId: table.GetConfig().ID,
 			}, nil
@@ -398,8 +410,8 @@ func (s *Server) ShowCards(ctx context.Context, req *pokerrpc.ShowCardsRequest) 
 	}
 
 	// Verify player is at the table
-	player := table.GetPlayer(req.PlayerId)
-	if player == nil {
+	user := table.GetUser(req.PlayerId)
+	if user == nil {
 		return nil, status.Error(codes.FailedPrecondition, "player not at table")
 	}
 
@@ -427,8 +439,8 @@ func (s *Server) HideCards(ctx context.Context, req *pokerrpc.HideCardsRequest) 
 	}
 
 	// Verify player is at the table
-	player := table.GetPlayer(req.PlayerId)
-	if player == nil {
+	user := table.GetUser(req.PlayerId)
+	if user == nil {
 		return nil, status.Error(codes.FailedPrecondition, "player not at table")
 	}
 
@@ -513,8 +525,25 @@ func (s *Server) buildGameState(tableID, requestingPlayerID string) (*pokerrpc.G
 
 // buildGameStateForPlayer creates a GameUpdate with all the necessary data for a specific player
 func (s *Server) buildGameStateForPlayer(table *poker.Table, game *poker.Game, requestingPlayerID string) *pokerrpc.GameUpdate {
-	// Build players list
-	players := s.buildPlayers(table.GetPlayers(), game, requestingPlayerID)
+	// Build players list from users and game players
+	var players []*pokerrpc.Player
+	if game != nil {
+		players = s.buildPlayers(game.GetPlayers(), game, requestingPlayerID)
+	} else {
+		// If no game, build from table users
+		users := table.GetUsers()
+		players = make([]*pokerrpc.Player, 0, len(users))
+		for _, user := range users {
+			players = append(players, &pokerrpc.Player{
+				Id:         user.ID,
+				Balance:    user.AccountBalance,
+				IsReady:    user.IsReady,
+				Folded:     user.HasFolded,
+				CurrentBet: user.HasBet,
+				Hand:       make([]*pokerrpc.Card, 0), // Empty hand when no game
+			})
+		}
+	}
 
 	// Build community cards slice
 	communityCards := make([]*pokerrpc.Card, 0)
@@ -544,7 +573,7 @@ func (s *Server) buildGameStateForPlayer(table *poker.Table, game *poker.Game, r
 		CurrentPlayer:   currentPlayerID,
 		GameStarted:     table.IsGameStarted(),
 		PlayersRequired: int32(table.GetMinPlayers()),
-		PlayersJoined:   int32(len(table.GetPlayers())),
+		PlayersJoined:   int32(len(table.GetUsers())),
 	}
 }
 
@@ -778,13 +807,25 @@ func (s *Server) buildPlayerForUpdate(p *poker.Player, requestingPlayerID string
 		return player
 	}
 
-	// Don't show cards during dealing phase to avoid race conditions
-	if game.GetPhase() == pokerrpc.GamePhase_NEW_HAND_DEALING {
-		return player
-	}
-
-	// Show cards if it's the requesting player's own data or during showdown
-	if p.ID == requestingPlayerID || game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN {
+	// Show cards if it's the requesting player's own data (except during NEW_HAND_DEALING to avoid race conditions)
+	// OR during showdown for all players
+	if p.ID == requestingPlayerID {
+		// Show own cards during all active game phases (not just showdown)
+		if game.GetPhase() != pokerrpc.GamePhase_NEW_HAND_DEALING && len(p.Hand) > 0 {
+			player.Hand = make([]*pokerrpc.Card, len(p.Hand))
+			for i, card := range p.Hand {
+				player.Hand[i] = &pokerrpc.Card{
+					Suit:  card.GetSuit(),
+					Value: card.GetValue(),
+				}
+			}
+			s.log.Debugf("DEBUG: Showing %d cards for player %s (own cards, phase=%v)", len(p.Hand), p.ID, game.GetPhase())
+		} else {
+			// Debug: Log why cards are not being shown
+			s.log.Debugf("DEBUG: Not showing cards for player %s: phase=%v, handSize=%d", p.ID, game.GetPhase(), len(p.Hand))
+		}
+	} else if game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN && len(p.Hand) > 0 {
+		// Show other players' cards only during showdown
 		player.Hand = make([]*pokerrpc.Card, len(p.Hand))
 		for i, card := range p.Hand {
 			player.Hand[i] = &pokerrpc.Card{

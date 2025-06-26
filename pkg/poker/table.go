@@ -9,7 +9,66 @@ import (
 	"github.com/decred/slog"
 
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
+	"github.com/vctt94/poker-bisonrelay/pkg/statemachine"
 )
+
+// TableStateFn represents a table state function following Rob Pike's pattern
+type TableStateFn = statemachine.StateFn[Table]
+
+// User represents someone seated at the table (not necessarily playing)
+type User struct {
+	ID             string
+	Name           string
+	AccountBalance int64 // DCR account balance (in atoms)
+	TableSeat      int   // Seat position at the table
+	IsReady        bool  // Ready to start/continue games
+	JoinedAt       time.Time
+	LastAction     time.Time
+
+	// Game-related temporary fields (used during active games)
+	HasBet    int64  // Current bet amount in this betting round
+	HasFolded bool   // Folded in current hand
+	Hand      []Card // Cards in hand during game
+}
+
+// NewUser creates a new user
+func NewUser(id, name string, accountBalance int64, seat int) *User {
+	return &User{
+		ID:             id,
+		Name:           name,
+		AccountBalance: accountBalance,
+		TableSeat:      seat,
+		IsReady:        false,
+		JoinedAt:       time.Now(),
+		LastAction:     time.Now(),
+		HasBet:         0,
+		HasFolded:      false,
+		Hand:           make([]Card, 0, 2),
+	}
+}
+
+// IsActiveInGame returns true if the user is actively in the current game
+func (u *User) IsActiveInGame() bool {
+	return !u.HasFolded && u.IsReady
+}
+
+// ResetForNewHand resets the user's game state for a new hand
+func (u *User) ResetForNewHand(startingChips int64) {
+	u.Hand = make([]Card, 0, 2)
+	u.HasBet = 0
+	u.HasFolded = false
+	u.LastAction = time.Now()
+}
+
+// SetGameState updates the user's game state (simplified for users)
+func (u *User) SetGameState(stateName string) {
+	switch stateName {
+	case "FOLDED":
+		u.HasFolded = true
+	case "ALL_IN":
+		// Handle all-in state
+	}
+}
 
 // TableConfig holds configuration for a new poker table
 type TableConfig struct {
@@ -87,157 +146,199 @@ func (tem *TableEventManager) NotifyBlindPosted(tableID, playerID string, amount
 	}
 }
 
-// Table represents a poker table
+// Table represents a poker table that manages users and delegates game logic to Game
 type Table struct {
-	log             slog.Logger
-	config          TableConfig
-	players         map[string]*Player
-	game            *Game // Game logic without separate player management
-	mu              sync.RWMutex
-	createdAt       time.Time
-	lastAction      time.Time
-	gameStarted     bool
-	allPlayersReady bool
-	// Track actions in current betting round
-	actionsInRound int
+	log        slog.Logger
+	config     TableConfig
+	users      map[string]*User // Users seated at the table
+	game       *Game            // Game logic that handles all player management
+	mu         sync.RWMutex
+	createdAt  time.Time
+	lastAction time.Time
 	// Event manager for notifications
 	eventManager *TableEventManager
 	// Auto-start management
 	autoStartTimer    *time.Timer
 	autoStartCanceled bool
+
+	// State machine - Rob Pike's pattern
+	stateMachine *statemachine.StateMachine[Table]
 }
 
 // NewTable creates a new poker table
 func NewTable(cfg TableConfig) *Table {
-	return &Table{
-		log:            cfg.Log,
-		config:         cfg,
-		players:        make(map[string]*Player),
-		createdAt:      time.Now(),
-		lastAction:     time.Now(),
-		actionsInRound: 0,
-		eventManager:   &TableEventManager{},
+	t := &Table{
+		log:          cfg.Log,
+		config:       cfg,
+		users:        make(map[string]*User),
+		createdAt:    time.Now(),
+		lastAction:   time.Now(),
+		eventManager: &TableEventManager{},
 	}
+
+	// Initialize state machine with first state function
+	t.stateMachine = statemachine.NewStateMachine(t, tableStateWaitingForPlayers)
+
+	return t
 }
 
-// SetNotificationSender sets the notification sender for the table
-func (t *Table) SetNotificationSender(sender NotificationSender) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.eventManager.notificationSender = sender
-}
+// State functions following Rob Pike's pattern
+// Each state function performs its work and returns the next state function (or nil to terminate)
 
-// AddPlayer adds a player to the table with the specified starting chips
-// startingChips: the amount of poker chips the player starts with (DCR buy-in validation done by caller)
-func (t *Table) AddPlayer(playerID string, startingChips int64) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	// Check if table is full
-	if len(t.players) >= t.config.MaxPlayers {
-		return fmt.Errorf("table is full")
-	}
-
-	// Check if player already at table
-	if _, exists := t.players[playerID]; exists {
-		return fmt.Errorf("player already at table")
-	}
-
-	// Add player to table with unified state
-	player := &Player{
-		ID:              playerID,
-		Balance:         startingChips, // In-game chips for current/next hand
-		StartingBalance: startingChips,
-		AccountBalance:  0, // Not tracking DCR balance at table level
-		TableSeat:       len(t.players),
-		IsReady:         false,
-		HasFolded:       false,
-		IsAllIn:         false,
-		LastAction:      time.Now(),
-	}
-
-	// Initialize player with at-table state
-	player.transitionTo(playerStateAtTable)
-	t.players[playerID] = player
-
-	t.lastAction = time.Now()
-	return nil
-}
-
-// RemovePlayer removes a player from the table
-func (t *Table) RemovePlayer(playerID string) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if _, exists := t.players[playerID]; !exists {
-		return fmt.Errorf("player not at table")
-	}
-
-	delete(t.players, playerID)
-	t.lastAction = time.Now()
-	return nil
-}
-
-// CheckAllPlayersReady checks if all players are ready
-func (t *Table) CheckAllPlayersReady() bool {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	if len(t.players) < t.config.MinPlayers {
-		return false
-	}
-
-	for _, p := range t.players {
-		if !p.IsReady {
-			return false
+// tableStateWaitingForPlayers handles the WAITING_FOR_PLAYERS state logic
+func tableStateWaitingForPlayers(entity *Table, callback func(stateName string, event statemachine.StateEvent)) TableStateFn {
+	// Check if we have enough players and they're all ready
+	if len(entity.users) >= entity.config.MinPlayers {
+		allReady := true
+		for _, u := range entity.users {
+			if !u.IsReady {
+				allReady = false
+				break
+			}
+		}
+		if allReady {
+			if callback != nil {
+				callback("PLAYERS_READY", statemachine.StateEntered)
+			}
+			return tableStatePlayersReady
 		}
 	}
 
-	// If all players are ready and this is the first time, send notification
-	wasReady := t.allPlayersReady
-	t.allPlayersReady = true
+	if callback != nil {
+		callback("WAITING_FOR_PLAYERS", statemachine.StateEntered)
+	}
+	return tableStateWaitingForPlayers // Stay in this state
+}
 
-	if !wasReady {
-		// Send ALL_PLAYERS_READY notification immediately
-		go t.eventManager.NotifyAllPlayersReady(t.config.ID)
+// tableStatePlayersReady handles the PLAYERS_READY state logic
+func tableStatePlayersReady(entity *Table, callback func(stateName string, event statemachine.StateEvent)) TableStateFn {
+	// Send notification that all players are ready
+	if entity.eventManager.notificationSender != nil {
+		go entity.eventManager.NotifyAllPlayersReady(entity.config.ID)
 	}
 
-	return true
+	if callback != nil {
+		callback("PLAYERS_READY", statemachine.StateEntered)
+	}
+	// This state waits for external trigger (StartGame)
+	return tableStatePlayersReady
 }
 
-// TriggerPlayerReadyEvent sends a player ready notification immediately
-func (t *Table) TriggerPlayerReadyEvent(playerID string, ready bool) {
-	// Send notification immediately
-	go t.eventManager.NotifyPlayerReady(t.config.ID, playerID, ready)
+// tableStateGameActive handles the GAME_ACTIVE state logic
+func tableStateGameActive(entity *Table, callback func(stateName string, event statemachine.StateEvent)) TableStateFn {
+	// Check if game should move to showdown
+	if entity.game != nil && entity.game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN {
+		if callback != nil {
+			callback("SHOWDOWN", statemachine.StateEntered)
+		}
+		return tableStateShowdown
+	}
+
+	if callback != nil {
+		callback("GAME_ACTIVE", statemachine.StateEntered)
+	}
+	return tableStateGameActive // Stay in this state during normal gameplay
 }
 
-// GetPlayer returns a player by ID
-func (t *Table) GetPlayer(playerID string) *Player {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.players[playerID]
+// tableStateShowdown handles the SHOWDOWN state logic
+func tableStateShowdown(entity *Table, callback func(stateName string, event statemachine.StateEvent)) TableStateFn {
+	// The actual showdown logic is handled by handleShowdown()
+	// This state manages the transition to cleanup
+	if callback != nil {
+		callback("SHOWDOWN", statemachine.StateEntered)
+	}
+	return tableStateCleanup
 }
 
-// StartGame starts a new game at the table
+// tableStateCleanup handles the CLEANUP state logic
+func tableStateCleanup(entity *Table, callback func(stateName string, event statemachine.StateEvent)) TableStateFn {
+	// Check if we can start a new hand
+	playersReadyForNextHand := 0
+	for _, u := range entity.users {
+		if u.AccountBalance >= entity.config.BigBlind {
+			playersReadyForNextHand++
+		}
+	}
+
+	if playersReadyForNextHand >= entity.config.MinPlayers {
+		// Can start new hand - transition back to game active
+		if callback != nil {
+			callback("GAME_ACTIVE", statemachine.StateEntered)
+		}
+		return tableStateGameActive
+	} else {
+		// Not enough players - go back to waiting
+		if callback != nil {
+			callback("WAITING_FOR_PLAYERS", statemachine.StateEntered)
+		}
+		return tableStateWaitingForPlayers
+	}
+}
+
+// GetTableStateString returns a string representation of the current table state
+func (t *Table) GetTableStateString() string {
+	currentState := t.stateMachine.GetCurrentState()
+	if currentState == nil {
+		return "TERMINATED"
+	}
+
+	// Use function pointer comparison to determine state
+	switch fmt.Sprintf("%p", currentState) {
+	case fmt.Sprintf("%p", tableStateWaitingForPlayers):
+		return "WAITING_FOR_PLAYERS"
+	case fmt.Sprintf("%p", tableStatePlayersReady):
+		return "PLAYERS_READY"
+	case fmt.Sprintf("%p", tableStateGameActive):
+		return "GAME_ACTIVE"
+	case fmt.Sprintf("%p", tableStateShowdown):
+		return "SHOWDOWN"
+	case fmt.Sprintf("%p", tableStateCleanup):
+		return "CLEANUP"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// CheckAllPlayersReady simplified - just triggers state machine update
+func (t *Table) CheckAllPlayersReady() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Let the state machine handle the logic with broadcast callback
+	t.stateMachine.Dispatch(func(stateName string, event statemachine.StateEvent) {
+		if event == statemachine.StateEntered {
+			t.broadcastGameStateUpdate()
+		}
+	})
+
+	// Check the resulting state
+	state := t.GetTableStateString()
+	return state == "PLAYERS_READY" || state == "GAME_ACTIVE" || state == "SHOWDOWN"
+}
+
+// StartGame starts a new game at the table using the state machine
 func (t *Table) StartGame() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// Check if we're in the right state
+	if t.GetTableStateString() != "PLAYERS_READY" {
+		return fmt.Errorf("cannot start game: table not in PLAYERS_READY state")
+	}
 
 	// Cancel any pending auto-start since we're manually starting
 	t.cancelAutoStart()
 
 	// Check if we have enough players
-	if len(t.players) < t.config.MinPlayers {
+	if len(t.users) < t.config.MinPlayers {
 		return fmt.Errorf("not enough players to start game")
 	}
 
 	// Reset all players for the new hand
-	activePlayers := make([]*Player, 0, len(t.players))
-	for _, p := range t.players {
-		if p.IsAtTable() { // Only include players still at the table
-			p.ResetForNewHand(t.config.StartingChips)
-			activePlayers = append(activePlayers, p)
-		}
+	activePlayers := make([]*User, 0, len(t.users))
+	for _, u := range t.users {
+		u.ResetForNewHand(t.config.StartingChips)
+		activePlayers = append(activePlayers, u)
 	}
 
 	// Sort players by TableSeat for consistent ordering
@@ -245,15 +346,15 @@ func (t *Table) StartGame() error {
 		return activePlayers[i].TableSeat < activePlayers[j].TableSeat
 	})
 
-	// Create a new game
+	// Create a new game - players are managed by the table
 	t.game = NewGame(GameConfig{
 		NumPlayers:    len(activePlayers),
 		StartingChips: t.config.StartingChips,
 		SmallBlind:    t.config.SmallBlind,
 		BigBlind:      t.config.BigBlind,
 	})
-	// Populate game.players with references to the same Player objects from the table
-	copy(t.game.players, activePlayers)
+	// Set the players in the game to reference the same objects from the table
+	t.game.SetPlayers(activePlayers)
 
 	// Use centralized hand setup logic (this assumes lock is held)
 	err := t.setupNewHand(activePlayers)
@@ -261,15 +362,229 @@ func (t *Table) StartGame() error {
 		return err
 	}
 
-	// Mark game as started
-	t.gameStarted = true
+	// Transition to game active state with broadcast callback
+	t.stateMachine.SetState(tableStateGameActive)
+
+	// SINGLE broadcast at the end after all setup is complete
+	t.broadcastGameStateUpdate()
 
 	t.lastAction = time.Now()
 	return nil
 }
 
+// IsGameStarted returns whether the game has started
+func (t *Table) IsGameStarted() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	state := t.GetTableStateString()
+	return state == "GAME_ACTIVE" || state == "SHOWDOWN"
+}
+
+// AreAllPlayersReady returns whether all players are ready
+func (t *Table) AreAllPlayersReady() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	state := t.GetTableStateString()
+	return state == "PLAYERS_READY" || state == "GAME_ACTIVE" || state == "SHOWDOWN"
+}
+
+// isGameActive returns true if the game is currently active
+func (t *Table) isGameActive() bool {
+	state := t.GetTableStateString()
+	return state == "GAME_ACTIVE"
+}
+
+// handleShowdown delegates showdown logic to the game and handles notifications
+func (t *Table) handleShowdown() {
+	if t.game == nil {
+		return
+	}
+
+	// Delegate all showdown logic to the game
+	result := t.game.handleShowdown()
+
+	// Sync player balances back to users
+	t.game.syncBalancesToUsers(t.users)
+
+	// Send showdown result notification to all players
+	if t.eventManager.notificationSender != nil && len(result.WinnerInfo) > 0 {
+		t.eventManager.notificationSender.SendShowdownResult(t.config.ID, result.WinnerInfo, result.TotalPot)
+		// Note: BroadcastGameStateUpdate is handled by the calling action method to avoid duplicates
+	}
+
+	// Count players still at the table with sufficient balance for the next hand
+	playersReadyForNextHand := 0
+	for _, u := range t.users {
+		if u.AccountBalance >= t.config.BigBlind {
+			playersReadyForNextHand++
+		}
+	}
+
+	// Reset user betting state (game handles its own player state)
+	for _, u := range t.users {
+		u.HasFolded = false
+		u.HasBet = 0
+		// Keep u.Hand for showdown viewing by users
+	}
+
+	t.game.ResetActionsInRound()
+	t.lastAction = time.Now()
+
+	// Transition to showdown state with broadcast callback
+	t.stateMachine.SetState(tableStateShowdown)
+
+	// Auto-start next hand after configured delay if enough players remain
+	if playersReadyForNextHand >= t.config.MinPlayers && t.config.AutoStartDelay > 0 {
+		t.scheduleAutoStart()
+	}
+}
+
+// startNewHand is the internal implementation that assumes the lock is already held
+func (t *Table) startNewHand() error {
+	// Ensure game exists - if not, this is a bug
+	if t.game == nil {
+		return fmt.Errorf("startNewHand called but game is nil - this should not happen")
+	}
+
+	// Check if enough players still at table
+	playersAtTable := len(t.users)
+
+	if playersAtTable < t.config.MinPlayers {
+		return fmt.Errorf("not enough players to start new hand")
+	}
+
+	// Get active users for the new hand
+	activeUsers := make([]*User, 0, len(t.users))
+	for _, u := range t.users {
+		if u.AccountBalance >= t.config.BigBlind {
+			activeUsers = append(activeUsers, u)
+		}
+	}
+
+	// Sort users by TableSeat for consistent ordering
+	sort.Slice(activeUsers, func(i, j int) bool {
+		return activeUsers[i].TableSeat < activeUsers[j].TableSeat
+	})
+
+	// Reset all users' hand-specific state from previous hand
+	for _, u := range t.users {
+		oldHandSize := len(u.Hand)
+		u.ResetForNewHand(u.AccountBalance) // Use consistent reset method
+		// Note: ResetForNewHand already handles IsAllIn, IsTurn, IsDealer
+		t.log.Debugf("startNewHand: reset user %s - old hand size: %d, new hand size: %d", u.ID, oldHandSize, len(u.Hand))
+	}
+
+	// Reuse existing players but reset them for the new hand
+	// First, reset existing players that are still active
+	activePlayers := make([]*Player, 0, len(activeUsers))
+	for _, user := range activeUsers {
+		// Find the existing player object for this user
+		var existingPlayer *Player
+		for _, player := range t.game.players {
+			if player.ID == user.ID {
+				existingPlayer = player
+				break
+			}
+		}
+
+		if existingPlayer != nil {
+			// Reset the existing player for the new hand
+			existingPlayer.ResetForNewHand(t.config.StartingChips)
+			activePlayers = append(activePlayers, existingPlayer)
+		} else {
+			// This is a new player that joined between hands - create a new Player object
+			newPlayer := NewPlayer(user.ID, user.Name, t.config.StartingChips)
+			newPlayer.AccountBalance = user.AccountBalance
+			newPlayer.TableSeat = user.TableSeat
+			newPlayer.IsReady = user.IsReady
+			newPlayer.LastAction = user.LastAction
+			activePlayers = append(activePlayers, newPlayer)
+		}
+	}
+
+	// Update the game with the reused/reset players
+	t.game.ResetForNewHand(activePlayers)
+
+	// Use centralized hand setup logic (this assumes lock is held)
+	err := t.setupNewHand(activeUsers)
+	if err != nil {
+		return fmt.Errorf("failed to setup new hand: %w", err)
+	}
+
+	// Transition to game active state
+	t.stateMachine.SetState(tableStateGameActive)
+
+	// SINGLE consolidated broadcast FIRST to ensure players get the new game state
+	// This ensures players can see their cards and current player correctly
+	t.broadcastGameStateUpdate()
+
+	// Send new hand notification AFTER the game state update
+	// This prevents the UI from clearing state before receiving the new state
+	go t.eventManager.NotifyNewHandStarted(t.config.ID)
+
+	t.lastAction = time.Now()
+	return nil
+}
+
+// scheduleAutoStart schedules automatic start of next hand after configured delay
+func (t *Table) scheduleAutoStart() {
+	// Cancel any existing auto-start timer
+	t.cancelAutoStart()
+
+	// Mark that auto-start is pending
+	t.autoStartCanceled = false
+
+	// Schedule the auto-start
+	t.autoStartTimer = time.AfterFunc(t.config.AutoStartDelay, func() {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+
+		// Check if auto-start was canceled
+		if t.autoStartCanceled {
+			return
+		}
+
+		// Double-check we still have enough players
+		playersReadyForNextHand := 0
+		for _, u := range t.users {
+			if u.AccountBalance >= t.config.BigBlind {
+				playersReadyForNextHand++
+			}
+		}
+
+		if playersReadyForNextHand >= t.config.MinPlayers {
+			t.log.Debugf("Auto-starting new hand with %d players after showdown", playersReadyForNextHand)
+			err := t.startNewHand() // Use internal version since we already hold the lock
+			if err != nil {
+				t.log.Debugf("Auto-start new hand failed: %v", err)
+			} else {
+				t.log.Debugf("Auto-started new hand successfully with %d players", playersReadyForNextHand)
+			}
+		} else {
+			t.log.Debugf("Not enough players for auto-start: %d < %d", playersReadyForNextHand, t.config.MinPlayers)
+		}
+	})
+}
+
+// cancelAutoStart cancels any pending auto-start timer
+func (t *Table) cancelAutoStart() {
+	if t.autoStartTimer != nil {
+		t.autoStartTimer.Stop()
+		t.autoStartTimer = nil
+	}
+	t.autoStartCanceled = true
+}
+
+// broadcastGameStateUpdate broadcasts game state update to all players
+func (t *Table) broadcastGameStateUpdate() {
+	if t.eventManager.notificationSender != nil {
+		// Use asynchronous broadcast to avoid holding locks
+		go t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
+	}
+}
+
 // setupNewHand handles the complete setup process for a new hand (assumes lock is held)
-func (t *Table) setupNewHand(activePlayers []*Player) error {
+func (t *Table) setupNewHand(activePlayers []*User) error {
 	if t.game == nil {
 		return fmt.Errorf("game not initialized")
 	}
@@ -300,16 +615,14 @@ func (t *Table) setupNewHand(activePlayers []*Player) error {
 	t.initializeCurrentPlayer()
 	t.log.Debugf("setupNewHand: Current player set to %s (index %d)", t.currentPlayerID(), t.game.currentPlayer)
 
-	// Phase 4: Set up timing and player states
-	t.log.Debugf("setupNewHand: Phase 4 - Setting up timing and player states")
-	for _, p := range activePlayers {
-		p.LastAction = time.Now()
+	// Start the timeout clock for the first current player
+	if t.game.currentPlayer >= 0 && t.game.currentPlayer < len(t.game.players) {
+		if !t.game.players[t.game.currentPlayer].HasFolded {
+			t.game.players[t.game.currentPlayer].LastAction = time.Now()
+		}
 	}
 
-	// Phase 5: Setup complete notification
-	t.log.Debugf("setupNewHand: Phase 5 - Setup complete, ready for notification sequence")
-	t.log.Debugf("setupNewHand: Hand setup completed successfully")
-
+	// NO BROADCAST HERE - will be done by caller after state transition
 	return nil
 }
 
@@ -319,7 +632,7 @@ func (t *Table) GetStatus() string {
 	defer t.mu.RUnlock()
 
 	status := fmt.Sprintf("Table %s:\n", t.config.ID)
-	status += fmt.Sprintf("Players: %d/%d\n", len(t.players), t.config.MaxPlayers)
+	status += fmt.Sprintf("Players: %d/%d\n", len(t.users), t.config.MaxPlayers)
 	status += fmt.Sprintf("Buy-in: %.8f DCR\n", float64(t.config.BuyIn)/1e8)
 	status += fmt.Sprintf("Starting Chips: %d chips\n", t.config.StartingChips)
 	status += fmt.Sprintf("Blinds: %d/%d chips\n", t.config.SmallBlind, t.config.BigBlind)
@@ -333,22 +646,22 @@ func (t *Table) GetStatus() string {
 	return status
 }
 
-// GetPlayers returns all players at the table
-func (t *Table) GetPlayers() []*Player {
+// GetUsers returns all users at the table
+func (t *Table) GetUsers() []*User {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	players := make([]*Player, 0, len(t.players))
-	for _, p := range t.players {
-		players = append(players, p)
+	users := make([]*User, 0, len(t.users))
+	for _, u := range t.users {
+		users = append(users, u)
 	}
 
 	// Sort by TableSeat to ensure consistent ordering
-	sort.Slice(players, func(i, j int) bool {
-		return players[i].TableSeat < players[j].TableSeat
+	sort.Slice(users, func(i, j int) bool {
+		return users[i].TableSeat < users[j].TableSeat
 	})
 
-	return players
+	return users
 }
 
 // GetBigBlind returns the big blind value for the table
@@ -358,77 +671,42 @@ func (t *Table) GetBigBlind() int64 {
 	return t.config.BigBlind
 }
 
-// MakeBet handles betting using the unified player state system
-func (t *Table) MakeBet(playerID string, amount int64) error {
+// MakeBet handles betting by delegating to the Game layer
+func (t *Table) MakeBet(userID string, amount int64) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	player := t.players[playerID]
-	if player == nil {
-		return fmt.Errorf("player not found")
+	user := t.users[userID]
+	if user == nil {
+		return fmt.Errorf("user not found")
 	}
 
 	// Validate that it's this player's turn to act
-	if t.gameStarted && t.game != nil {
+	if t.isGameActive() && t.game != nil {
 		currentPlayerID := t.currentPlayerID()
-		t.log.Debugf("MakeBet: playerID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v, amount=%d",
-			playerID, currentPlayerID, t.game.currentPlayer, t.game.phase, amount)
-		if currentPlayerID != playerID {
+		t.log.Debugf("MakeBet: userID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v, amount=%d",
+			userID, currentPlayerID, t.game.currentPlayer, t.game.phase, amount)
+		if currentPlayerID != userID {
 			return fmt.Errorf("not your turn to act")
 		}
-	}
 
-	// Validate and make the bet
-	if amount < player.HasBet {
-		return fmt.Errorf("cannot decrease bet")
-	}
-
-	delta := amount - player.HasBet
-	if delta > 0 && delta > player.Balance {
-		return fmt.Errorf("insufficient balance")
-	}
-
-	// Update the shared player object (this updates both table and game state automatically)
-	if delta > 0 {
-		player.Balance -= delta
-	}
-	player.HasBet = amount
-	player.LastAction = time.Now()
-
-	// Update game state
-	if player.Balance == 0 {
-		player.SetGameState("ALL_IN")
-	}
-
-	// Update game-level state
-	if t.gameStarted && t.game != nil {
-		if amount > t.game.currentBet {
-			t.game.currentBet = amount
+		// Delegate to Game layer - this handles all the betting logic
+		err := t.game.handlePlayerBet(userID, amount)
+		if err != nil {
+			return err
 		}
-		if delta > 0 {
-			// Find player index in game players slice
-			playerIndex := -1
-			for i, p := range t.game.players {
-				if p.ID == playerID {
-					playerIndex = i
-					break
-				}
-			}
-			if playerIndex >= 0 {
-				t.game.AddToPotForPlayer(playerIndex, delta)
-			}
+
+		// Sync the updated player state back to user using state machine dispatch
+		if err := t.syncPlayerState(userID); err != nil {
+			t.log.Errorf("Failed to sync player state after bet: %v", err)
 		}
-		// Increment actions counter for this betting round
-		t.actionsInRound++
-		// Advance to next player after action
-		t.advanceToNextPlayer()
+
+		// Check if this action completes the betting round
+		t.maybeAdvancePhase()
 	}
 
-	// Possibly advance phase if betting round is complete
-	t.maybeAdvancePhase()
-
-	// Broadcast game state update to notify clients of the current player change
-	go t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
+	// SINGLE broadcast at the end of all processing
+	t.broadcastGameStateUpdate()
 
 	t.lastAction = time.Now()
 	return nil
@@ -455,20 +733,6 @@ func (t *Table) GetConfig() TableConfig {
 	return t.config
 }
 
-// IsGameStarted returns whether the game has started
-func (t *Table) IsGameStarted() bool {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.gameStarted
-}
-
-// AreAllPlayersReady returns whether all players are ready
-func (t *Table) AreAllPlayersReady() bool {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.allPlayersReady
-}
-
 // GetGamePhase returns the current phase of the active game, or WAITING.
 func (t *Table) GetGamePhase() pokerrpc.GamePhase {
 	t.mu.RLock()
@@ -483,7 +747,7 @@ func (t *Table) GetGamePhase() pokerrpc.GamePhase {
 // HandleTimeouts iterates over players and auto-checks-or-folds those whose timebank expired.
 func (t *Table) HandleTimeouts() {
 	// Only run when game is active and TimeBank is positive
-	if !t.gameStarted || t.config.TimeBank == 0 || t.game == nil {
+	if !t.isGameActive() || t.config.TimeBank == 0 || t.game == nil {
 		return
 	}
 
@@ -521,13 +785,15 @@ func (t *Table) HandleTimeouts() {
 			currentPlayer.LastAction = now
 
 			// Increment actions counter for this betting round
-			t.actionsInRound++
+			t.game.IncrementActionsInRound()
 
 			// Advance to next player after check action
 			t.advanceToNextPlayer()
 		} else {
-			// Auto-fold the current player
+			// Auto-fold the current player - they cannot check because they need to call/raise
+			// This covers the case where currentPlayer.HasBet < currentBet (player needs to call)
 			currentPlayer.HasFolded = true
+			currentPlayer.LastAction = now
 
 			// Advance to next player
 			t.advanceToNextPlayer()
@@ -538,101 +804,22 @@ func (t *Table) HandleTimeouts() {
 	}
 }
 
-// maybeAdvancePhase checks if betting round is finished and progresses the game phase.
+// maybeAdvancePhase delegates to Game layer for phase advancement logic
 func (t *Table) maybeAdvancePhase() {
-	if !t.gameStarted || t.game == nil {
+	if !t.isGameActive() || t.game == nil {
 		return
 	}
 
-	// Don't advance during NEW_HAND_DEALING phase - this is managed by setupNewHandLocked()
-	// which handles the complete setup sequence and phase transitions internally
-	if t.game.phase == pokerrpc.GamePhase_NEW_HAND_DEALING {
-		return
-	}
+	// Delegate to Game layer - this handles all the phase advancement logic
+	t.game.maybeAdvancePhase()
 
-	// Count active players (non-folded)
-	activePlayers := 0
-	for _, p := range t.players {
-		if !p.HasFolded {
-			activePlayers++
-		}
-	}
-
-	t.log.Debugf("maybeAdvancePhase: phase=%v, activePlayers=%d, actionsInRound=%d",
-		t.game.phase, activePlayers, t.actionsInRound)
-
-	// If zero or one active player, move to showdown
-	if activePlayers <= 1 {
-		t.log.Debugf("maybeAdvancePhase: Moving to showdown with %d active players", activePlayers)
-		t.game.phase = pokerrpc.GamePhase_SHOWDOWN
+	// Handle showdown if we reached that phase
+	if t.game.phase == pokerrpc.GamePhase_SHOWDOWN {
 		t.handleShowdown()
-		return
 	}
 
-	// Check if all active players have had a chance to act and all bets are equal
-	// A betting round is complete when:
-	// 1. At least each active player has had one action (actionsInRound >= activePlayers)
-	// 2. All active players have matching bets (or have folded)
-
-	if t.actionsInRound < activePlayers {
-		return // Not all players have acted yet
-	}
-
-	// Check if all active players have matching bets
-	currentBet := t.game.currentBet
-	for _, p := range t.players {
-		if p.HasFolded {
-			continue
-		}
-		if p.HasBet != currentBet {
-			return // Still players with unmatched bets
-		}
-	}
-
-	// Betting round is complete - advance to next phase
-	switch t.game.phase {
-	case pokerrpc.GamePhase_PRE_FLOP:
-		t.game.StateFlop()
-	case pokerrpc.GamePhase_FLOP:
-		t.game.StateTurn()
-	case pokerrpc.GamePhase_TURN:
-		t.game.StateRiver()
-	case pokerrpc.GamePhase_RIVER:
-		t.game.phase = pokerrpc.GamePhase_SHOWDOWN
-		t.handleShowdown()
-		return
-	}
-
-	// Reset for new betting round
-	for _, p := range t.players {
-		p.HasBet = 0
-	}
-	t.game.currentBet = 0
-	t.actionsInRound = 0 // Reset actions counter for new betting round
-
-	// Reset current player for new betting round
-	t.initializeCurrentPlayer()
-
-	// Set the new current player's LastAction to now for the new betting round
-	if t.game.currentPlayer >= 0 && t.game.currentPlayer < len(t.game.players) {
-		if !t.game.players[t.game.currentPlayer].HasFolded {
-			t.game.players[t.game.currentPlayer].LastAction = time.Now()
-		}
-	}
-
-	// Broadcast game state update to notify clients of the phase change
-	go t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
-}
-
-// MaybeAdvancePhase is an exported wrapper that allows external callers
-// (such as the gRPC server) to trigger a check of whether the betting
-// round has finished and the game should progress to the next phase.
-// It simply delegates to the unexported maybeAdvancePhase method while
-// ensuring proper locking semantics within the Table.
-func (t *Table) MaybeAdvancePhase() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.maybeAdvancePhase()
+	// Note: BroadcastGameStateUpdate is handled by the calling action method
+	// (HandleCheck, HandleCall, HandleFold, MakeBet) to avoid duplicate broadcasts
 }
 
 // GetGame returns the active game instance (if any).
@@ -673,250 +860,184 @@ func (t *Table) currentPlayerID() string {
 	return t.game.players[t.game.currentPlayer].ID
 }
 
-// advanceToNextPlayer moves to the next active player (assumes lock is held)
+// advanceToNextPlayer delegates to Game layer
 func (t *Table) advanceToNextPlayer() {
-	if t.game == nil || len(t.game.players) == 0 {
+	if t.game == nil {
 		return
 	}
-
-	// Find next active player (who hasn't folded)
-	startingPlayer := t.game.currentPlayer
-	for {
-		t.game.currentPlayer = (t.game.currentPlayer + 1) % len(t.game.players)
-
-		// Check if we've gone full circle without finding an active player
-		if t.game.currentPlayer == startingPlayer {
-			break
-		}
-
-		// Use the unified player state directly
-		if !t.game.players[t.game.currentPlayer].HasFolded {
-			// Set the new current player's LastAction to now so their timeout timer starts
-			t.game.players[t.game.currentPlayer].LastAction = time.Now()
-			break
-		}
-	}
+	t.game.advanceToNextPlayer()
 }
 
-// initializeCurrentPlayer is the internal implementation that assumes the lock is already held
-func (t *Table) initializeCurrentPlayer() {
-	if t.game == nil || len(t.game.players) == 0 {
-		return
+// syncPlayerState synchronizes the player state from game layer to table layer using Rob Pike's pattern
+func (t *Table) syncPlayerState(userID string) error {
+	user := t.users[userID]
+	if user == nil {
+		return fmt.Errorf("user not found: %s", userID)
 	}
 
-	numPlayers := len(t.game.players)
+	// Find the corresponding player in the game
+	for _, player := range t.game.players {
+		if player.ID == userID {
+			// Update basic fields from player to user
+			user.HasBet = player.HasBet
+			user.AccountBalance = player.Balance
+			user.LastAction = player.LastAction
+			user.HasFolded = player.HasFolded
+			user.Hand = player.Hand
 
-	t.log.Debugf("initializeCurrentPlayer: numPlayers=%d, dealer=%d, phase=%v",
-		numPlayers, t.game.dealer, t.game.phase)
+			// Use Rob Pike's pattern - dispatch to let state function decide transitions
+			if player.stateMachine != nil {
+				// Create a callback to sync user state when player state transitions
+				callback := func(stateName string, event statemachine.StateEvent) {
+					if event == statemachine.StateEntered {
+						user.SetGameState(stateName)
+					}
+				}
 
-	// In pre-flop, start with Under the Gun (player after big blind)
-	if t.game.phase == pokerrpc.GamePhase_PRE_FLOP {
-		if numPlayers == 2 {
-			// In heads-up, after blinds are posted, small blind acts first
-			// The small blind IS the dealer in heads-up
-			t.game.currentPlayer = t.game.dealer
-			t.log.Debugf("initializeCurrentPlayer: heads-up pre-flop, setting currentPlayer to dealer=%d", t.game.dealer)
-		} else {
-			// In multi-way, Under the Gun acts first (after big blind)
-			t.game.currentPlayer = (t.game.dealer + 3) % numPlayers
-			t.log.Debugf("initializeCurrentPlayer: multi-way pre-flop, setting currentPlayer to UTG=%d", t.game.currentPlayer)
-		}
-	} else {
-		// In post-flop streets, start with small blind position
-		if numPlayers == 2 {
-			// In heads-up, small blind is the dealer
-			t.game.currentPlayer = t.game.dealer
-			t.log.Debugf("initializeCurrentPlayer: heads-up post-flop, setting currentPlayer to dealer=%d", t.game.dealer)
-		} else {
-			// In multi-way, small blind is player after dealer
-			t.game.currentPlayer = (t.game.dealer + 1) % numPlayers
-			t.log.Debugf("initializeCurrentPlayer: multi-way post-flop, setting currentPlayer to SB=%d", t.game.currentPlayer)
-		}
-	}
-
-	// Ensure we start with an active player
-	startingPlayer := t.game.currentPlayer
-	for {
-		// Use the unified player state directly
-		if !t.game.players[t.game.currentPlayer].HasFolded {
-			break
-		}
-
-		t.game.currentPlayer = (t.game.currentPlayer + 1) % len(t.game.players)
-
-		// Prevent infinite loop
-		if t.game.currentPlayer == startingPlayer {
-			break
-		}
-	}
-}
-
-// HandleFold handles folding using the unified player state system
-func (t *Table) HandleFold(playerID string) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	player := t.players[playerID]
-	if player == nil {
-		return fmt.Errorf("player not found")
-	}
-
-	// Validate that it's this player's turn to act
-	if t.gameStarted && t.game != nil {
-		currentPlayerID := t.currentPlayerID()
-		t.log.Debugf("HandleFold: playerID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v",
-			playerID, currentPlayerID, t.game.currentPlayer, t.game.phase)
-		if currentPlayerID != playerID {
-			return fmt.Errorf("not your turn to act")
-		}
-	}
-
-	// Update the shared player object (this updates both table and game state automatically)
-	player.SetGameState("FOLDED")
-	player.LastAction = time.Now()
-
-	t.log.Debugf("HandleFold: Player %s folded, HasFolded=%t", playerID, player.HasFolded)
-
-	// Update game state
-	if t.gameStarted && t.game != nil {
-		// Increment actions counter for this betting round
-		t.actionsInRound++
-		// Advance to next player after fold action
-		t.advanceToNextPlayer()
-	}
-
-	// Possibly advance phase if betting round is complete
-	t.maybeAdvancePhase()
-
-	// Broadcast game state update to notify clients of the current player change
-	go t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
-
-	t.lastAction = time.Now()
-	return nil
-}
-
-// HandleCall handles call actions using the unified player state system
-func (t *Table) HandleCall(playerID string) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	player := t.players[playerID]
-	if player == nil {
-		return fmt.Errorf("player not found")
-	}
-
-	// Validate that it's this player's turn to act
-	if t.gameStarted && t.game != nil {
-		currentPlayerID := t.currentPlayerID()
-		t.log.Debugf("HandleCall: playerID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v",
-			playerID, currentPlayerID, t.game.currentPlayer, t.game.phase)
-		if currentPlayerID != playerID {
-			return fmt.Errorf("not your turn to act")
-		}
-	}
-
-	currentBet := t.game.currentBet
-
-	// For call to be valid, there must be a bet to call (current bet > player's current bet)
-	if currentBet <= player.HasBet {
-		return fmt.Errorf("nothing to call - use check instead")
-	}
-
-	// Calculate how much more the player needs to bet to call
-	delta := currentBet - player.HasBet
-	if delta > player.Balance {
-		return fmt.Errorf("insufficient balance to call")
-	}
-
-	// Update the shared player object (this updates both table and game state automatically)
-	player.Balance -= delta
-	player.HasBet = currentBet
-	player.LastAction = time.Now()
-
-	// Update game state
-	if player.Balance == 0 {
-		player.SetGameState("ALL_IN")
-	}
-
-	// Update game-level state
-	if delta > 0 {
-		// Find player index in game players slice
-		playerIndex := -1
-		for i, p := range t.game.players {
-			if p.ID == playerID {
-				playerIndex = i
-				break
+				// Dispatch - the player's current state function will examine conditions
+				// and return the appropriate next state function
+				player.stateMachine.Dispatch(callback)
 			}
-		}
-		if playerIndex >= 0 {
-			t.game.AddToPotForPlayer(playerIndex, delta)
+			return nil
 		}
 	}
 
-	// Increment actions counter for this betting round
-	t.actionsInRound++
+	return fmt.Errorf("player not found in game: %s", userID)
+}
 
-	// Advance to next player after call action
-	t.advanceToNextPlayer()
-
-	// Check if this action completes the betting round
-	t.maybeAdvancePhase()
-
-	// Broadcast game state update to notify clients of the current player change
-	if t.eventManager.notificationSender != nil {
-		go t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
+// initializeCurrentPlayer delegates to Game layer
+func (t *Table) initializeCurrentPlayer() {
+	if t.game == nil {
+		return
 	}
+	t.game.initializeCurrentPlayer()
+}
+
+// HandleFold handles folding by delegating to the Game layer
+func (t *Table) HandleFold(userID string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	user := t.users[userID]
+	if user == nil {
+		return fmt.Errorf("user not found")
+	}
+
+	// Validate that it's this player's turn to act
+	if t.isGameActive() && t.game != nil {
+		currentPlayerID := t.currentPlayerID()
+		t.log.Debugf("HandleFold: userID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v",
+			userID, currentPlayerID, t.game.currentPlayer, t.game.phase)
+		if currentPlayerID != userID {
+			return fmt.Errorf("not your turn to act")
+		}
+
+		// Delegate to Game layer - this handles all the folding logic
+		err := t.game.handlePlayerFold(userID)
+		if err != nil {
+			return err
+		}
+
+		// Sync the updated player state back to user using state machine dispatch
+		if err := t.syncPlayerState(userID); err != nil {
+			t.log.Errorf("Failed to sync player state after fold: %v", err)
+		}
+
+		t.log.Debugf("HandleFold: User %s folded, HasFolded=%t", userID, user.HasFolded)
+
+		// Check if this action completes the betting round
+		t.maybeAdvancePhase()
+	}
+
+	// SINGLE broadcast at the end of all processing
+	t.broadcastGameStateUpdate()
 
 	t.lastAction = time.Now()
 	return nil
 }
 
-// HandleCheck handles check actions using the unified player state system
-func (t *Table) HandleCheck(playerID string) error {
+// HandleCall handles call actions by delegating to the Game layer
+func (t *Table) HandleCall(userID string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	player := t.players[playerID]
-	if player == nil {
-		return fmt.Errorf("player not found")
+	user := t.users[userID]
+	if user == nil {
+		return fmt.Errorf("user not found")
 	}
 
 	// Validate that it's this player's turn to act
-	if t.gameStarted && t.game != nil {
+	if t.isGameActive() && t.game != nil {
 		currentPlayerID := t.currentPlayerID()
-		t.log.Debugf("HandleCheck: playerID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v",
-			playerID, currentPlayerID, t.game.currentPlayer, t.game.phase)
-		if currentPlayerID != playerID {
+		t.log.Debugf("HandleCall: userID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v",
+			userID, currentPlayerID, t.game.currentPlayer, t.game.phase)
+		if currentPlayerID != userID {
 			return fmt.Errorf("not your turn to act")
 		}
+
+		// Delegate to Game layer - this handles all the calling logic
+		err := t.game.handlePlayerCall(userID)
+		if err != nil {
+			return err
+		}
+
+		// Sync the updated player state back to user using state machine dispatch
+		if err := t.syncPlayerState(userID); err != nil {
+			t.log.Errorf("Failed to sync player state after call: %v", err)
+		}
+
+		t.log.Debugf("HandleCall: user %s called, actionsInRound=%d, advancing to next player", userID, t.game.GetActionsInRound())
+
+		// Check if this action completes the betting round
+		t.maybeAdvancePhase()
 	}
 
-	// Check action - player can only check if their current bet equals the table's current bet
-	currentBet := t.game.currentBet
+	// SINGLE broadcast at the end of all processing
+	t.broadcastGameStateUpdate()
 
-	if player.HasBet < currentBet {
-		return fmt.Errorf("cannot check when there's a bet to call (player bet: %d, current bet: %d)",
-			player.HasBet, currentBet)
+	t.lastAction = time.Now()
+	return nil
+}
+
+// HandleCheck handles check actions by delegating to the Game layer
+func (t *Table) HandleCheck(userID string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	user := t.users[userID]
+	if user == nil {
+		return fmt.Errorf("user not found")
 	}
 
-	// Update player's last action time
-	player.LastAction = time.Now()
+	// Validate that it's this player's turn to act
+	if t.isGameActive() && t.game != nil {
+		currentPlayerID := t.currentPlayerID()
+		t.log.Debugf("HandleCheck: userID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v",
+			userID, currentPlayerID, t.game.currentPlayer, t.game.phase)
+		if currentPlayerID != userID {
+			return fmt.Errorf("not your turn to act")
+		}
 
-	// Update game state
-	if t.gameStarted && t.game != nil {
-		// Increment actions counter for this betting round
-		t.actionsInRound++
-		// Advance to next player after check action
-		t.advanceToNextPlayer()
+		// Delegate to Game layer - this handles all the checking logic
+		err := t.game.handlePlayerCheck(userID)
+		if err != nil {
+			return err
+		}
+
+		// Sync the updated player state back to user using state machine dispatch
+		if err := t.syncPlayerState(userID); err != nil {
+			t.log.Errorf("Failed to sync player state after check: %v", err)
+		}
+
+		t.log.Debugf("HandleCheck: user %s checking, bet=%d, currentBet=%d", userID, user.HasBet, t.game.currentBet)
+		t.log.Debugf("HandleCheck: incremented actionsInRound to %d", t.game.GetActionsInRound())
+
+		// Check if this action completes the betting round
+		t.maybeAdvancePhase()
 	}
 
-	// Possibly advance phase if betting round is complete
-	t.maybeAdvancePhase()
-
-	// Broadcast game state update to notify clients of the current player change
-	if t.eventManager.notificationSender != nil {
-		go t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
-	}
+	// SINGLE broadcast at the end of all processing
+	t.broadcastGameStateUpdate()
 
 	t.lastAction = time.Now()
 	return nil
@@ -978,155 +1099,6 @@ func (t *Table) postBlindsFromGame() error {
 	return nil
 }
 
-// handleShowdown handles the showdown phase, distributes pots, and prepares for a new hand
-func (t *Table) handleShowdown() {
-	if t.game == nil {
-		return
-	}
-
-	// Count active (non-folded) players
-	activePlayers := make([]*Player, 0)
-	for _, player := range t.game.players {
-		if !player.HasFolded {
-			activePlayers = append(activePlayers, player)
-		}
-	}
-
-	// Track winners before distributing pots
-	t.game.winners = make([]string, 0)
-	var winnersForNotification []*pokerrpc.Winner
-
-	// Store total pot for notification (before any pot distribution)
-	totalPotForNotification := t.game.GetPot()
-
-	// If only one player remains, they win automatically without hand evaluation
-	if len(activePlayers) <= 1 {
-		// Award the pot to the remaining player (if any)
-		if len(activePlayers) == 1 {
-			winnings := t.game.GetPot()
-			activePlayers[0].Balance += winnings
-			t.game.winners = append(t.game.winners, activePlayers[0].ID)
-
-			// Create winner notification with their cards
-			winnersForNotification = append(winnersForNotification, &pokerrpc.Winner{
-				PlayerId: activePlayers[0].ID,
-				Winnings: winnings,
-				BestHand: CreateHandFromCards(activePlayers[0].Hand),
-			})
-		}
-	} else {
-		// Multiple players remain - need proper hand evaluation
-		// Only evaluate hands if we have enough cards (player hand + community cards >= 5)
-		validEvaluations := true
-
-		for _, player := range activePlayers {
-			totalCards := len(player.Hand) + len(t.game.communityCards)
-			if totalCards < 5 {
-				validEvaluations = false
-				break
-			}
-		}
-
-		if validEvaluations {
-			// Evaluate each active player's hand
-			for _, player := range activePlayers {
-				handValue := EvaluateHand(player.Hand, t.game.communityCards)
-				player.HandValue = &handValue
-				player.HandDescription = GetHandDescription(handValue)
-			}
-
-			// Check for any uncalled bets and return them
-			t.game.potManager.ReturnUncalledBet(t.game.players)
-
-			// Create side pots if needed
-			t.game.potManager.CreateSidePots(t.game.players)
-
-			// Find the actual winners by comparing hand values
-			var bestPlayers []*Player
-			var bestHandValue *HandValue
-
-			for _, player := range activePlayers {
-				if player.HandValue != nil {
-					if bestHandValue == nil || CompareHands(*player.HandValue, *bestHandValue) > 0 {
-						bestHandValue = player.HandValue
-						bestPlayers = []*Player{player}
-					} else if CompareHands(*player.HandValue, *bestHandValue) == 0 {
-						bestPlayers = append(bestPlayers, player)
-					}
-				}
-			}
-
-			// Store total pot before distribution (since DistributePots empties the pots)
-			totalPot := t.game.GetPot()
-
-			// Distribute pots to winners
-			t.game.potManager.DistributePots(t.game.players)
-
-			// Create winner notifications with proper hand information
-			winningsPerPlayer := totalPot / int64(len(bestPlayers))
-
-			for _, winner := range bestPlayers {
-				t.game.winners = append(t.game.winners, winner.ID)
-
-				winnersForNotification = append(winnersForNotification, &pokerrpc.Winner{
-					PlayerId: winner.ID,
-					HandRank: winner.HandValue.HandRank,
-					BestHand: CreateHandFromCards(winner.HandValue.BestHand),
-					Winnings: winningsPerPlayer,
-				})
-			}
-		} else {
-			// Can't properly evaluate hands - award pot to first active player
-			// This is a fallback for incomplete games
-			if len(activePlayers) > 0 {
-				winnings := t.game.GetPot()
-				activePlayers[0].Balance += winnings
-				t.game.winners = append(t.game.winners, activePlayers[0].ID)
-
-				winnersForNotification = append(winnersForNotification, &pokerrpc.Winner{
-					PlayerId: activePlayers[0].ID,
-					Winnings: winnings,
-					BestHand: CreateHandFromCards(activePlayers[0].Hand),
-				})
-			}
-		}
-	}
-
-	// Send showdown result notification to all players
-	if t.eventManager.notificationSender != nil && len(winnersForNotification) > 0 {
-		t.eventManager.notificationSender.SendShowdownResult(t.config.ID, winnersForNotification, totalPotForNotification)
-		t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
-	}
-
-	// Since we're using unified player objects, balances are already updated
-	// No need to synchronize - the game.players ARE the table.players
-
-	// Count players still at the table with sufficient balance for the next hand
-	playersReadyForNextHand := 0
-	for _, p := range t.players {
-		if p.IsAtTable() && p.Balance >= t.config.BigBlind {
-			playersReadyForNextHand++
-		}
-	}
-
-	// Don't reset hand-specific state here - keep hands visible during showdown
-	// Only reset betting-related state
-	for _, p := range t.players {
-		p.HasFolded = false
-		p.HasBet = 0
-		// Keep p.Hand, p.HandValue, p.HandDescription for showdown viewing
-	}
-
-	t.actionsInRound = 0
-	t.lastAction = time.Now()
-
-	// Leave the game in SHOWDOWN phase so clients can check results
-	// Auto-start next hand after configured delay if enough players remain
-	if playersReadyForNextHand >= t.config.MinPlayers && t.config.AutoStartDelay > 0 {
-		t.scheduleAutoStart()
-	}
-}
-
 // StartNewHand starts a new hand without requiring all players to be ready again (public API)
 func (t *Table) StartNewHand() error {
 	t.mu.Lock()
@@ -1134,175 +1106,110 @@ func (t *Table) StartNewHand() error {
 	return t.startNewHand()
 }
 
-// startNewHand is the internal implementation that assumes the lock is already held
-func (t *Table) startNewHand() error {
-	// Ensure game exists - if not, this is a bug
-	if t.game == nil {
-		return fmt.Errorf("startNewHand called but game is nil - this should not happen")
-	}
-
-	// Check if enough players still at table
-	playersAtTable := 0
-	for _, p := range t.players {
-		if p.IsAtTable() {
-			playersAtTable++
-		}
-	}
-
-	if playersAtTable < t.config.MinPlayers {
-		return fmt.Errorf("not enough players to start new hand")
-	}
-
-	// Get active players for the new hand
-	activePlayers := make([]*Player, 0, len(t.players))
-	for _, p := range t.players {
-		if p.IsAtTable() && p.Balance >= t.config.BigBlind {
-			activePlayers = append(activePlayers, p)
-		}
-	}
-
-	// Sort players by TableSeat for consistent ordering
-	sort.Slice(activePlayers, func(i, j int) bool {
-		return activePlayers[i].TableSeat < activePlayers[j].TableSeat
-	})
-
-	// Reset all players' hand-specific state from previous hand
-	for _, p := range t.players {
-		if p.IsAtTable() {
-			oldHandSize := len(p.Hand)
-			p.ResetForNewHand(p.Balance) // Use consistent reset method
-			// Additional cleanup that ResetForNewHand doesn't handle
-			p.IsAllIn = false
-			p.IsTurn = false
-			p.IsDealer = false
-			t.log.Debugf("startNewHand: reset player %s - old hand size: %d, new hand size: %d", p.ID, oldHandSize, len(p.Hand))
-		}
-	}
-
-	// Reset existing game for new hand
-	t.game.ResetForNewHand(activePlayers)
-
-	// Use centralized hand setup logic (this assumes lock is held)
-	err := t.setupNewHand(activePlayers)
-	if err != nil {
-		return err
-	}
-
-	// Send NEW_HAND_STARTED notification FIRST (synchronously) so clients can clear old state
-	t.log.Debugf("startNewHand: sending NEW_HAND_STARTED notification")
-	if t.eventManager.notificationSender != nil {
-		t.eventManager.notificationSender.SendNewHandStarted(t.config.ID)
-	}
-
-	// Then broadcast the complete game state AFTER notification is sent
-	// Add a small delay to ensure setup is completely finished before broadcast
-	t.log.Debugf("startNewHand: broadcasting complete game state")
-	if t.eventManager.notificationSender != nil {
-		go func() {
-			time.Sleep(10 * time.Millisecond) // Small delay to ensure setup completion
-			t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
-		}()
-	}
-
-	return nil
-}
-
 // dealCardsToPlayers deals cards to active players using the unified player state
-func (t *Table) dealCardsToPlayers(activePlayers []*Player) error {
+func (t *Table) dealCardsToPlayers(activePlayers []*User) error {
 	if t.game == nil || t.game.deck == nil {
 		return fmt.Errorf("game or deck not initialized")
 	}
 
 	// Deal 2 cards to each active player
 	for i := 0; i < 2; i++ {
-		for _, p := range activePlayers {
+		for _, u := range activePlayers {
 			card, ok := t.game.deck.Draw()
 			if !ok {
-				return fmt.Errorf("failed to deal card to player %s: deck is empty", p.ID)
+				return fmt.Errorf("failed to deal card to user %s: deck is empty", u.ID)
 			}
-			p.Hand = append(p.Hand, card)
+			u.Hand = append(u.Hand, card)
+
+			// Also sync the card to the corresponding game player
+			found := false
+			for _, player := range t.game.players {
+				if player.ID == u.ID {
+					player.Hand = append(player.Hand, card)
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				t.log.Debugf("DEBUG: Could not find game player for user %s when dealing cards", u.ID)
+			} else {
+				// Find the correct game player for hand size debug
+				var gamePlayerHandSize int
+				for _, player := range t.game.players {
+					if player.ID == u.ID {
+						gamePlayerHandSize = len(player.Hand)
+						break
+					}
+				}
+				t.log.Debugf("DEBUG: Dealt card %s to player %s (user hand: %d, game player hand: %d)",
+					card.String(), u.ID, len(u.Hand), gamePlayerHandSize)
+			}
 		}
 	}
 	return nil
 }
 
-// getCurrentPlayerFromUnifiedState returns the current active player from unified state
-func (t *Table) getCurrentPlayerFromUnifiedState() *Player {
-	if t.game == nil {
-		return nil
-	}
-
-	// Get active players in order
-	activePlayers := t.getActivePlayersInOrder()
-	if len(activePlayers) == 0 || t.game.currentPlayer < 0 || t.game.currentPlayer >= len(activePlayers) {
-		return nil
-	}
-
-	return activePlayers[t.game.currentPlayer]
+// SetNotificationSender sets the notification sender for the table
+func (t *Table) SetNotificationSender(sender NotificationSender) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.eventManager.notificationSender = sender
 }
 
-// getActivePlayersInOrder returns active players sorted by table seat
-func (t *Table) getActivePlayersInOrder() []*Player {
-	activePlayers := make([]*Player, 0, len(t.players))
-	for _, p := range t.players {
-		if p.IsActiveInGame() {
-			activePlayers = append(activePlayers, p)
-		}
+// AddUser adds a user to the table
+func (t *Table) AddUser(user *User) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Check if table is full
+	if len(t.users) >= t.config.MaxPlayers {
+		return fmt.Errorf("table is full")
 	}
 
-	// Sort by TableSeat for consistent ordering
-	sort.Slice(activePlayers, func(i, j int) bool {
-		return activePlayers[i].TableSeat < activePlayers[j].TableSeat
-	})
-
-	return activePlayers
-}
-
-// scheduleAutoStart schedules automatic start of next hand after configured delay
-func (t *Table) scheduleAutoStart() {
-	// Cancel any existing auto-start timer
-	t.cancelAutoStart()
-
-	// Mark that auto-start is pending
-	t.autoStartCanceled = false
-
-	// Schedule the auto-start
-	t.autoStartTimer = time.AfterFunc(t.config.AutoStartDelay, func() {
-		t.mu.Lock()
-		defer t.mu.Unlock()
-
-		// Check if auto-start was canceled
-		if t.autoStartCanceled {
-			return
-		}
-
-		// Double-check we still have enough players
-		playersReadyForNextHand := 0
-		for _, p := range t.players {
-			if p.IsAtTable() && p.Balance >= t.config.BigBlind {
-				playersReadyForNextHand++
-			}
-		}
-
-		if playersReadyForNextHand >= t.config.MinPlayers {
-			t.log.Debugf("Auto-starting new hand with %d players after showdown", playersReadyForNextHand)
-			err := t.startNewHand() // Use internal version since we already hold the lock
-			if err != nil {
-				t.log.Debugf("Auto-start new hand failed: %v", err)
-			} else {
-				t.log.Debugf("Auto-started new hand successfully with %d players", playersReadyForNextHand)
-			}
-		} else {
-			t.log.Debugf("Not enough players for auto-start: %d < %d", playersReadyForNextHand, t.config.MinPlayers)
-		}
-	})
-}
-
-// cancelAutoStart cancels any pending auto-start timer
-func (t *Table) cancelAutoStart() {
-	if t.autoStartTimer != nil {
-		t.autoStartTimer.Stop()
-		t.autoStartTimer = nil
+	// Check if user already at table
+	if _, exists := t.users[user.ID]; exists {
+		return fmt.Errorf("user already at table")
 	}
-	t.autoStartCanceled = true
+
+	t.users[user.ID] = user
+	t.lastAction = time.Now()
+	return nil
+}
+
+// AddNewUser creates and adds a new user to the table in one operation
+func (t *Table) AddNewUser(id, name string, accountBalance int64, seat int) (*User, error) {
+	user := NewUser(id, name, accountBalance, seat)
+	err := t.AddUser(user)
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+// RemoveUser removes a user from the table
+func (t *Table) RemoveUser(userID string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if _, exists := t.users[userID]; !exists {
+		return fmt.Errorf("user not at table")
+	}
+
+	delete(t.users, userID)
+	t.lastAction = time.Now()
+	return nil
+}
+
+// GetUser returns a user by ID
+func (t *Table) GetUser(userID string) *User {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.users[userID]
+}
+
+// TriggerPlayerReadyEvent sends a player ready notification immediately
+func (t *Table) TriggerPlayerReadyEvent(userID string, ready bool) {
+	// Send notification immediately
+	go t.eventManager.NotifyPlayerReady(t.config.ID, userID, ready)
 }

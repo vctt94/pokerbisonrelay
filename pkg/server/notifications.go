@@ -80,9 +80,9 @@ func (s *Server) broadcastNotificationToTable(tableID string, notification *poke
 		return
 	}
 
-	players := table.GetPlayers()
-	for _, player := range players {
-		s.sendNotificationToPlayer(player.ID, notification)
+	users := table.GetUsers()
+	for _, user := range users {
+		s.sendNotificationToPlayer(user.ID, notification)
 	}
 }
 
