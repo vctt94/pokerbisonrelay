@@ -17,10 +17,9 @@ type Player struct {
 	Name string
 
 	// Table-level state
-	AccountBalance int64 // DCR account balance (in atoms) - persistent across games
-	TableSeat      int   // Seat position at the table
-	IsReady        bool  // Ready to start/continue games
-	IsDisconnected bool  // Whether player is disconnected (for game flow control)
+	TableSeat      int  // Seat position at the table
+	IsReady        bool // Ready to start/continue games
+	IsDisconnected bool // Whether player is disconnected (for game flow control)
 	LastAction     time.Time
 
 	// Game-level state (reset between hands)
@@ -75,8 +74,14 @@ func NewPlayer(id, name string, balance int64) *Player {
 
 // playerStateAtTable represents the player being at the table but not in game
 func playerStateAtTable(entity *Player, callback func(stateName string, event statemachine.StateEvent)) PlayerStateFn {
-	entity.HasFolded = false
-	entity.IsAllIn = false
+	// Check if player should transition to folded state during a game
+	if entity.HasFolded {
+		// Player has folded during a game, transition to folded state
+		if callback != nil {
+			callback("AT_TABLE", statemachine.StateExited)
+		}
+		return playerStateFolded
+	}
 
 	if callback != nil {
 		callback("AT_TABLE", statemachine.StateEntered)
@@ -86,7 +91,7 @@ func playerStateAtTable(entity *Player, callback func(stateName string, event st
 
 // playerStateInGame represents the player actively in a game
 func playerStateInGame(entity *Player, callback func(stateName string, event statemachine.StateEvent)) PlayerStateFn {
-	// Check current conditions and transition if necessary
+	// Check current conditions and transition if necessary BEFORE setting flags
 	if entity.HasFolded {
 		// Player has folded, transition to folded state
 		if callback != nil {
@@ -311,7 +316,6 @@ func (p *Player) GetHandString() string {
 func (p *Player) GetStatus() string {
 	status := fmt.Sprintf("Player %s:\n", p.Name)
 	status += fmt.Sprintf("Game Chips: %d\n", p.Balance)
-	status += fmt.Sprintf("Account Balance: %.8f DCR\n", float64(p.AccountBalance)/1e8)
 	status += fmt.Sprintf("Current Bet: %d chips\n", p.HasBet)
 	status += fmt.Sprintf("Hand: %s\n", p.GetHandString())
 	status += fmt.Sprintf("State: %s\n", p.GetGameState())

@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/decred/slog"
+
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 	"github.com/vctt94/poker-bisonrelay/pkg/statemachine"
 )
@@ -15,11 +17,20 @@ type GameStateFn = statemachine.StateFn[Game]
 
 // GameConfig holds configuration for a new game
 type GameConfig struct {
-	NumPlayers    int
-	StartingChips int64 // Fixed number of chips each player starts with
-	SmallBlind    int64 // Small blind amount
-	BigBlind      int64 // Big blind amount
-	Seed          int64 // Optional seed for deterministic games
+	NumPlayers     int
+	StartingChips  int64         // Fixed number of chips each player starts with
+	SmallBlind     int64         // Small blind amount
+	BigBlind       int64         // Big blind amount
+	Seed           int64         // Optional seed for deterministic games
+	AutoStartDelay time.Duration // Delay before automatically starting next hand after showdown
+	Log            slog.Logger   // Logger for game events
+}
+
+// AutoStartCallbacks defines the callback functions needed for auto-start functionality
+type AutoStartCallbacks struct {
+	MinPlayers func() int
+	// StartNewHand should start a new hand
+	StartNewHand func() error
 }
 
 // Game holds the context and data for our poker game
@@ -43,6 +54,14 @@ type Game struct {
 	// Configuration
 	config GameConfig
 
+	// Auto-start management
+	autoStartTimer     *time.Timer
+	autoStartCanceled  bool
+	autoStartCallbacks *AutoStartCallbacks
+
+	// Logger
+	log slog.Logger
+
 	// For demonstration purposes
 	errorSimulation bool
 	maxRounds       int
@@ -61,9 +80,13 @@ type Game struct {
 
 // NewGame creates a new poker game with the given configuration
 // Players are managed by the Table, not the Game
-func NewGame(cfg GameConfig) *Game {
+func NewGame(cfg GameConfig) (*Game, error) {
 	if cfg.NumPlayers < 2 {
 		panic("poker: must have at least 2 players")
+	}
+
+	if cfg.Log == nil {
+		return nil, fmt.Errorf("poker: log is required")
 	}
 
 	// Create a new deck with the given seed (or random if not specified)
@@ -85,6 +108,7 @@ func NewGame(cfg GameConfig) *Game {
 		round:           0,
 		betRound:        0,
 		config:          cfg,
+		log:             cfg.Log,
 		errorSimulation: false,
 		phase:           pokerrpc.GamePhase_NEW_HAND_DEALING,
 	}
@@ -92,7 +116,7 @@ func NewGame(cfg GameConfig) *Game {
 	// Initialize state machine with first state function
 	g.stateMachine = statemachine.NewStateMachine(g, stateNewHandDealing)
 
-	return g
+	return g, nil
 }
 
 // State functions following Rob Pike's pattern
@@ -339,6 +363,9 @@ func stateRiver(entity *Game, callback func(stateName string, event statemachine
 
 // stateShowdown determines the winner of the hand
 func stateShowdown(entity *Game, callback func(stateName string, event statemachine.StateEvent)) GameStateFn {
+	// Debug: Log that we entered stateShowdown
+	entity.log.Debugf("stateShowdown: entered showdown state")
+
 	// Update phase to SHOWDOWN
 	entity.phase = pokerrpc.GamePhase_SHOWDOWN
 
@@ -411,6 +438,15 @@ func stateShowdown(entity *Game, callback func(stateName string, event statemach
 
 	if callback != nil {
 		callback("SHOWDOWN", statemachine.StateEntered)
+	}
+
+	// Schedule auto-start if configured
+	if entity.config.AutoStartDelay > 0 {
+		if entity.autoStartCallbacks != nil {
+			// Debug: Log that we're scheduling auto-start
+			entity.log.Debugf("Scheduling auto-start from stateShowdown, delay=%v", entity.config.AutoStartDelay)
+			entity.scheduleAutoStart()
+		}
 	}
 
 	// Return to pre-deal to start a new hand
@@ -559,10 +595,9 @@ func (g *Game) SetPlayers(users []*User) {
 		player := NewPlayer(user.ID, user.Name, g.config.StartingChips)
 
 		// Copy table-level state from user
-		player.AccountBalance = user.AccountBalance
 		player.TableSeat = user.TableSeat
 		player.IsReady = user.IsReady
-		player.LastAction = user.LastAction
+		player.LastAction = time.Now() // Set current time since User doesn't have LastAction
 
 		g.players[i] = player
 	}
@@ -861,6 +896,8 @@ func (g *Game) HandleShowdown() *ShowdownResult {
 
 // handleShowdown is the core logic without locking (for internal use)
 func (g *Game) handleShowdown() *ShowdownResult {
+	// Debug: Log that we entered handleShowdown
+	g.log.Debugf("handleShowdown: entered showdown processing")
 	// Count active players (non-folded)
 	activePlayers := make([]*Player, 0)
 	for _, player := range g.players {
@@ -973,23 +1010,12 @@ func (g *Game) handleShowdown() *ShowdownResult {
 	g.phase = pokerrpc.GamePhase_SHOWDOWN
 	g.winners = result.Winners
 
-	return result
-}
-
-// SyncBalancesToUsers updates the user balances based on game player balances (external API)
-func (g *Game) SyncBalancesToUsers(users map[string]*User) {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	g.syncBalancesToUsers(users)
-}
-
-// syncBalancesToUsers is the core logic without locking (for internal use)
-func (g *Game) syncBalancesToUsers(users map[string]*User) {
-	for _, player := range g.players {
-		if user, exists := users[player.ID]; exists {
-			user.AccountBalance = player.Balance
-		}
+	// Schedule auto-start if configured
+	if g.config.AutoStartDelay > 0 && g.autoStartCallbacks != nil {
+		g.scheduleAutoStart()
 	}
+
+	return result
 }
 
 // getPot is the core logic without locking (for internal use)
@@ -1204,4 +1230,151 @@ func (g *Game) SetCommunityCards(cards []Card) {
 	defer g.mu.Unlock()
 	g.communityCards = make([]Card, len(cards))
 	copy(g.communityCards, cards)
+}
+
+// SetAutoStartCallbacks sets the callback functions for auto-start functionality
+func (g *Game) SetAutoStartCallbacks(callbacks *AutoStartCallbacks) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.autoStartCallbacks = callbacks
+}
+
+// scheduleAutoStart schedules automatic start of next hand after configured delay
+func (g *Game) ScheduleAutoStart() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.scheduleAutoStart()
+}
+
+// scheduleAutoStart is the internal implementation (assumes lock is held)
+func (g *Game) scheduleAutoStart() {
+	// Cancel any existing auto-start timer
+	g.cancelAutoStart()
+
+	// Check if auto-start is configured
+	if g.config.AutoStartDelay <= 0 || g.autoStartCallbacks == nil {
+		g.log.Debugf("scheduleAutoStart: invalid config, delay=%v, callbacks=%v", g.config.AutoStartDelay, g.autoStartCallbacks != nil)
+		return
+	}
+
+	// Debug log
+	g.log.Debugf("scheduleAutoStart: setting up timer with delay %v", g.config.AutoStartDelay)
+
+	// Mark that auto-start is pending
+	g.autoStartCanceled = false
+
+	// Schedule the auto-start
+	g.autoStartTimer = time.AfterFunc(g.config.AutoStartDelay, func() {
+		// Check if auto-start was canceled (without holding lock)
+		g.mu.Lock()
+		canceled := g.autoStartCanceled
+		callbacks := g.autoStartCallbacks
+		log := g.log
+		g.mu.Unlock()
+
+		if canceled {
+			return
+		}
+
+		if callbacks == nil {
+			return
+		}
+
+		readyCount := 0
+		for _, player := range g.players {
+			if player.Balance >= g.config.BigBlind {
+				readyCount++
+			}
+		}
+
+		minRequired := callbacks.MinPlayers()
+		if readyCount >= minRequired {
+			log.Debugf("Auto-starting new hand with %d players after showdown", readyCount)
+			err := callbacks.StartNewHand()
+			if err != nil {
+				log.Debugf("Auto-start new hand failed: %v", err)
+			} else {
+				log.Debugf("Auto-started new hand successfully with %d players", readyCount)
+			}
+		} else {
+			log.Debugf("Not enough players for auto-start: %d < %d", readyCount, minRequired)
+		}
+	})
+}
+
+// CancelAutoStart cancels any pending auto-start timer
+func (g *Game) CancelAutoStart() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.cancelAutoStart()
+}
+
+// cancelAutoStart is the internal implementation (assumes lock is held)
+func (g *Game) cancelAutoStart() {
+	if g.autoStartTimer != nil {
+		g.autoStartTimer.Stop()
+		g.autoStartTimer = nil
+	}
+	g.autoStartCanceled = true
+}
+
+// GameStateSnapshot represents a point-in-time snapshot of game state for safe concurrent access
+type GameStateSnapshot struct {
+	Dealer         int
+	CurrentPlayer  int
+	CurrentBet     int64
+	Pot            int64
+	Round          int
+	BetRound       int
+	CommunityCards []Card
+	DeckState      interface{}
+	Players        []*Player
+}
+
+// GetStateSnapshot returns an atomic snapshot of the game state for safe concurrent access
+func (g *Game) GetStateSnapshot() GameStateSnapshot {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	// Create a deep copy of players to avoid race conditions
+	playersCopy := make([]*Player, len(g.players))
+	for i, player := range g.players {
+		// Create a copy of the player to avoid race conditions
+		playerCopy := &Player{
+			ID:              player.ID,
+			Name:            player.Name,
+			TableSeat:       player.TableSeat,
+			IsReady:         player.IsReady,
+			Balance:         player.Balance,
+			StartingBalance: player.StartingBalance,
+			HasBet:          player.HasBet,
+			HasFolded:       player.HasFolded,
+			IsAllIn:         player.IsAllIn,
+			IsDealer:        player.IsDealer,
+			IsTurn:          player.IsTurn,
+			Hand:            make([]Card, len(player.Hand)),
+			HandDescription: player.HandDescription,
+			HandValue:       player.HandValue,
+			LastAction:      player.LastAction,
+		}
+		// Copy the hand cards
+		copy(playerCopy.Hand, player.Hand)
+		playersCopy[i] = playerCopy
+	}
+
+	// Copy community cards
+	communityCardsCopy := make([]Card, len(g.communityCards))
+	copy(communityCardsCopy, g.communityCards)
+
+	return GameStateSnapshot{
+		Dealer:         g.dealer,
+		CurrentPlayer:  g.currentPlayer,
+		CurrentBet:     g.currentBet,
+		Pot:            g.potManager.GetTotalPot(),
+		Round:          g.round,
+		BetRound:       g.betRound,
+		CommunityCards: communityCardsCopy,
+		DeckState:      g.deck.GetState(),
+		Players:        playersCopy,
+	}
 }

@@ -1,18 +1,32 @@
 package poker
 
 import (
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/decred/slog"
+	"github.com/stretchr/testify/require"
 )
+
+// createTestLogger creates a simple logger for testing
+func createTestLogger() slog.Logger {
+	backend := slog.NewBackend(os.Stderr)
+	log := backend.Logger("test")
+	log.SetLevel(slog.LevelError) // Reduce noise in tests
+	return log
+}
 
 func TestNewGame(t *testing.T) {
 	cfg := GameConfig{
 		NumPlayers:    2,
 		StartingChips: 1000, // Set to 1000 to match the expected balance
 		Seed:          42,   // Use a fixed seed for deterministic testing
+		Log:           createTestLogger(),
 	}
 
-	game := NewGame(cfg)
+	game, err := NewGame(cfg)
+	require.NoError(t, err)
 
 	// After refactor, game starts with empty players slice
 	// Table manages players and calls SetPlayers
@@ -64,6 +78,7 @@ func TestNewGamePanicsOnInvalidPlayers(t *testing.T) {
 	cfg := GameConfig{
 		NumPlayers:    1,
 		StartingChips: 100,
+		Log:           createTestLogger(),
 	}
 	NewGame(cfg)
 }
@@ -73,9 +88,11 @@ func TestDealCards(t *testing.T) {
 		NumPlayers:    2,
 		StartingChips: 100,
 		Seed:          42,
+		Log:           createTestLogger(),
 	}
 
-	game := NewGame(cfg)
+	game, err := NewGame(cfg)
+	require.NoError(t, err)
 
 	// Create test users and set them in the game
 	users := []*User{
@@ -113,9 +130,11 @@ func TestCommunityCards(t *testing.T) {
 	cfg := GameConfig{
 		NumPlayers: 2,
 		Seed:       42,
+		Log:        createTestLogger(),
 	}
 
-	game := NewGame(cfg)
+	game, err := NewGame(cfg)
+	require.NoError(t, err)
 
 	// Create test users and set them in the game
 	users := []*User{
@@ -164,9 +183,11 @@ func TestShowdown(t *testing.T) {
 	cfg := GameConfig{
 		NumPlayers: 2,
 		Seed:       42,
+		Log:        createTestLogger(),
 	}
 
-	game := NewGame(cfg)
+	game, err := NewGame(cfg)
+	require.NoError(t, err)
 
 	// Create test users and set them in the game
 	users := []*User{
@@ -233,9 +254,11 @@ func TestTieBreakerShowdown(t *testing.T) {
 	cfg := GameConfig{
 		NumPlayers: 3,
 		Seed:       42,
+		Log:        createTestLogger(),
 	}
 
-	game := NewGame(cfg)
+	game, err := NewGame(cfg)
+	require.NoError(t, err)
 
 	// Create test users and set them in the game
 	users := []*User{
