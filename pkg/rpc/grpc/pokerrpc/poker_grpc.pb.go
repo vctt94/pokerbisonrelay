@@ -408,6 +408,7 @@ const (
 	LobbyService_LeaveTable_FullMethodName              = "/pokerrpc.LobbyService/LeaveTable"
 	LobbyService_GetTables_FullMethodName               = "/pokerrpc.LobbyService/GetTables"
 	LobbyService_GetPlayerCurrentTable_FullMethodName   = "/pokerrpc.LobbyService/GetPlayerCurrentTable"
+	LobbyService_StartGame_FullMethodName               = "/pokerrpc.LobbyService/StartGame"
 	LobbyService_GetBalance_FullMethodName              = "/pokerrpc.LobbyService/GetBalance"
 	LobbyService_UpdateBalance_FullMethodName           = "/pokerrpc.LobbyService/UpdateBalance"
 	LobbyService_ProcessTip_FullMethodName              = "/pokerrpc.LobbyService/ProcessTip"
@@ -430,6 +431,8 @@ type LobbyServiceClient interface {
 	LeaveTable(ctx context.Context, in *LeaveTableRequest, opts ...grpc.CallOption) (*LeaveTableResponse, error)
 	GetTables(ctx context.Context, in *GetTablesRequest, opts ...grpc.CallOption) (*GetTablesResponse, error)
 	GetPlayerCurrentTable(ctx context.Context, in *GetPlayerCurrentTableRequest, opts ...grpc.CallOption) (*GetPlayerCurrentTableResponse, error)
+	// Game control
+	StartGame(ctx context.Context, in *StartGameRequest, opts ...grpc.CallOption) (*StartGameResponse, error)
 	// Player management
 	GetBalance(ctx context.Context, in *GetBalanceRequest, opts ...grpc.CallOption) (*GetBalanceResponse, error)
 	UpdateBalance(ctx context.Context, in *UpdateBalanceRequest, opts ...grpc.CallOption) (*UpdateBalanceResponse, error)
@@ -496,6 +499,16 @@ func (c *lobbyServiceClient) GetPlayerCurrentTable(ctx context.Context, in *GetP
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetPlayerCurrentTableResponse)
 	err := c.cc.Invoke(ctx, LobbyService_GetPlayerCurrentTable_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *lobbyServiceClient) StartGame(ctx context.Context, in *StartGameRequest, opts ...grpc.CallOption) (*StartGameResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StartGameResponse)
+	err := c.cc.Invoke(ctx, LobbyService_StartGame_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -603,6 +616,8 @@ type LobbyServiceServer interface {
 	LeaveTable(context.Context, *LeaveTableRequest) (*LeaveTableResponse, error)
 	GetTables(context.Context, *GetTablesRequest) (*GetTablesResponse, error)
 	GetPlayerCurrentTable(context.Context, *GetPlayerCurrentTableRequest) (*GetPlayerCurrentTableResponse, error)
+	// Game control
+	StartGame(context.Context, *StartGameRequest) (*StartGameResponse, error)
 	// Player management
 	GetBalance(context.Context, *GetBalanceRequest) (*GetBalanceResponse, error)
 	UpdateBalance(context.Context, *UpdateBalanceRequest) (*UpdateBalanceResponse, error)
@@ -639,6 +654,9 @@ func (UnimplementedLobbyServiceServer) GetTables(context.Context, *GetTablesRequ
 }
 func (UnimplementedLobbyServiceServer) GetPlayerCurrentTable(context.Context, *GetPlayerCurrentTableRequest) (*GetPlayerCurrentTableResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetPlayerCurrentTable not implemented")
+}
+func (UnimplementedLobbyServiceServer) StartGame(context.Context, *StartGameRequest) (*StartGameResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StartGame not implemented")
 }
 func (UnimplementedLobbyServiceServer) GetBalance(context.Context, *GetBalanceRequest) (*GetBalanceResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBalance not implemented")
@@ -771,6 +789,24 @@ func _LobbyService_GetPlayerCurrentTable_Handler(srv interface{}, ctx context.Co
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(LobbyServiceServer).GetPlayerCurrentTable(ctx, req.(*GetPlayerCurrentTableRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LobbyService_StartGame_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StartGameRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LobbyServiceServer).StartGame(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LobbyService_StartGame_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LobbyServiceServer).StartGame(ctx, req.(*StartGameRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -938,6 +974,10 @@ var LobbyService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPlayerCurrentTable",
 			Handler:    _LobbyService_GetPlayerCurrentTable_Handler,
+		},
+		{
+			MethodName: "StartGame",
+			Handler:    _LobbyService_StartGame_Handler,
 		},
 		{
 			MethodName: "GetBalance",

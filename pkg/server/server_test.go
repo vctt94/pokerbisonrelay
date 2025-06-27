@@ -488,7 +488,7 @@ func TestPokerGameFlow(t *testing.T) {
 	}
 }
 
-func TestHostLeavesTableClosure(t *testing.T) {
+func TestHostLeavesTableTransfersHost(t *testing.T) {
 	// Create a new server
 	db := NewInMemoryDB()
 	logBackend := createTestLogBackend()
@@ -543,12 +543,7 @@ func TestHostLeavesTableClosure(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tablesResp.Tables, 1)
 	assert.Equal(t, int32(3), tablesResp.Tables[0].CurrentPlayers)
-
-	// Get initial balances before host leaves
-	balance1Before, err := server.GetBalance(ctx, &pokerrpc.GetBalanceRequest{PlayerId: player1ID})
-	require.NoError(t, err)
-	balance2Before, err := server.GetBalance(ctx, &pokerrpc.GetBalanceRequest{PlayerId: player2ID})
-	require.NoError(t, err)
+	assert.Equal(t, hostID, tablesResp.Tables[0].HostId, "Original host should be correct")
 
 	// Host leaves the table
 	leaveResp, err := server.LeaveTable(ctx, &pokerrpc.LeaveTableRequest{
@@ -557,22 +552,72 @@ func TestHostLeavesTableClosure(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.True(t, leaveResp.Success)
-	assert.Equal(t, "Host left - table closed", leaveResp.Message)
+	assert.Contains(t, leaveResp.Message, "Host transferred to", "Host should be transferred")
+
+	// Verify table still exists with 2 players and new host
+	tablesResp, err = server.GetTables(ctx, &pokerrpc.GetTablesRequest{})
+	require.NoError(t, err)
+	assert.Len(t, tablesResp.Tables, 1, "Table should still exist when host leaves but other players remain")
+	assert.Equal(t, int32(2), tablesResp.Tables[0].CurrentPlayers, "Table should have 2 players remaining")
+
+	// Verify host has been transferred to one of the remaining players
+	newHostID := tablesResp.Tables[0].HostId
+	assert.NotEqual(t, hostID, newHostID, "Host should be different from original host")
+	assert.True(t, newHostID == player1ID || newHostID == player2ID, "New host should be one of the remaining players")
+}
+
+func TestLastPlayerLeavesTableClosure(t *testing.T) {
+	// Create a new server
+	db := NewInMemoryDB()
+	logBackend := createTestLogBackend()
+	defer logBackend.Close()
+	server := NewServer(db, logBackend)
+	ctx := context.Background()
+
+	// Create one player
+	hostID := "host"
+	initialBalance := int64(1000)
+
+	// Set initial balance
+	_, err := server.UpdateBalance(ctx, &pokerrpc.UpdateBalanceRequest{
+		PlayerId: hostID,
+		Amount:   initialBalance,
+	})
+	require.NoError(t, err)
+
+	// Host creates a table
+	createTableResp, err := server.CreateTable(ctx, &pokerrpc.CreateTableRequest{
+		PlayerId:      hostID,
+		BuyIn:         100,
+		MinPlayers:    2,
+		MaxPlayers:    3,
+		SmallBlind:    5,
+		BigBlind:      10,
+		MinBalance:    100,
+		StartingChips: 500,
+	})
+	require.NoError(t, err)
+	tableID := createTableResp.TableId
+
+	// Verify table exists and has 1 player
+	tablesResp, err := server.GetTables(ctx, &pokerrpc.GetTablesRequest{})
+	require.NoError(t, err)
+	require.Len(t, tablesResp.Tables, 1)
+	assert.Equal(t, int32(1), tablesResp.Tables[0].CurrentPlayers)
+
+	// Host leaves the table (only player)
+	leaveResp, err := server.LeaveTable(ctx, &pokerrpc.LeaveTableRequest{
+		PlayerId: hostID,
+		TableId:  tableID,
+	})
+	require.NoError(t, err)
+	assert.True(t, leaveResp.Success)
+	assert.Equal(t, "Host left - table closed (no other players)", leaveResp.Message)
 
 	// Verify table is removed from server
 	tablesResp, err = server.GetTables(ctx, &pokerrpc.GetTablesRequest{})
 	require.NoError(t, err)
-	assert.Len(t, tablesResp.Tables, 0, "Table should be removed when host leaves")
-
-	// Verify that remaining players got their buy-ins refunded
-	balance1After, err := server.GetBalance(ctx, &pokerrpc.GetBalanceRequest{PlayerId: player1ID})
-	require.NoError(t, err)
-	balance2After, err := server.GetBalance(ctx, &pokerrpc.GetBalanceRequest{PlayerId: player2ID})
-	require.NoError(t, err)
-
-	// Players should have their buy-ins refunded (balance should be back to initial)
-	assert.Equal(t, balance1Before.Balance+100, balance1After.Balance, "Player1 should get buy-in refunded")
-	assert.Equal(t, balance2Before.Balance+100, balance2After.Balance, "Player2 should get buy-in refunded")
+	assert.Len(t, tablesResp.Tables, 0, "Table should be removed when last player leaves")
 }
 
 func TestNonHostLeavesTable(t *testing.T) {

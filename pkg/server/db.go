@@ -15,6 +15,24 @@ type Database interface {
 	// UpdatePlayerBalance updates a player's balance and records the transaction
 	UpdatePlayerBalance(playerID string, amount int64, transactionType, description string) error
 
+	// Game state persistence
+	SaveTableState(tableState *db.TableState) error
+	LoadTableState(tableID string) (*db.TableState, error)
+	DeleteTableState(tableID string) error
+
+	// Player state at table
+	SavePlayerState(tableID string, playerState *db.PlayerState) error
+	LoadPlayerStates(tableID string) ([]*db.PlayerState, error)
+	DeletePlayerState(tableID, playerID string) error
+
+	// Placeholder management
+	SetPlayerDisconnected(tableID, playerID string) error
+	SetPlayerConnected(tableID, playerID string) error
+	IsPlayerDisconnected(tableID, playerID string) (bool, error)
+
+	// Table discovery
+	GetAllTableIDs() ([]string, error)
+
 	// Close closes the database connection
 	Close() error
 }

@@ -20,6 +20,7 @@ type Player struct {
 	AccountBalance int64 // DCR account balance (in atoms) - persistent across games
 	TableSeat      int   // Seat position at the table
 	IsReady        bool  // Ready to start/continue games
+	IsDisconnected bool  // Whether player is disconnected (for game flow control)
 	LastAction     time.Time
 
 	// Game-level state (reset between hands)

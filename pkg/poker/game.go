@@ -1150,3 +1150,58 @@ func (g *Game) initializeCurrentPlayer() {
 		}
 	}
 }
+
+// GetRound returns the current round number
+func (g *Game) GetRound() int {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.round
+}
+
+// GetBetRound returns the current betting round
+func (g *Game) GetBetRound() int {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.betRound
+}
+
+// GetDealer returns the dealer position
+func (g *Game) GetDealer() int {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.dealer
+}
+
+// GetDeckState returns the current deck state for persistence
+func (g *Game) GetDeckState() interface{} {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if g.deck == nil {
+		return nil
+	}
+	// Return the remaining cards in the deck
+	return g.deck.cards
+}
+
+// SetGameState allows restoring game state from persistence
+func (g *Game) SetGameState(dealer, currentPlayer, round, betRound int, currentBet, pot int64, phase pokerrpc.GamePhase) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.dealer = dealer
+	g.currentPlayer = currentPlayer
+	g.round = round
+	g.betRound = betRound
+	g.currentBet = currentBet
+	g.phase = phase
+	// Note: Pot will be restored through the PotManager when restoring player bets
+	// We can't directly set the pot value, but it will be calculated from player bets
+}
+
+// SetCommunityCards allows restoring community cards from persistence
+func (g *Game) SetCommunityCards(cards []Card) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.communityCards = make([]Card, len(cards))
+	copy(g.communityCards, cards)
+}

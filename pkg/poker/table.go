@@ -97,9 +97,15 @@ type NotificationSender interface {
 	SendShowdownResult(tableID string, winners []*pokerrpc.Winner, pot int64)
 }
 
+// StateSaver is an interface for saving table state
+type StateSaver interface {
+	SaveTableStateAsync(tableID string, reason string)
+}
+
 // TableEventManager handles notifications and state updates for table events
 type TableEventManager struct {
 	notificationSender NotificationSender
+	stateSaver         StateSaver
 }
 
 // NewTableEventManager creates a new event manager
@@ -144,6 +150,18 @@ func (tem *TableEventManager) NotifyBlindPosted(tableID, playerID string, amount
 	if tem.notificationSender != nil {
 		tem.notificationSender.SendBlindPosted(tableID, playerID, amount, isSmallBlind)
 	}
+}
+
+// SaveState triggers a state save for the table
+func (tem *TableEventManager) SaveState(tableID string, reason string) {
+	if tem.stateSaver != nil {
+		tem.stateSaver.SaveTableStateAsync(tableID, reason)
+	}
+}
+
+// SetStateSaver sets the state saver for the event manager
+func (tem *TableEventManager) SetStateSaver(stateSaver StateSaver) {
+	tem.stateSaver = stateSaver
 }
 
 // Table represents a poker table that manages users and delegates game logic to Game
@@ -200,6 +218,8 @@ func tableStateWaitingForPlayers(entity *Table, callback func(stateName string, 
 			if callback != nil {
 				callback("PLAYERS_READY", statemachine.StateEntered)
 			}
+			// Save state when players become ready
+			entity.eventManager.SaveState(entity.config.ID, "players ready")
 			return tableStatePlayersReady
 		}
 	}
@@ -220,6 +240,8 @@ func tableStatePlayersReady(entity *Table, callback func(stateName string, event
 	if callback != nil {
 		callback("PLAYERS_READY", statemachine.StateEntered)
 	}
+	// Save state when entering players ready
+	entity.eventManager.SaveState(entity.config.ID, "players ready state")
 	// This state waits for external trigger (StartGame)
 	return tableStatePlayersReady
 }
@@ -237,6 +259,8 @@ func tableStateGameActive(entity *Table, callback func(stateName string, event s
 	if callback != nil {
 		callback("GAME_ACTIVE", statemachine.StateEntered)
 	}
+	// Save state when game is active
+	entity.eventManager.SaveState(entity.config.ID, "game active")
 	return tableStateGameActive // Stay in this state during normal gameplay
 }
 
@@ -247,6 +271,8 @@ func tableStateShowdown(entity *Table, callback func(stateName string, event sta
 	if callback != nil {
 		callback("SHOWDOWN", statemachine.StateEntered)
 	}
+	// Save state when entering showdown
+	entity.eventManager.SaveState(entity.config.ID, "showdown")
 	return tableStateCleanup
 }
 
@@ -1157,6 +1183,13 @@ func (t *Table) SetNotificationSender(sender NotificationSender) {
 	t.eventManager.notificationSender = sender
 }
 
+// SetStateSaver sets the state saver for the table
+func (t *Table) SetStateSaver(saver StateSaver) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.eventManager.SetStateSaver(saver)
+}
+
 // AddUser adds a user to the table
 func (t *Table) AddUser(user *User) error {
 	t.mu.Lock()
@@ -1212,4 +1245,21 @@ func (t *Table) GetUser(userID string) *User {
 func (t *Table) TriggerPlayerReadyEvent(userID string, ready bool) {
 	// Send notification immediately
 	go t.eventManager.NotifyPlayerReady(t.config.ID, userID, ready)
+}
+
+// SetHost transfers host ownership to a new user
+func (t *Table) SetHost(newHostID string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Verify the new host is actually at the table
+	if _, exists := t.users[newHostID]; !exists {
+		return fmt.Errorf("new host %s is not at the table", newHostID)
+	}
+
+	// Update the host ID in the config
+	t.config.HostID = newHostID
+	t.lastAction = time.Now()
+
+	return nil
 }

@@ -508,7 +508,6 @@ func TestHeadsUpPotDistributionAfterCall(t *testing.T) {
 	t.Logf("Player 0 total bet: %d (should be 20)", pm.GetTotalBet(0))
 	t.Logf("Player 1 total bet: %d (should be 20)", pm.GetTotalBet(1))
 
-	// Verify the correct state
 	if pm.GetTotalBet(0) != 20 {
 		t.Errorf("Expected Player 0 total bet to be 20, got %d", pm.GetTotalBet(0))
 	}
