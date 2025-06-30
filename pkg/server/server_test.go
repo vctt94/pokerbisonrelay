@@ -836,3 +836,10 @@ func TestJoinTable(t *testing.T) {
 	assert.False(t, resp.Success)
 	assert.Contains(t, resp.Message, "Insufficient DCR balance")
 }
+
+// Close properly stops the server and cleans up resources
+func (ts *TestServer) Close() {
+	if ts.Server != nil {
+		ts.Server.Stop()
+	}
+}

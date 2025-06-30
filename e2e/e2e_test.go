@@ -32,6 +32,7 @@ import (
 type testEnv struct {
 	t           *testing.T
 	db          server.Database
+	pokerSrv    *server.Server
 	grpcSrv     *grpc.Server
 	conn        *grpc.ClientConn
 	lobbyClient pokerrpc.LobbyServiceClient
@@ -81,6 +82,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	return &testEnv{
 		t:           t,
 		db:          database,
+		pokerSrv:    pokerSrv,
 		grpcSrv:     grpcSrv,
 		conn:        conn,
 		lobbyClient: pokerrpc.NewLobbyServiceClient(conn),
@@ -91,6 +93,7 @@ func newTestEnv(t *testing.T) *testEnv {
 // Close gracefully shuts down all resources.
 func (e *testEnv) Close() {
 	e.conn.Close()
+	e.pokerSrv.Stop()
 	e.grpcSrv.Stop()
 	_ = e.db.Close()
 }

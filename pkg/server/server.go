@@ -45,6 +45,9 @@ type Server struct {
 	// Table state saving synchronization
 	saveMutexes map[string]*sync.Mutex // tableID -> mutex for that table's saves
 	saveMu      sync.RWMutex           // protects saveMutexes map
+
+	// Event-driven architecture components
+	eventProcessor *EventProcessor
 }
 
 // NewServer creates a new poker server
@@ -59,6 +62,10 @@ func NewServer(db Database, logBackend *logging.LogBackend) *Server {
 		saveMutexes:         make(map[string]*sync.Mutex),
 	}
 
+	// Initialize event processor for deadlock-free architecture
+	server.eventProcessor = NewEventProcessor(server, 1000, 3) // queue size: 1000, workers: 3
+	server.eventProcessor.Start()
+
 	// Load persisted tables on startup
 	err := server.loadAllTables()
 	if err != nil {
@@ -66,6 +73,13 @@ func NewServer(db Database, logBackend *logging.LogBackend) *Server {
 	}
 
 	return server
+}
+
+// Stop gracefully stops the server
+func (s *Server) Stop() {
+	if s.eventProcessor != nil {
+		s.eventProcessor.Stop()
+	}
 }
 
 // saveTableStateAsync saves table state asynchronously to avoid blocking game operations
@@ -166,151 +180,84 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 }
 
 func (s *Server) JoinTable(ctx context.Context, req *pokerrpc.JoinTableRequest) (*pokerrpc.JoinTableResponse, error) {
-	s.mu.Lock()
-
-	table, ok := s.tables[req.TableId]
+	table, ok := s.getTable(req.TableId)
 	if !ok {
-		s.mu.Unlock()
 		return &pokerrpc.JoinTableResponse{Success: false, Message: "Table not found"}, nil
 	}
 
 	config := table.GetConfig()
 
-	// Check if player is already at the table (existing user or disconnected placeholder)
-	existingUser := table.GetUser(req.PlayerId)
-	if existingUser != nil {
-		// Check if player was disconnected
-		isDisconnected, err := s.db.IsPlayerDisconnected(req.TableId, req.PlayerId)
-		if err == nil && isDisconnected {
-			// Release lock before calling handlePlayerReconnection
-			s.mu.Unlock()
-
-			// Player is reconnecting - use the helper method
-			err = s.handlePlayerReconnection(req.TableId, req.PlayerId)
-			if err != nil {
-				s.log.Errorf("Failed to handle player reconnection: %v", err)
-			}
-
-			return &pokerrpc.JoinTableResponse{
-				Success:    true,
-				Message:    fmt.Sprintf("Reconnected to table. You have %d DCR balance.", existingUser.DCRAccountBalance),
-				NewBalance: 0, // DCR balance unchanged for reconnection
-			}, nil
-		} else if err != nil {
-			// Player state not found in database, but they exist in table - treat as disconnected player reconnecting
-			s.log.Warnf("Player %s exists in table %s but state not found in database, treating as reconnection", req.PlayerId, req.TableId)
-
-			// Save player state to database to ensure consistency
-			err = s.saveUserAsPlayerState(req.TableId, existingUser)
-			if err != nil {
-				s.log.Errorf("Failed to save player state during reconnection: %v", err)
-			}
-
-			// Release lock before calling handlePlayerReconnection
-			s.mu.Unlock()
-
-			// Use the helper method for reconnection
-			err = s.handlePlayerReconnection(req.TableId, req.PlayerId)
-			if err != nil {
-				s.log.Errorf("Failed to handle player reconnection: %v", err)
-			}
-
-			return &pokerrpc.JoinTableResponse{
-				Success:    true,
-				Message:    fmt.Sprintf("Reconnected to table. You have %d DCR balance.", existingUser.DCRAccountBalance),
-				NewBalance: 0, // DCR balance unchanged for reconnection
-			}, nil
+	// Reconnection path – player already seated.
+	if existingUser := table.GetUser(req.PlayerId); existingUser != nil {
+		evt, err := CollectGameEventSnapshot(GameEventTypePlayerJoined, s, req.TableId, req.PlayerId, 0, map[string]interface{}{
+			"message": fmt.Sprintf("Player %s rejoined the table", req.PlayerId),
+		})
+		if err != nil {
+			s.log.Errorf("Failed to collect event snapshot: %v", err)
 		} else {
-			// isDisconnected is false, but player might have lost connection without proper disconnection
-			// For now, allow reconnection anyway since they're trying to join
-			s.log.Warnf("Player %s exists in table %s and appears connected, but allowing rejoin (possible connection loss)", req.PlayerId, req.TableId)
-
-			// Ensure player state exists in database
-			err = s.saveUserAsPlayerState(req.TableId, existingUser)
-			if err != nil {
-				s.log.Errorf("Failed to save player state during rejoin: %v", err)
-			}
-
-			s.mu.Unlock() // Release lock before async operation
-
-			// Save updated table state (async)
-			s.saveTableStateAsync(req.TableId, "player rejoined")
-
-			return &pokerrpc.JoinTableResponse{
-				Success:    true,
-				Message:    fmt.Sprintf("Rejoined table. You have %d DCR balance.", existingUser.DCRAccountBalance),
-				NewBalance: 0, // DCR balance unchanged for rejoin
-			}, nil
+			s.eventProcessor.PublishEvent(evt)
 		}
-	}
 
-	// New player joining - check DCR balance
-	dcrBalance, err := s.db.GetPlayerBalance(req.PlayerId)
-	if err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-
-	// Check if player has enough DCR for the buy-in
-	if dcrBalance < config.BuyIn {
-		s.mu.Unlock()
 		return &pokerrpc.JoinTableResponse{
-			Success: false,
-			Message: "Insufficient DCR balance for buy-in",
+			Success:    true,
+			Message:    fmt.Sprintf("Reconnected to table. You have %d DCR balance.", existingUser.DCRAccountBalance),
+			NewBalance: 0,
 		}, nil
 	}
 
-	// Find next available seat
-	users := table.GetUsers()
-	occupiedSeats := make(map[int]bool)
-	for _, user := range users {
-		occupiedSeats[user.TableSeat] = true
+	// New player joining – verify balance.
+	dcrBalance, err := s.db.GetPlayerBalance(req.PlayerId)
+	if err != nil {
+		return nil, err
+	}
+	if dcrBalance < config.BuyIn {
+		return &pokerrpc.JoinTableResponse{Success: false, Message: "Insufficient DCR balance for buy-in"}, nil
 	}
 
-	nextSeat := 0
+	// Determine next free seat.
+	occupied := make(map[int]bool)
+	for _, u := range table.GetUsers() {
+		occupied[u.TableSeat] = true
+	}
+	seat := 0
 	for i := 0; i < config.MaxPlayers; i++ {
-		if !occupiedSeats[i] {
-			nextSeat = i
+		if !occupied[i] {
+			seat = i
 			break
 		}
 	}
 
-	// Add user to table
-	newUser, err := table.AddNewUser(req.PlayerId, req.PlayerId, dcrBalance, nextSeat)
+	// Add user to table.
+	newUser, err := table.AddNewUser(req.PlayerId, req.PlayerId, dcrBalance, seat)
 	if err != nil {
-		s.mu.Unlock()
 		return &pokerrpc.JoinTableResponse{Success: false, Message: err.Error()}, nil
 	}
 
-	// Deduct buy-in from player's DCR account balance
-	err = s.db.UpdatePlayerBalance(req.PlayerId, -config.BuyIn, "table buy-in", "joined table")
-	if err != nil {
-		// If balance update fails, remove player from table
+	// Deduct buy-in.
+	if err := s.db.UpdatePlayerBalance(req.PlayerId, -config.BuyIn, "table buy-in", "joined table"); err != nil {
 		table.RemoveUser(req.PlayerId)
-		s.mu.Unlock()
 		return nil, err
 	}
-
-	// Update the user's account balance to reflect the deduction
 	newUser.DCRAccountBalance = dcrBalance - config.BuyIn
 
-	// Save player state to database (convert User to Player for database storage)
-	if newUser != nil {
-		err = s.saveUserAsPlayerState(req.TableId, newUser)
-		if err != nil {
-			s.log.Errorf("Failed to save new player state: %v", err)
-		}
+	// Persist player state.
+	if err := s.saveUserAsPlayerState(req.TableId, newUser); err != nil {
+		s.log.Errorf("Failed to save new player state: %v", err)
 	}
 
-	s.mu.Unlock() // Release lock before async operation
-
-	// Save updated table state (async)
-	s.saveTableStateAsync(req.TableId, "player joined")
+	// Publish async event snapshot.
+	if evt, err := CollectGameEventSnapshot(GameEventTypePlayerJoined, s, req.TableId, req.PlayerId, 0, map[string]interface{}{
+		"message": fmt.Sprintf("Player %s joined the table", req.PlayerId),
+	}); err == nil {
+		s.eventProcessor.PublishEvent(evt)
+	} else {
+		s.log.Errorf("Failed to collect event snapshot: %v", err)
+	}
 
 	return &pokerrpc.JoinTableResponse{
 		Success:    true,
 		Message:    "Successfully joined table",
-		NewBalance: newUser.DCRAccountBalance, // Return new DCR balance
+		NewBalance: newUser.DCRAccountBalance,
 	}, nil
 }
 
@@ -546,14 +493,24 @@ func (s *Server) SetPlayerReady(ctx context.Context, req *pokerrpc.SetPlayerRead
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
 
-	// Trigger player ready event so other players see the update immediately
-	table.TriggerPlayerReadyEvent(req.PlayerId, true)
-
 	allReady := table.CheckAllPlayersReady()
+	gameStarted := table.IsGameStarted()
+
+	// Collect snapshot and publish event for async processing
+	event, err := CollectGameEventSnapshot(GameEventTypePlayerReady, s, req.TableId, req.PlayerId, 0, map[string]interface{}{
+		"message":     fmt.Sprintf("Player %s is ready", req.PlayerId),
+		"allReady":    allReady,
+		"gameStarted": gameStarted,
+	})
+	if err != nil {
+		s.log.Errorf("Failed to collect event snapshot: %v", err)
+	} else {
+		s.eventProcessor.PublishEvent(event)
+	}
 
 	// If all players are ready and the game hasn't started yet, start the game
-	if allReady && !table.IsGameStarted() {
-		_ = table.StartGame() // This will send GAME_STARTED notification immediately
+	if allReady && !gameStarted {
+		_ = table.StartGame()
 	}
 
 	return &pokerrpc.SetPlayerReadyResponse{
@@ -580,8 +537,16 @@ func (s *Server) SetPlayerUnready(ctx context.Context, req *pokerrpc.SetPlayerUn
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
 
-	// Trigger player unready event so other players see the update immediately
-	table.TriggerPlayerReadyEvent(req.PlayerId, false)
+	// Collect snapshot and publish event for async processing
+	event, err := CollectGameEventSnapshot(GameEventTypePlayerReady, s, req.TableId, req.PlayerId, 0, map[string]interface{}{
+		"message": fmt.Sprintf("Player %s is unready", req.PlayerId),
+		"ready":   false,
+	})
+	if err != nil {
+		s.log.Errorf("Failed to collect event snapshot: %v", err)
+	} else {
+		s.eventProcessor.PublishEvent(event)
+	}
 
 	return &pokerrpc.SetPlayerUnreadyResponse{
 		Success: true,
@@ -727,13 +692,6 @@ func (s *Server) buildGameState(tableID, requestingPlayerID string) (*pokerrpc.G
 
 	game := table.GetGame()
 
-	// Debug logging for game state transitions
-	if game == nil {
-		s.log.Debugf("buildGameState: game is nil for table %s, player %s - transition state", tableID, requestingPlayerID)
-	} else {
-		s.log.Debugf("buildGameState: game exists for table %s, player %s, phase: %v", tableID, requestingPlayerID, game.GetPhase())
-	}
-
 	return s.buildGameStateForPlayer(table, game, requestingPlayerID), nil
 }
 
@@ -791,53 +749,34 @@ func (s *Server) buildGameStateForPlayer(table *poker.Table, game *poker.Game, r
 }
 
 func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*pokerrpc.MakeBetResponse, error) {
-	s.mu.Lock()
-
-	table, ok := s.tables[req.TableId]
+	table, ok := s.getTable(req.TableId)
 	if !ok {
-		s.mu.Unlock()
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
 
-	// Check if game is running
 	if !table.IsGameStarted() {
-		s.mu.Unlock()
 		return nil, status.Error(codes.FailedPrecondition, "game not started")
 	}
 
-	// Verify it's the player's turn
-	currentPlayerID := table.GetCurrentPlayerID()
-	if currentPlayerID != req.PlayerId {
-		s.mu.Unlock()
+	if table.GetCurrentPlayerID() != req.PlayerId {
 		return nil, status.Error(codes.FailedPrecondition, "not your turn")
 	}
 
-	err := table.MakeBet(req.PlayerId, req.Amount)
-	if err != nil {
-		s.mu.Unlock()
+	if err := table.MakeBet(req.PlayerId, req.Amount); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-
-	s.mu.Unlock()
-
-	// Broadcast bet notification to all players at the table (outside of server lock)
-	s.broadcastNotificationToTable(req.TableId, &pokerrpc.Notification{
-		Type:     pokerrpc.NotificationType_BET_MADE,
-		PlayerId: req.PlayerId,
-		TableId:  req.TableId,
-		Amount:   req.Amount,
-		Message:  fmt.Sprintf("Player %s bet %d chips", req.PlayerId, req.Amount),
-	})
-
-	// Broadcast updated game state to all players
-	s.BroadcastGameStateUpdate(req.TableId)
-
-	// Save game state after bet (async)
-	s.saveTableStateAsync(req.TableId, "bet made")
 
 	balance, err := s.db.GetPlayerBalance(req.PlayerId)
 	if err != nil {
 		return nil, err
+	}
+
+	if evt, err := CollectGameEventSnapshot(GameEventTypeBetMade, s, req.TableId, req.PlayerId, req.Amount, map[string]interface{}{
+		"message": fmt.Sprintf("Player %s bet %d chips", req.PlayerId, req.Amount),
+	}); err == nil {
+		s.eventProcessor.PublishEvent(evt)
+	} else {
+		s.log.Errorf("Failed to collect event snapshot: %v", err)
 	}
 
 	return &pokerrpc.MakeBetResponse{
@@ -848,163 +787,104 @@ func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*po
 }
 
 func (s *Server) Fold(ctx context.Context, req *pokerrpc.FoldRequest) (*pokerrpc.FoldResponse, error) {
-	s.mu.Lock()
-
-	table, ok := s.tables[req.TableId]
+	table, ok := s.getTable(req.TableId)
 	if !ok {
-		s.mu.Unlock()
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
-
-	// Check if game is running
 	if !table.IsGameStarted() {
-		s.mu.Unlock()
 		return nil, status.Error(codes.FailedPrecondition, "game not started")
 	}
-
-	// Verify it's the player's turn
-	currentPlayerID := table.GetCurrentPlayerID()
-	if currentPlayerID != req.PlayerId {
-		s.mu.Unlock()
+	if table.GetCurrentPlayerID() != req.PlayerId {
 		return nil, status.Error(codes.FailedPrecondition, "not your turn")
 	}
-
-	// Handle the fold action
-	err := table.HandleFold(req.PlayerId)
-	if err != nil {
-		s.mu.Unlock()
+	if err := table.HandleFold(req.PlayerId); err != nil {
 		return nil, status.Error(codes.Internal, "failed to process fold: "+err.Error())
 	}
 
-	s.mu.Unlock()
+	if evt, err := CollectGameEventSnapshot(GameEventTypePlayerFolded, s, req.TableId, req.PlayerId, 0, map[string]interface{}{
+		"message": fmt.Sprintf("Player %s folded", req.PlayerId),
+	}); err == nil {
+		s.eventProcessor.PublishEvent(evt)
+	} else {
+		s.log.Errorf("Failed to collect event snapshot: %v", err)
+	}
 
-	// Broadcast fold notification to all players at the table (outside of server lock)
-	s.broadcastNotificationToTable(req.TableId, &pokerrpc.Notification{
-		Type:     pokerrpc.NotificationType_PLAYER_FOLDED,
-		PlayerId: req.PlayerId,
-		TableId:  req.TableId,
-		Message:  fmt.Sprintf("Player %s folded", req.PlayerId),
-	})
-
-	// Broadcast updated game state to all players
-	s.BroadcastGameStateUpdate(req.TableId)
-
-	// Save game state after fold (async)
-	s.saveTableStateAsync(req.TableId, "player folded")
-
-	return &pokerrpc.FoldResponse{
-		Success: true,
-		Message: "Folded successfully",
-	}, nil
+	return &pokerrpc.FoldResponse{Success: true, Message: "Folded successfully"}, nil
 }
 
 // Call implements the Call RPC method
 func (s *Server) Call(ctx context.Context, req *pokerrpc.CallRequest) (*pokerrpc.CallResponse, error) {
-	s.mu.Lock()
-
-	table, ok := s.tables[req.TableId]
+	table, ok := s.getTable(req.TableId)
 	if !ok {
-		s.mu.Unlock()
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
-
-	// Check if game is running
 	if !table.IsGameStarted() {
-		s.mu.Unlock()
 		return nil, status.Error(codes.FailedPrecondition, "game not started")
 	}
-
-	// Verify it's the player's turn
-	currentPlayerID := table.GetCurrentPlayerID()
-	if currentPlayerID != req.PlayerId {
-		s.mu.Unlock()
+	if table.GetCurrentPlayerID() != req.PlayerId {
 		return nil, status.Error(codes.FailedPrecondition, "not your turn")
 	}
 
-	// Handle the call action
-	err := table.HandleCall(req.PlayerId)
-	if err != nil {
-		s.mu.Unlock()
+	// Determine how many chips the player actually needs to add (delta) to call.
+	var prevBet int64 = 0
+	if game := table.GetGame(); game != nil {
+		for _, p := range game.GetPlayers() {
+			if p.ID == req.PlayerId {
+				prevBet = p.HasBet
+				break
+			}
+		}
+	}
+	// Capture current bet before performing the call so we know the target amount.
+	currentBet := table.GetCurrentBet()
+
+	if err := table.HandleCall(req.PlayerId); err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
 
-	// Get the current bet amount for the notification
-	currentBet := table.GetCurrentBet()
+	// Calculate delta based on player's previous bet.
+	delta := currentBet - prevBet
+	if delta < 0 {
+		delta = 0 // safety — shouldn't happen
+	}
 
-	s.mu.Unlock()
+	if evt, err := CollectGameEventSnapshot(GameEventTypeCallMade, s, req.TableId, req.PlayerId, delta, map[string]interface{}{
+		"message": fmt.Sprintf("Player %s called %d chips", req.PlayerId, delta),
+	}); err == nil {
+		s.eventProcessor.PublishEvent(evt)
+	} else {
+		s.log.Errorf("Failed to collect event snapshot: %v", err)
+	}
 
-	// Broadcast call notification to all players at the table (outside of server lock)
-	s.broadcastNotificationToTable(req.TableId, &pokerrpc.Notification{
-		Type:     pokerrpc.NotificationType_CALL_MADE,
-		PlayerId: req.PlayerId,
-		TableId:  req.TableId,
-		Amount:   currentBet,
-		Message:  fmt.Sprintf("Player %s called %d chips", req.PlayerId, currentBet),
-	})
-
-	// Broadcast updated game state to all players
-	s.BroadcastGameStateUpdate(req.TableId)
-
-	// Save game state after call (async)
-	s.saveTableStateAsync(req.TableId, "player called")
-
-	return &pokerrpc.CallResponse{
-		Success: true,
-		Message: "Call successful",
-	}, nil
+	return &pokerrpc.CallResponse{Success: true, Message: "Call successful"}, nil
 }
 
 // Check implements the Check RPC method
 func (s *Server) Check(ctx context.Context, req *pokerrpc.CheckRequest) (*pokerrpc.CheckResponse, error) {
-	s.mu.Lock()
-
-	table, ok := s.tables[req.TableId]
+	table, ok := s.getTable(req.TableId)
 	if !ok {
-		s.mu.Unlock()
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
-
-	// Check if game is running
 	if !table.IsGameStarted() {
-		s.mu.Unlock()
 		return nil, status.Error(codes.FailedPrecondition, "game not started")
 	}
-
-	// Verify it's the player's turn
-	currentPlayerID := table.GetCurrentPlayerID()
-	if currentPlayerID != req.PlayerId {
-		s.mu.Unlock()
+	if table.GetCurrentPlayerID() != req.PlayerId {
 		return nil, status.Error(codes.FailedPrecondition, "not your turn")
 	}
 
-	// Handle the check action
-	err := table.HandleCheck(req.PlayerId)
-	if err != nil {
-		s.mu.Unlock()
+	if err := table.HandleCheck(req.PlayerId); err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
 
-	s.mu.Unlock()
+	if evt, err := CollectGameEventSnapshot(GameEventTypeCheckMade, s, req.TableId, req.PlayerId, 0, map[string]interface{}{
+		"message": fmt.Sprintf("Player %s checked", req.PlayerId),
+	}); err == nil {
+		s.eventProcessor.PublishEvent(evt)
+	} else {
+		s.log.Errorf("Failed to collect event snapshot: %v", err)
+	}
 
-	// Broadcast check notification to all players at the table (outside of server lock)
-	s.broadcastNotificationToTable(req.TableId, &pokerrpc.Notification{
-		Type:     pokerrpc.NotificationType_CHECK_MADE,
-		PlayerId: req.PlayerId,
-		TableId:  req.TableId,
-		Amount:   0,
-		Message:  fmt.Sprintf("Player %s checked", req.PlayerId),
-	})
-
-	// Broadcast updated game state to all players
-	s.BroadcastGameStateUpdate(req.TableId)
-
-	// Save game state after check (async)
-	s.saveTableStateAsync(req.TableId, "player checked")
-
-	return &pokerrpc.CheckResponse{
-		Success: true,
-		Message: "Check successful",
-	}, nil
+	return &pokerrpc.CheckResponse{Success: true, Message: "Check successful"}, nil
 }
 
 // buildPlayers creates a slice of Player proto messages with appropriate card visibility
@@ -1871,21 +1751,67 @@ func (s *Server) handlePlayerReconnection(tableID, playerID string) error {
 		s.log.Errorf("Failed to mark player as connected: %v", err)
 	}
 
-	s.mu.Unlock() // Release lock before async operations
+	// Collect all data needed for async operations while holding lock
+	playerIDs := s.getTablePlayerIDs(tableID)
+	gameStates := s.buildGameStatesForAllPlayers(tableID)
 
-	// Save current state to ensure reconnection is persisted
-	s.saveTableStateAsync(tableID, "player reconnected")
-
-	// Broadcast notification about reconnection
-	s.broadcastNotificationToTable(tableID, &pokerrpc.Notification{
+	reconnectNotification := &pokerrpc.Notification{
 		Type:     pokerrpc.NotificationType_PLAYER_READY,
 		PlayerId: playerID,
 		TableId:  tableID,
 		Message:  fmt.Sprintf("Player %s has reconnected", playerID),
-	})
+	}
 
-	// Broadcast updated game state to all players
-	s.BroadcastGameStateUpdate(tableID)
+	s.mu.Unlock() // Release lock before async operations
+
+	// Async operations using lock-free methods
+	go func() {
+		s.notifyPlayers(playerIDs, reconnectNotification)
+		if gameStates != nil {
+			s.sendGameStateUpdates(tableID, gameStates)
+		}
+	}()
+
+	s.log.Infof("Player %s successfully reconnected to table %s", playerID, tableID)
+	return nil
+}
+
+// handlePlayerReconnectionInternal manages the state when a player reconnects (called from notification queue)
+func (s *Server) handlePlayerReconnectionInternal(tableID, playerID string) error {
+	// Mark player as connected in database
+	err := s.markPlayerConnected(tableID, playerID)
+	if err != nil {
+		s.log.Errorf("Failed to mark player as connected: %v", err)
+	}
+
+	// Save current state to ensure reconnection is persisted
+	s.saveTableStateAsync(tableID, "player reconnected")
+
+	// Build notification data (using helper methods that handle their own locks)
+	reconnectNotification := &pokerrpc.Notification{
+		Type:     pokerrpc.NotificationType_PLAYER_READY,
+		PlayerId: playerID,
+		TableId:  tableID,
+		Message:  fmt.Sprintf("Player %s has reconnected", playerID),
+	}
+
+	// Get player IDs (this method handles its own locks)
+	playerIDs := s.getTablePlayerIDs(tableID)
+
+	// Build game states (this method handles its own locks)
+	gameStates := s.buildGameStatesForAllPlayers(tableID)
+
+	// Send notifications using lock-free methods
+	if len(playerIDs) > 0 {
+		for _, id := range playerIDs {
+			s.notifyPlayer(id, reconnectNotification)
+		}
+	}
+
+	// Send game state updates using lock-free method
+	if len(gameStates) > 0 {
+		s.sendGameStateUpdates(tableID, gameStates)
+	}
 
 	s.log.Infof("Player %s successfully reconnected to table %s", playerID, tableID)
 	return nil
@@ -1927,21 +1853,26 @@ func (s *Server) handlePlayerDisconnection(tableID, playerID string) error {
 			s.log.Errorf("Failed to mark player as disconnected: %v", err)
 		}
 
-		s.mu.Unlock() // Release lock before async operations
+		// Collect all data needed for async operations while holding lock
+		playerIDs := s.getTablePlayerIDs(tableID)
+		gameStates := s.buildGameStatesForAllPlayers(tableID)
 
-		// Save current game state
-		s.saveTableStateAsync(tableID, "player disconnected")
-
-		// Broadcast notification about disconnection
-		s.broadcastNotificationToTable(tableID, &pokerrpc.Notification{
+		disconnectNotification := &pokerrpc.Notification{
 			Type:     pokerrpc.NotificationType_PLAYER_FOLDED, // Reuse folded notification type
 			PlayerId: playerID,
 			TableId:  tableID,
 			Message:  fmt.Sprintf("Player %s has disconnected (chips preserved)", playerID),
-		})
+		}
 
-		// Broadcast updated game state
-		s.BroadcastGameStateUpdate(tableID)
+		s.mu.Unlock() // Release lock before async operations
+
+		// Async operations using lock-free methods
+		go func() {
+			s.notifyPlayers(playerIDs, disconnectNotification)
+			if gameStates != nil {
+				s.sendGameStateUpdates(tableID, gameStates)
+			}
+		}()
 
 		s.log.Infof("Player %s disconnected from table %s but kept in game (%d chips)", playerID, tableID, playerChips)
 		return nil
@@ -1960,21 +1891,144 @@ func (s *Server) handlePlayerDisconnection(tableID, playerID string) error {
 		s.log.Errorf("Failed to delete player state from database: %v", err)
 	}
 
-	s.mu.Unlock() // Release lock before async operations
-
-	// Save updated table state
-	s.saveTableStateAsync(tableID, "player disconnected and removed")
-
-	// Broadcast notification about player leaving
-	s.broadcastNotificationToTable(tableID, &pokerrpc.Notification{
+	// Build notification data while holding lock
+	leaveNotification := &pokerrpc.Notification{
 		Type:     pokerrpc.NotificationType_PLAYER_FOLDED, // Reuse folded notification type
 		PlayerId: playerID,
 		TableId:  tableID,
 		Message:  fmt.Sprintf("Player %s has left the table", playerID),
-	})
+	}
 
-	// Broadcast updated game state
-	s.BroadcastGameStateUpdate(tableID)
+	// Build game states for all players while holding the lock
+	gameStates := s.buildGameStatesForAllPlayers(tableID)
+
+	// Get player IDs while holding the lock
+	playerIDs := s.getTablePlayerIDs(tableID)
+
+	// Release lock before async operations
+	s.mu.Unlock()
+
+	// Simple async pattern for all notifications and state updates
+	go func() {
+		s.notifyPlayers(playerIDs, leaveNotification)
+		// Send game state updates using lock-free approach
+		if gameStates != nil {
+			s.sendGameStateUpdates(tableID, gameStates)
+		}
+	}()
+
+	// Re-acquire lock to ensure proper cleanup
+	s.mu.Lock()
+
+	s.log.Infof("Player %s disconnected and removed from table %s", playerID, tableID)
+	return nil
+}
+
+// handlePlayerDisconnectionInternal manages the state when a player disconnects (called from notification queue)
+func (s *Server) handlePlayerDisconnectionInternal(tableID, playerID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	table, ok := s.tables[tableID]
+	if !ok {
+		return fmt.Errorf("table not found")
+	}
+
+	// Check if player exists in table
+	user := table.GetUser(playerID)
+	if user == nil {
+		return fmt.Errorf("player not found at table")
+	}
+
+	// Get player's chip balance if they're in a game
+	var playerChips int64 = 0
+	if table.IsGameStarted() && table.GetGame() != nil {
+		game := table.GetGame()
+		for _, player := range game.GetPlayers() {
+			if player.ID == playerID {
+				playerChips = player.Balance
+				break
+			}
+		}
+	}
+
+	// If player has chips in an active game, mark as disconnected but keep in game
+	if table.IsGameStarted() && playerChips > 0 {
+		err := s.markPlayerDisconnected(tableID, playerID)
+		if err != nil {
+			s.log.Errorf("Failed to mark player as disconnected: %v", err)
+		}
+
+		// Build notification data while holding lock
+		disconnectNotification := &pokerrpc.Notification{
+			Type:     pokerrpc.NotificationType_PLAYER_FOLDED, // Reuse folded notification type
+			PlayerId: playerID,
+			TableId:  tableID,
+			Message:  fmt.Sprintf("Player %s has disconnected (chips preserved)", playerID),
+		}
+
+		// Build game states for all players while holding the lock
+		gameStates := s.buildGameStatesForAllPlayers(tableID)
+
+		// Get player IDs while holding the lock
+		playerIDs := s.getTablePlayerIDs(tableID)
+
+		// Release lock before async operations
+		s.mu.Unlock()
+
+		// Simple async pattern for all notifications and state updates
+		go func() {
+			s.saveTableStateAsync(tableID, "player disconnected")
+			s.notifyPlayers(playerIDs, disconnectNotification)
+			// Send game state updates using lock-free approach
+			if gameStates != nil {
+				s.sendGameStateUpdates(tableID, gameStates)
+			}
+		}()
+
+		// Re-acquire lock to ensure proper cleanup
+		s.mu.Lock()
+
+		s.log.Infof("Player %s disconnected from table %s but kept in game (%d chips)", playerID, tableID, playerChips)
+		return nil
+	}
+
+	// Player has no chips or game not started - can remove completely
+	err := table.RemoveUser(playerID)
+	if err != nil {
+		return fmt.Errorf("failed to remove user: %v", err)
+	}
+
+	// Delete player state from database
+	err = s.db.DeletePlayerState(tableID, playerID)
+	if err != nil {
+		s.log.Errorf("Failed to delete player state from database: %v", err)
+	}
+
+	// Build game states for all players while holding the lock
+	gameStates := s.buildGameStatesForAllPlayers(tableID)
+
+	// Get player IDs while holding the lock
+	playerIDs := s.getTablePlayerIDs(tableID)
+
+	// Prepare notification while holding lock
+	leaveNotification := &pokerrpc.Notification{
+		Type:     pokerrpc.NotificationType_PLAYER_FOLDED, // Reuse folded notification type
+		PlayerId: playerID,
+		TableId:  tableID,
+		Message:  fmt.Sprintf("Player %s has left the table", playerID),
+	}
+
+	// Save updated table state
+	s.saveTableStateAsync(tableID, "player disconnected and removed")
+
+	// Send notifications using lock-free approach (function is called with defer s.mu.Unlock())
+	s.notifyPlayers(playerIDs, leaveNotification)
+
+	// Send game state updates using lock-free approach
+	if gameStates != nil {
+		s.sendGameStateUpdates(tableID, gameStates)
+	}
 
 	s.log.Infof("Player %s disconnected and removed from table %s", playerID, tableID)
 	return nil

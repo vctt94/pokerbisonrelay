@@ -198,11 +198,6 @@ func tableStateWaitingForPlayers(entity *Table, callback func(stateName string, 
 
 // tableStatePlayersReady handles the PLAYERS_READY state logic
 func tableStatePlayersReady(entity *Table, callback func(stateName string, event statemachine.StateEvent)) TableStateFn {
-	// Send notification that all players are ready
-	if entity.eventManager.notificationSender != nil {
-		go entity.eventManager.NotifyAllPlayersReady(entity.config.ID)
-	}
-
 	if callback != nil {
 		callback("PLAYERS_READY", statemachine.StateEntered)
 	}
@@ -321,10 +316,6 @@ func (t *Table) StartGame() error {
 
 	// Transition to game active state with broadcast callback
 	t.stateMachine.SetState(tableStateGameActive)
-
-	// SINGLE broadcast at the end after all setup is complete
-	t.broadcastGameStateUpdate()
-
 	t.lastAction = time.Now()
 	return nil
 }
@@ -358,13 +349,7 @@ func (t *Table) handleShowdown() {
 	}
 
 	// Delegate all showdown logic to the game
-	result := t.game.handleShowdown()
-
-	// Send showdown result notification to all players
-	if t.eventManager.notificationSender != nil && len(result.WinnerInfo) > 0 {
-		t.eventManager.notificationSender.SendShowdownResult(t.config.ID, result.WinnerInfo, result.TotalPot)
-		// Note: BroadcastGameStateUpdate is handled by the calling action method to avoid duplicates
-	}
+	_ = t.game.handleShowdown()
 
 	// Count players still at the table with sufficient balance for the next hand
 	playersReadyForNextHand := 0
@@ -445,24 +430,8 @@ func (t *Table) startNewHand() error {
 	// Transition to game active state
 	t.stateMachine.SetState(tableStateGameActive)
 
-	// SINGLE consolidated broadcast FIRST to ensure players get the new game state
-	// This ensures players can see their cards and current player correctly
-	t.broadcastGameStateUpdate()
-
-	// Send new hand notification AFTER the game state update
-	// This prevents the UI from clearing state before receiving the new state
-	go t.eventManager.NotifyNewHandStarted(t.config.ID)
-
 	t.lastAction = time.Now()
 	return nil
-}
-
-// broadcastGameStateUpdate broadcasts game state update to all players
-func (t *Table) broadcastGameStateUpdate() {
-	if t.eventManager.notificationSender != nil {
-		// Use asynchronous broadcast to avoid holding locks
-		go t.eventManager.notificationSender.BroadcastGameStateUpdate(t.config.ID)
-	}
 }
 
 // setupNewHand handles the complete setup process for a new hand (assumes lock is held)
@@ -581,9 +550,6 @@ func (t *Table) MakeBet(userID string, amount int64) error {
 		// Check if this action completes the betting round
 		t.maybeAdvancePhase()
 	}
-
-	// SINGLE broadcast at the end of all processing
-	t.broadcastGameStateUpdate()
 
 	t.lastAction = time.Now()
 	return nil
@@ -780,9 +746,6 @@ func (t *Table) HandleFold(userID string) error {
 		t.maybeAdvancePhase()
 	}
 
-	// SINGLE broadcast at the end of all processing
-	t.broadcastGameStateUpdate()
-
 	t.lastAction = time.Now()
 	return nil
 }
@@ -818,9 +781,6 @@ func (t *Table) HandleCall(userID string) error {
 		t.maybeAdvancePhase()
 	}
 
-	// SINGLE broadcast at the end of all processing
-	t.broadcastGameStateUpdate()
-
 	t.lastAction = time.Now()
 	return nil
 }
@@ -855,9 +815,6 @@ func (t *Table) HandleCheck(userID string) error {
 		// Check if this action completes the betting round
 		t.maybeAdvancePhase()
 	}
-
-	// SINGLE broadcast at the end of all processing
-	t.broadcastGameStateUpdate()
 
 	t.lastAction = time.Now()
 	return nil
@@ -898,7 +855,8 @@ func (t *Table) postBlindsFromGame() error {
 		t.game.potManager.AddBet(smallBlindPos, smallBlindAmount)
 
 		// Send small blind notification
-		go t.eventManager.NotifyBlindPosted(t.config.ID, t.game.players[smallBlindPos].ID, smallBlindAmount, true)
+		// DISABLED: Notification callbacks cause deadlocks - server handles notifications directly
+		// go t.eventManager.NotifyBlindPosted(t.config.ID, t.game.players[smallBlindPos].ID, smallBlindAmount, true)
 	}
 
 	// Post big blind
@@ -913,17 +871,9 @@ func (t *Table) postBlindsFromGame() error {
 		t.game.currentBet = bigBlindAmount // Set current bet to big blind amount
 
 		// Send big blind notification
-		go t.eventManager.NotifyBlindPosted(t.config.ID, t.game.players[bigBlindPos].ID, bigBlindAmount, false)
 	}
 
 	return nil
-}
-
-// StartNewHand starts a new hand without requiring all players to be ready again (public API)
-func (t *Table) StartNewHand() error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.startNewHand()
 }
 
 // dealCardsToPlayers deals cards to active players using the unified player state
@@ -1023,12 +973,6 @@ func (t *Table) GetUser(userID string) *User {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.users[userID]
-}
-
-// TriggerPlayerReadyEvent sends a player ready notification immediately
-func (t *Table) TriggerPlayerReadyEvent(userID string, ready bool) {
-	// Send notification immediately
-	go t.eventManager.NotifyPlayerReady(t.config.ID, userID, ready)
 }
 
 // SetHost transfers host ownership to a new user
