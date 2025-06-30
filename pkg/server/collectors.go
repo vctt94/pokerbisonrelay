@@ -134,14 +134,10 @@ func (s *Server) collectGameSnapshot(game *poker.Game) *GameSnapshot {
 	return snapshot
 }
 
-// BetMadeCollector handles snapshot collection for bet made events
-type BetMadeCollector struct{}
-
-func (c *BetMadeCollector) EventType() GameEventType {
-	return GameEventTypeBetMade
-}
-
-func (c *BetMadeCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
+// buildGameEvent constructs a GameEvent with a fresh table snapshot and the
+// list of current player IDs. It centralises the repetitive logic that was
+// previously duplicated across the individual collectors.
+func (s *Server) buildGameEvent(eventType GameEventType, tableID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
 	tableSnapshot, err := s.collectTableSnapshot(tableID)
 	if err != nil {
 		return nil, err
@@ -150,7 +146,7 @@ func (c *BetMadeCollector) CollectSnapshot(s *Server, tableID, playerID string, 
 	playerIDs := s.getTablePlayerIDsCol(tableID)
 
 	return &GameEvent{
-		Type:          GameEventTypeBetMade,
+		Type:          eventType,
 		TableID:       tableID,
 		PlayerIDs:     playerIDs,
 		Amount:        amount,
@@ -158,6 +154,17 @@ func (c *BetMadeCollector) CollectSnapshot(s *Server, tableID, playerID string, 
 		Timestamp:     time.Now(),
 		TableSnapshot: tableSnapshot,
 	}, nil
+}
+
+// BetMadeCollector handles snapshot collection for bet made events
+type BetMadeCollector struct{}
+
+func (c *BetMadeCollector) EventType() GameEventType {
+	return GameEventTypeBetMade
+}
+
+func (c *BetMadeCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
+	return s.buildGameEvent(GameEventTypeBetMade, tableID, amount, metadata)
 }
 
 // PlayerFoldedCollector handles snapshot collection for player folded events
@@ -168,22 +175,7 @@ func (c *PlayerFoldedCollector) EventType() GameEventType {
 }
 
 func (c *PlayerFoldedCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	tableSnapshot, err := s.collectTableSnapshot(tableID)
-	if err != nil {
-		return nil, err
-	}
-
-	playerIDs := s.getTablePlayerIDsCol(tableID)
-
-	return &GameEvent{
-		Type:          GameEventTypePlayerFolded,
-		TableID:       tableID,
-		PlayerIDs:     playerIDs,
-		Amount:        amount,
-		Metadata:      metadata,
-		Timestamp:     time.Now(),
-		TableSnapshot: tableSnapshot,
-	}, nil
+	return s.buildGameEvent(GameEventTypePlayerFolded, tableID, amount, metadata)
 }
 
 // CallMadeCollector handles snapshot collection for call made events
@@ -194,22 +186,7 @@ func (c *CallMadeCollector) EventType() GameEventType {
 }
 
 func (c *CallMadeCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	tableSnapshot, err := s.collectTableSnapshot(tableID)
-	if err != nil {
-		return nil, err
-	}
-
-	playerIDs := s.getTablePlayerIDsCol(tableID)
-
-	return &GameEvent{
-		Type:          GameEventTypeCallMade,
-		TableID:       tableID,
-		PlayerIDs:     playerIDs,
-		Amount:        amount,
-		Metadata:      metadata,
-		Timestamp:     time.Now(),
-		TableSnapshot: tableSnapshot,
-	}, nil
+	return s.buildGameEvent(GameEventTypeCallMade, tableID, amount, metadata)
 }
 
 // CheckMadeCollector handles snapshot collection for check made events
@@ -220,22 +197,7 @@ func (c *CheckMadeCollector) EventType() GameEventType {
 }
 
 func (c *CheckMadeCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	tableSnapshot, err := s.collectTableSnapshot(tableID)
-	if err != nil {
-		return nil, err
-	}
-
-	playerIDs := s.getTablePlayerIDsCol(tableID)
-
-	return &GameEvent{
-		Type:          GameEventTypeCheckMade,
-		TableID:       tableID,
-		PlayerIDs:     playerIDs,
-		Amount:        amount,
-		Metadata:      metadata,
-		Timestamp:     time.Now(),
-		TableSnapshot: tableSnapshot,
-	}, nil
+	return s.buildGameEvent(GameEventTypeCheckMade, tableID, amount, metadata)
 }
 
 // GameStartedCollector handles snapshot collection for game started events
@@ -246,22 +208,7 @@ func (c *GameStartedCollector) EventType() GameEventType {
 }
 
 func (c *GameStartedCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	tableSnapshot, err := s.collectTableSnapshot(tableID)
-	if err != nil {
-		return nil, err
-	}
-
-	playerIDs := s.getTablePlayerIDsCol(tableID)
-
-	return &GameEvent{
-		Type:          GameEventTypeGameStarted,
-		TableID:       tableID,
-		PlayerIDs:     playerIDs,
-		Amount:        amount,
-		Metadata:      metadata,
-		Timestamp:     time.Now(),
-		TableSnapshot: tableSnapshot,
-	}, nil
+	return s.buildGameEvent(GameEventTypeGameStarted, tableID, amount, metadata)
 }
 
 // GameEndedCollector handles snapshot collection for game ended events
@@ -272,22 +219,7 @@ func (c *GameEndedCollector) EventType() GameEventType {
 }
 
 func (c *GameEndedCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	tableSnapshot, err := s.collectTableSnapshot(tableID)
-	if err != nil {
-		return nil, err
-	}
-
-	playerIDs := s.getTablePlayerIDsCol(tableID)
-
-	return &GameEvent{
-		Type:          GameEventTypeGameEnded,
-		TableID:       tableID,
-		PlayerIDs:     playerIDs,
-		Amount:        amount,
-		Metadata:      metadata,
-		Timestamp:     time.Now(),
-		TableSnapshot: tableSnapshot,
-	}, nil
+	return s.buildGameEvent(GameEventTypeGameEnded, tableID, amount, metadata)
 }
 
 // PlayerReadyCollector handles snapshot collection for player ready events
@@ -298,22 +230,7 @@ func (c *PlayerReadyCollector) EventType() GameEventType {
 }
 
 func (c *PlayerReadyCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	tableSnapshot, err := s.collectTableSnapshot(tableID)
-	if err != nil {
-		return nil, err
-	}
-
-	playerIDs := s.getTablePlayerIDsCol(tableID)
-
-	return &GameEvent{
-		Type:          GameEventTypePlayerReady,
-		TableID:       tableID,
-		PlayerIDs:     playerIDs,
-		Amount:        amount,
-		Metadata:      metadata,
-		Timestamp:     time.Now(),
-		TableSnapshot: tableSnapshot,
-	}, nil
+	return s.buildGameEvent(GameEventTypePlayerReady, tableID, amount, metadata)
 }
 
 // PlayerJoinedCollector handles snapshot collection for player joined events
@@ -361,22 +278,7 @@ func (c *PlayerLeftCollector) EventType() GameEventType {
 }
 
 func (c *PlayerLeftCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	tableSnapshot, err := s.collectTableSnapshot(tableID)
-	if err != nil {
-		return nil, err
-	}
-
-	playerIDs := s.getTablePlayerIDsCol(tableID)
-
-	return &GameEvent{
-		Type:          GameEventTypePlayerLeft,
-		TableID:       tableID,
-		PlayerIDs:     playerIDs,
-		Amount:        amount,
-		Metadata:      metadata,
-		Timestamp:     time.Now(),
-		TableSnapshot: tableSnapshot,
-	}, nil
+	return s.buildGameEvent(GameEventTypePlayerLeft, tableID, amount, metadata)
 }
 
 // getTablePlayerIDsCol gets player IDs from the table without assuming the
