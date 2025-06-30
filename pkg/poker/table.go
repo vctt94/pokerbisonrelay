@@ -54,17 +54,6 @@ type TableConfig struct {
 	AutoStartDelay time.Duration // Delay before automatically starting next hand after showdown
 }
 
-// NotificationSender is an interface for sending notifications
-type NotificationSender interface {
-	SendAllPlayersReady(tableID string)
-	SendGameStarted(tableID string)
-	SendNewHandStarted(tableID string)
-	SendPlayerReady(tableID, playerID string, ready bool)
-	SendBlindPosted(tableID, playerID string, amount int64, isSmallBlind bool)
-	BroadcastGameStateUpdate(tableID string)
-	SendShowdownResult(tableID string, winners []*pokerrpc.Winner, pot int64)
-}
-
 // StateSaver is an interface for saving table state
 type StateSaver interface {
 	SaveTableStateAsync(tableID string, reason string)
@@ -72,54 +61,7 @@ type StateSaver interface {
 
 // TableEventManager handles notifications and state updates for table events
 type TableEventManager struct {
-	notificationSender NotificationSender
-	stateSaver         StateSaver
-}
-
-// NewTableEventManager creates a new event manager
-func NewTableEventManager(notificationSender NotificationSender) *TableEventManager {
-	return &TableEventManager{
-		notificationSender: notificationSender,
-	}
-}
-
-// NotifyPlayerReady sends player ready notification
-func (tem *TableEventManager) NotifyPlayerReady(tableID, playerID string, ready bool) {
-	if tem.notificationSender != nil {
-		tem.notificationSender.SendPlayerReady(tableID, playerID, ready)
-		// Removed automatic BroadcastGameStateUpdate to prevent infinite loops during active gameplay
-		// The caller should decide when to broadcast if needed
-	}
-}
-
-// NotifyAllPlayersReady sends all players ready notification
-func (tem *TableEventManager) NotifyAllPlayersReady(tableID string) {
-	if tem.notificationSender != nil {
-		tem.notificationSender.SendAllPlayersReady(tableID)
-		// Removed automatic BroadcastGameStateUpdate to prevent infinite loops during active gameplay
-		// The caller should decide when to broadcast if needed
-	}
-}
-
-// NotifyGameStarted sends game started notification
-func (tem *TableEventManager) NotifyGameStarted(tableID string) {
-	if tem.notificationSender != nil {
-		tem.notificationSender.SendGameStarted(tableID)
-	}
-}
-
-// NotifyNewHandStarted sends new hand started notification
-func (tem *TableEventManager) NotifyNewHandStarted(tableID string) {
-	if tem.notificationSender != nil {
-		tem.notificationSender.SendNewHandStarted(tableID)
-	}
-}
-
-// NotifyBlindPosted sends blind posted notification
-func (tem *TableEventManager) NotifyBlindPosted(tableID, playerID string, amount int64, isSmallBlind bool) {
-	if tem.notificationSender != nil {
-		tem.notificationSender.SendBlindPosted(tableID, playerID, amount, isSmallBlind)
-	}
+	stateSaver StateSaver
 }
 
 // SaveState triggers a state save for the table
@@ -304,6 +246,7 @@ func (t *Table) StartGame() error {
 		StartNewHand: func() error {
 			return t.startNewHand()
 		},
+		OnNewHandStarted: nil, // Server layer will attach this callback if needed
 	})
 
 	// Set the players in the game to reference the same objects from the table
@@ -909,13 +852,6 @@ func (t *Table) dealCardsToPlayers(activePlayers []*User) error {
 		}
 	}
 	return nil
-}
-
-// SetNotificationSender sets the notification sender for the table
-func (t *Table) SetNotificationSender(sender NotificationSender) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.eventManager.notificationSender = sender
 }
 
 // SetStateSaver sets the state saver for the table

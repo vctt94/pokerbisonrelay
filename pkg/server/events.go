@@ -14,15 +14,16 @@ import (
 type GameEventType string
 
 const (
-	GameEventTypeBetMade      GameEventType = "bet_made"
-	GameEventTypePlayerFolded GameEventType = "player_folded"
-	GameEventTypeCallMade     GameEventType = "call_made"
-	GameEventTypeCheckMade    GameEventType = "check_made"
-	GameEventTypeGameStarted  GameEventType = "game_started"
-	GameEventTypeGameEnded    GameEventType = "game_ended"
-	GameEventTypePlayerReady  GameEventType = "player_ready"
-	GameEventTypePlayerJoined GameEventType = "player_joined"
-	GameEventTypePlayerLeft   GameEventType = "player_left"
+	GameEventTypeBetMade        GameEventType = "bet_made"
+	GameEventTypePlayerFolded   GameEventType = "player_folded"
+	GameEventTypeCallMade       GameEventType = "call_made"
+	GameEventTypeCheckMade      GameEventType = "check_made"
+	GameEventTypeGameStarted    GameEventType = "game_started"
+	GameEventTypeGameEnded      GameEventType = "game_ended"
+	GameEventTypePlayerReady    GameEventType = "player_ready"
+	GameEventTypePlayerJoined   GameEventType = "player_joined"
+	GameEventTypePlayerLeft     GameEventType = "player_left"
+	GameEventTypeNewHandStarted GameEventType = "new_hand_started"
 )
 
 // GameEvent represents an immutable snapshot of a game event
@@ -270,6 +271,7 @@ func NewSnapshotRegistry() *SnapshotRegistry {
 	registry.Register(&PlayerReadyCollector{})
 	registry.Register(&PlayerJoinedCollector{})
 	registry.Register(&PlayerLeftCollector{})
+	registry.Register(&NewHandStartedCollector{})
 
 	return registry
 }

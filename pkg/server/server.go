@@ -169,7 +169,6 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 
 	// Create table
 	table := poker.NewTable(cfg)
-	table.SetNotificationSender(s)
 	table.SetStateSaver(s)
 
 	// Add creator as first user
@@ -540,6 +539,21 @@ func (s *Server) SetPlayerReady(ctx context.Context, req *pokerrpc.SetPlayerRead
 			s.log.Errorf("Failed to collect GAME_STARTED event snapshot: %v", errGS)
 		} else {
 			s.eventProcessor.PublishEvent(gameStartedEvent)
+		}
+
+		// Attach callback to broadcast NEW_HAND_STARTED events triggered by auto-start logic
+		if g := table.GetGame(); g != nil {
+			g.SetOnNewHandStartedCallback(func() {
+				// Build and publish snapshot
+				evt, err := CollectGameEventSnapshot(GameEventTypeNewHandStarted, s, req.TableId, "", 0, map[string]interface{}{
+					"message": fmt.Sprintf("New hand started on table %s", req.TableId),
+				})
+				if err == nil {
+					s.eventProcessor.PublishEvent(evt)
+				} else {
+					s.log.Errorf("Failed to collect NEW_HAND_STARTED event snapshot: %v", err)
+				}
+			})
 		}
 	}
 
@@ -1421,7 +1435,6 @@ func (s *Server) loadTableFromDatabase(tableID string) (*poker.Table, error) {
 
 	// Create table
 	table := poker.NewTable(cfg)
-	table.SetNotificationSender(s)
 	table.SetStateSaver(s)
 
 	// Register the table early so that any asynchronous snapshot operations

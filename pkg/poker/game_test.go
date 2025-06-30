@@ -3,7 +3,9 @@ package poker
 import (
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/decred/slog"
 	"github.com/stretchr/testify/require"
@@ -323,4 +325,76 @@ func TestTieBreakerShowdown(t *testing.T) {
 	if player3.Balance != 0 {
 		t.Errorf("Expected player 3 to not win anything (folded), got %d", player3.Balance)
 	}
+}
+
+func TestAutoStartOnNewHandStarted(t *testing.T) {
+	cfg := GameConfig{
+		NumPlayers:     2,
+		StartingChips:  1000,
+		SmallBlind:     10,
+		BigBlind:       20,
+		AutoStartDelay: 10 * time.Millisecond,
+		Log:            createTestLogger(),
+	}
+	game, err := NewGame(cfg)
+	require.NoError(t, err)
+
+	// Set players so readyCount >= MinPlayers in timer callback
+	users := []*User{
+		NewUser("p1", "p1", 0, 0),
+		NewUser("p2", "p2", 0, 1),
+	}
+	game.SetPlayers(users)
+
+	var mu sync.Mutex
+	started := false
+	callbackCalled := false
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+
+	// Provide auto-start callbacks _without_ the OnNewHandStarted field.
+	game.SetAutoStartCallbacks(&AutoStartCallbacks{
+		MinPlayers: func() int { return 2 },
+		StartNewHand: func() error {
+			mu.Lock()
+			started = true
+			mu.Unlock()
+			return nil
+		},
+	})
+
+	// Attach the callback via the helper being tested.
+	game.SetOnNewHandStartedCallback(func() {
+		mu.Lock()
+		callbackCalled = true
+		mu.Unlock()
+		wg.Done()
+	})
+
+	// Trigger the timer
+	game.ScheduleAutoStart()
+
+	// Wait with timeout
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// ok
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timeout waiting for OnNewHandStarted callback")
+	}
+
+	mu.Lock()
+	if !started {
+		t.Fatal("expected StartNewHand to be called")
+	}
+	if !callbackCalled {
+		t.Fatal("expected OnNewHandStarted to be called")
+	}
+	mu.Unlock()
 }

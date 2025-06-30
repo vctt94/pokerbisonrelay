@@ -50,7 +50,6 @@ func buildActiveHeadsUpTable(t *testing.T, id string) *poker.Table {
 	}
 
 	table := poker.NewTable(cfg)
-	table.SetNotificationSender(nil)
 	table.SetStateSaver(nil)
 
 	if _, err := table.AddNewUser("p1", "p1", 1000, 0); err != nil {
@@ -135,5 +134,23 @@ func TestCollectTableSnapshotMissingTable(t *testing.T) {
 	_, err := s.collectTableSnapshot("unknown")
 	if err == nil {
 		t.Fatalf("expected error when table is missing, got nil")
+	}
+}
+
+func TestNewHandStartedCollector(t *testing.T) {
+	s := newBareServer()
+	table := buildActiveHeadsUpTable(t, "table_nhs")
+	s.tables[table.GetConfig().ID] = table
+
+	collector := &NewHandStartedCollector{}
+	evt, err := collector.CollectSnapshot(s, table.GetConfig().ID, "p1", 0, map[string]interface{}{"message": "new hand"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if evt.Type != GameEventTypeNewHandStarted {
+		t.Fatalf("event type mismatch: got %v want %v", evt.Type, GameEventTypeNewHandStarted)
+	}
+	if evt.TableSnapshot == nil {
+		t.Fatalf("expected non-nil TableSnapshot")
 	}
 }

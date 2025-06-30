@@ -31,6 +31,8 @@ type AutoStartCallbacks struct {
 	MinPlayers func() int
 	// StartNewHand should start a new hand
 	StartNewHand func() error
+	// OnNewHandStarted is called after a new hand has been successfully started
+	OnNewHandStarted func()
 }
 
 // Game holds the context and data for our poker game
@@ -1295,6 +1297,12 @@ func (g *Game) scheduleAutoStart() {
 				log.Debugf("Auto-start new hand failed: %v", err)
 			} else {
 				log.Debugf("Auto-started new hand successfully with %d players", readyCount)
+				if callbacks.OnNewHandStarted != nil {
+					// Invoke the callback without holding the game's mutex to
+					// avoid potential deadlocks with external code acquiring
+					// server-side locks.
+					go callbacks.OnNewHandStarted()
+				}
 			}
 		} else {
 			log.Debugf("Not enough players for auto-start: %d < %d", readyCount, minRequired)
@@ -1409,4 +1417,17 @@ func (g *Game) ForceSetPot(amount int64) {
 
 	// Set the amount on the main pot directly.
 	g.potManager.Pots[0].Amount = amount
+}
+
+// SetOnNewHandStartedCallback registers a callback to be executed each time a
+// new hand is successfully auto-started. The callback will be invoked from the
+// auto-start timer goroutine, so it MUST be thread-safe and return quickly.
+func (g *Game) SetOnNewHandStartedCallback(cb func()) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.autoStartCallbacks == nil {
+		g.autoStartCallbacks = &AutoStartCallbacks{}
+	}
+	g.autoStartCallbacks.OnNewHandStarted = cb
 }

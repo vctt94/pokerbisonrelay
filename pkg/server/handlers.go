@@ -40,6 +40,8 @@ func (nh *NotificationHandler) HandleEvent(event *GameEvent) {
 		nh.handlePlayerJoined(event)
 	case GameEventTypePlayerLeft:
 		nh.handlePlayerLeft(event)
+	case GameEventTypeNewHandStarted:
+		nh.handleNewHandStarted(event)
 	}
 }
 
@@ -129,6 +131,15 @@ func (nh *NotificationHandler) handlePlayerLeft(event *GameEvent) {
 		PlayerId: event.Metadata["playerID"].(string),
 		TableId:  event.TableID,
 		Message:  event.Metadata["message"].(string),
+	}
+	nh.server.notifyPlayers(event.PlayerIDs, notification)
+}
+
+func (nh *NotificationHandler) handleNewHandStarted(event *GameEvent) {
+	notification := &pokerrpc.Notification{
+		Type:    pokerrpc.NotificationType_NEW_HAND_STARTED,
+		TableId: event.TableID,
+		Message: event.Metadata["message"].(string),
 	}
 	nh.server.notifyPlayers(event.PlayerIDs, notification)
 }

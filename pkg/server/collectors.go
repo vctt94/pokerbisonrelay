@@ -281,6 +281,17 @@ func (c *PlayerLeftCollector) CollectSnapshot(s *Server, tableID, playerID strin
 	return s.buildGameEvent(GameEventTypePlayerLeft, tableID, amount, metadata)
 }
 
+// NewHandStartedCollector handles snapshot collection for new hand started events
+type NewHandStartedCollector struct{}
+
+func (c *NewHandStartedCollector) EventType() GameEventType {
+	return GameEventTypeNewHandStarted
+}
+
+func (c *NewHandStartedCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
+	return s.buildGameEvent(GameEventTypeNewHandStarted, tableID, amount, metadata)
+}
+
 // getTablePlayerIDsCol gets player IDs from the table without assuming the
 // server mutex is held. It acquires a read lock only for the map access and
 // then relies on the table's own thread-safety primitives.

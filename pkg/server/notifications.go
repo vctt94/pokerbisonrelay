@@ -188,41 +188,6 @@ func (s *Server) SendBlindPosted(tableID, playerID string, amount int64, isSmall
 	}()
 }
 
-// BroadcastGameStateUpdate sends updated game state to all players with active game streams
-func (s *Server) BroadcastGameStateUpdate(tableID string) {
-	s.gameStreamsMu.RLock()
-	playerStreams, exists := s.gameStreams[tableID]
-	s.gameStreamsMu.RUnlock()
-
-	if !exists || len(playerStreams) == 0 {
-		return
-	}
-
-	s.log.Debugf("BroadcastGameStateUpdate: broadcasting to %d players on table %s", len(playerStreams), tableID)
-
-	// Build game states for all players at once to minimize lock contention
-	gameStates := make(map[string]*pokerrpc.GameUpdate)
-	for playerID := range playerStreams {
-		gameState, err := s.buildGameState(tableID, playerID)
-		if err != nil {
-			s.log.Debugf("Failed to build game state for player %s: %v", playerID, err)
-			continue
-		}
-		gameStates[playerID] = gameState
-	}
-
-	// Send pre-built game states to each player stream
-	// Use a single goroutine to avoid goroutine explosion
-	go func() {
-		for playerID, stream := range playerStreams {
-			if gameState, ok := gameStates[playerID]; ok {
-				// Send the update, ignore errors as client might have disconnected
-				stream.Send(gameState)
-			}
-		}
-	}()
-}
-
 // SendShowdownResult sends SHOWDOWN_RESULT notification to all players at the table
 func (s *Server) SendShowdownResult(tableID string, winners []*pokerrpc.Winner, pot int64) {
 	notification := &pokerrpc.Notification{
