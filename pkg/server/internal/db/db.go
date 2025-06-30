@@ -42,12 +42,11 @@ type TableState struct {
 
 // PlayerState represents the persistent state of a player at a table
 type PlayerState struct {
-	PlayerID       string
-	TableID        string
-	TableSeat      int
-	IsReady        bool
-	IsDisconnected bool
-	LastAction     string
+	PlayerID   string
+	TableID    string
+	TableSeat  int
+	IsReady    bool
+	LastAction string
 
 	// Game state
 	Balance         int64
@@ -152,7 +151,6 @@ func createTables(db *sql.DB) error {
 			table_id TEXT NOT NULL,
 			table_seat INTEGER NOT NULL,
 			is_ready BOOLEAN NOT NULL DEFAULT FALSE,
-			is_disconnected BOOLEAN NOT NULL DEFAULT FALSE,
 			balance INTEGER NOT NULL DEFAULT 0,
 			starting_balance INTEGER NOT NULL DEFAULT 0,
 			has_bet INTEGER NOT NULL DEFAULT 0,
@@ -271,9 +269,11 @@ func (db *DB) LoadTableState(tableID string) (*TableState, error) {
 		return nil, fmt.Errorf("failed to load table state: %v", err)
 	}
 
-	// Parse JSON fields
-	json.Unmarshal([]byte(communityCardsJSON), &ts.CommunityCards)
-	json.Unmarshal([]byte(deckStateJSON), &ts.DeckState)
+	// Preserve the raw JSON strings for higher-level callers. They may choose
+	// when and how to unmarshal these fields (for example, during server-side
+	// restoration where they are expected to be provided as JSON strings).
+	ts.CommunityCards = communityCardsJSON
+	ts.DeckState = deckStateJSON
 
 	return &ts, nil
 }
@@ -291,12 +291,12 @@ func (db *DB) SavePlayerState(tableID string, playerState *PlayerState) error {
 
 	_, err := db.Exec(`
 		INSERT OR REPLACE INTO player_states (
-			player_id, table_id, table_seat, is_ready, is_disconnected,
+			player_id, table_id, table_seat, is_ready,
 			balance, starting_balance, has_bet, has_folded, is_all_in,
 			is_dealer, is_turn, game_state, hand, hand_description, last_action
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		playerState.PlayerID, tableID, playerState.TableSeat, playerState.IsReady, playerState.IsDisconnected,
+		playerState.PlayerID, tableID, playerState.TableSeat, playerState.IsReady,
 		playerState.Balance, playerState.StartingBalance, playerState.HasBet, playerState.HasFolded,
 		playerState.IsAllIn, playerState.IsDealer, playerState.IsTurn, playerState.GameState,
 		string(handJSON), playerState.HandDescription, time.Now(),
@@ -307,7 +307,7 @@ func (db *DB) SavePlayerState(tableID string, playerState *PlayerState) error {
 // LoadPlayerStates loads all player states for a table from the database
 func (db *DB) LoadPlayerStates(tableID string) ([]*PlayerState, error) {
 	rows, err := db.Query(`
-		SELECT player_id, table_id, table_seat, is_ready, is_disconnected,
+		SELECT player_id, table_id, table_seat, is_ready,
 		       balance, starting_balance, has_bet, has_folded, is_all_in,
 		       is_dealer, is_turn, game_state, hand, hand_description, last_action
 		FROM player_states WHERE table_id = ?
@@ -324,17 +324,18 @@ func (db *DB) LoadPlayerStates(tableID string) ([]*PlayerState, error) {
 
 		err := rows.Scan(
 			&ps.PlayerID, &ps.TableID, &ps.TableSeat, &ps.IsReady,
-			&ps.IsDisconnected, &ps.Balance, &ps.StartingBalance,
-			&ps.HasBet, &ps.HasFolded, &ps.IsAllIn, &ps.IsDealer,
-			&ps.IsTurn, &ps.GameState, &handJSON, &ps.HandDescription,
+			&ps.Balance, &ps.StartingBalance, &ps.HasBet, &ps.HasFolded, &ps.IsAllIn,
+			&ps.IsDealer, &ps.IsTurn, &ps.GameState, &handJSON, &ps.HandDescription,
 			&ps.LastAction,
 		)
 		if err != nil {
 			return nil, err
 		}
 
-		// Parse hand JSON
-		json.Unmarshal([]byte(handJSON), &ps.Hand)
+		// Keep the raw JSON string so that higher layers can decide when/how
+		// to unmarshal it (they may want to treat an empty slice differently
+		// or defer decoding until they know the concrete type).
+		ps.Hand = handJSON
 
 		playerStates = append(playerStates, &ps)
 	}
@@ -346,43 +347,6 @@ func (db *DB) LoadPlayerStates(tableID string) ([]*PlayerState, error) {
 func (db *DB) DeletePlayerState(tableID, playerID string) error {
 	_, err := db.Exec("DELETE FROM player_states WHERE table_id = ? AND player_id = ?", tableID, playerID)
 	return err
-}
-
-// SetPlayerDisconnected marks a player as disconnected
-func (db *DB) SetPlayerDisconnected(tableID, playerID string) error {
-	_, err := db.Exec(`
-		UPDATE player_states 
-		SET is_disconnected = TRUE, last_action = ? 
-		WHERE table_id = ? AND player_id = ?
-	`, time.Now(), tableID, playerID)
-	return err
-}
-
-// SetPlayerConnected marks a player as connected
-func (db *DB) SetPlayerConnected(tableID, playerID string) error {
-	_, err := db.Exec(`
-		UPDATE player_states 
-		SET is_disconnected = FALSE, last_action = ? 
-		WHERE table_id = ? AND player_id = ?
-	`, time.Now(), tableID, playerID)
-	return err
-}
-
-// IsPlayerDisconnected checks if a player is disconnected
-func (db *DB) IsPlayerDisconnected(tableID, playerID string) (bool, error) {
-	var isDisconnected bool
-	err := db.QueryRow(`
-		SELECT is_disconnected 
-		FROM player_states 
-		WHERE table_id = ? AND player_id = ?
-	`, tableID, playerID).Scan(&isDisconnected)
-	if err == sql.ErrNoRows {
-		return false, fmt.Errorf("player state not found")
-	}
-	if err != nil {
-		return false, err
-	}
-	return isDisconnected, nil
 }
 
 // GetAllTableIDs returns all table IDs from the database
@@ -404,4 +368,88 @@ func (db *DB) GetAllTableIDs() ([]string, error) {
 	}
 
 	return tableIDs, nil
+}
+
+// SaveSnapshot saves the provided table state together with all associated player states atomically.
+// This method ensures that the table\'s snapshot (and the set of players that belong to it at the
+// time of the snapshot) are always consistent in the database. Existing player_states for the table
+// are removed before the new set is inserted so that stale player rows are not resurrected when a
+// table is later re-loaded from storage.
+func (db *DB) SaveSnapshot(tableState *TableState, playerStates []*PlayerState) error {
+	// Convert complex fields to JSON up front so that we can reuse them in the transaction.
+	communityCardsJSON, _ := json.Marshal(tableState.CommunityCards)
+	deckStateJSON, _ := json.Marshal(tableState.DeckState)
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	// In case of any failure ensure we rollback.
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// Upsert (insert or replace) the table state.
+	_, err = tx.Exec(`
+		INSERT OR REPLACE INTO table_states (
+			id, host_id, buy_in, min_players, max_players, small_blind, big_blind,
+			min_balance, starting_chips, game_started, game_phase, dealer,
+			current_player, current_bet, pot, round_num, bet_round,
+			community_cards, deck_state, last_action
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		tableState.ID, tableState.HostID, tableState.BuyIn, tableState.MinPlayers, tableState.MaxPlayers,
+		tableState.SmallBlind, tableState.BigBlind, tableState.MinBalance, tableState.StartingChips,
+		tableState.GameStarted, tableState.GamePhase, tableState.Dealer, tableState.CurrentPlayer,
+		tableState.CurrentBet, tableState.Pot, tableState.Round, tableState.BetRound,
+		string(communityCardsJSON), string(deckStateJSON), time.Now(),
+	)
+	if err != nil {
+		return err
+	}
+
+	// Prepare an UPSERT that leaves the is_disconnected column untouched on updates so
+	// session-level connection tracking is not overwritten by snapshot saves.
+	stmt, err := tx.Prepare(`
+		INSERT INTO player_states (
+			player_id, table_id, table_seat, is_ready,
+			balance, starting_balance, has_bet, has_folded, is_all_in,
+			is_dealer, is_turn, game_state, hand, hand_description, last_action
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(player_id, table_id) DO UPDATE SET
+			table_seat      = excluded.table_seat,
+			is_ready        = excluded.is_ready,
+			balance         = excluded.balance,
+			starting_balance= excluded.starting_balance,
+			has_bet         = excluded.has_bet,
+			has_folded      = excluded.has_folded,
+			is_all_in       = excluded.is_all_in,
+			is_dealer       = excluded.is_dealer,
+			is_turn         = excluded.is_turn,
+			game_state      = excluded.game_state,
+			hand            = excluded.hand,
+			hand_description= excluded.hand_description,
+			last_action     = excluded.last_action
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, ps := range playerStates {
+		handJSON, _ := json.Marshal(ps.Hand)
+		_, err = stmt.Exec(
+			ps.PlayerID, tableState.ID, ps.TableSeat, ps.IsReady,
+			ps.Balance, ps.StartingBalance, ps.HasBet, ps.HasFolded, ps.IsAllIn,
+			ps.IsDealer, ps.IsTurn, ps.GameState, string(handJSON), ps.HandDescription, time.Now(),
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Commit the full snapshot.
+	return tx.Commit()
 }

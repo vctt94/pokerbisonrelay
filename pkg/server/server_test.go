@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ type TestServer struct {
 
 // InMemoryDB implements Database interface for testing
 type InMemoryDB struct {
+	mu                  sync.RWMutex
 	balances            map[string]int64
 	transactions        map[string][]Transaction
 	tableStates         map[string]*db.TableState
@@ -43,6 +45,9 @@ func NewInMemoryDB() *InMemoryDB {
 
 // GetPlayerBalance returns the current balance of a player
 func (m *InMemoryDB) GetPlayerBalance(playerID string) (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	balance, exists := m.balances[playerID]
 	if !exists {
 		return 0, fmt.Errorf("player not found")
@@ -52,6 +57,9 @@ func (m *InMemoryDB) GetPlayerBalance(playerID string) (int64, error) {
 
 // UpdatePlayerBalance updates a player's balance and records the transaction
 func (m *InMemoryDB) UpdatePlayerBalance(playerID string, amount int64, transactionType, description string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.balances[playerID] += amount
 
 	// Record transaction
@@ -70,6 +78,9 @@ func (m *InMemoryDB) UpdatePlayerBalance(playerID string, amount int64, transact
 
 // GetPlayerTransactions returns the transaction history for a player
 func (m *InMemoryDB) GetPlayerTransactions(playerID string, limit int) ([]Transaction, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	transactions := m.transactions[playerID]
 	if limit > 0 && limit < len(transactions) {
 		return transactions[:limit], nil
@@ -79,12 +90,31 @@ func (m *InMemoryDB) GetPlayerTransactions(playerID string, limit int) ([]Transa
 
 // SaveTableState saves table state to memory
 func (m *InMemoryDB) SaveTableState(tableState *db.TableState) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.tableStates[tableState.ID] = tableState
+	return nil
+}
+
+// SaveSnapshot saves the table state and associated player states atomically (in-memory implementation).
+func (m *InMemoryDB) SaveSnapshot(tableState *db.TableState, playerStates []*db.PlayerState) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.tableStates[tableState.ID] = tableState
+
+	// Clear previous player states for this table so the snapshot replaces them.
+	m.playerStates[tableState.ID] = make(map[string]*db.PlayerState)
+	for _, ps := range playerStates {
+		m.playerStates[tableState.ID][ps.PlayerID] = ps
+	}
 	return nil
 }
 
 // LoadTableState loads table state from memory
 func (m *InMemoryDB) LoadTableState(tableID string) (*db.TableState, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	state, exists := m.tableStates[tableID]
 	if !exists {
 		return nil, fmt.Errorf("table state not found")
@@ -94,6 +124,8 @@ func (m *InMemoryDB) LoadTableState(tableID string) (*db.TableState, error) {
 
 // DeleteTableState deletes table state from memory
 func (m *InMemoryDB) DeleteTableState(tableID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	delete(m.tableStates, tableID)
 	delete(m.playerStates, tableID)
 	delete(m.disconnectedPlayers, tableID)
@@ -102,6 +134,8 @@ func (m *InMemoryDB) DeleteTableState(tableID string) error {
 
 // SavePlayerState saves player state to memory
 func (m *InMemoryDB) SavePlayerState(tableID string, playerState *db.PlayerState) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.playerStates[tableID] == nil {
 		m.playerStates[tableID] = make(map[string]*db.PlayerState)
 	}
@@ -111,6 +145,8 @@ func (m *InMemoryDB) SavePlayerState(tableID string, playerState *db.PlayerState
 
 // LoadPlayerStates loads all player states for a table from memory
 func (m *InMemoryDB) LoadPlayerStates(tableID string) ([]*db.PlayerState, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	tablePlayerStates := m.playerStates[tableID]
 	if tablePlayerStates == nil {
 		return []*db.PlayerState{}, nil
@@ -125,6 +161,8 @@ func (m *InMemoryDB) LoadPlayerStates(tableID string) ([]*db.PlayerState, error)
 
 // DeletePlayerState deletes player state from memory
 func (m *InMemoryDB) DeletePlayerState(tableID, playerID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.playerStates[tableID] != nil {
 		delete(m.playerStates[tableID], playerID)
 	}
@@ -134,38 +172,10 @@ func (m *InMemoryDB) DeletePlayerState(tableID, playerID string) error {
 	return nil
 }
 
-// SetPlayerDisconnected marks a player as disconnected
-func (m *InMemoryDB) SetPlayerDisconnected(tableID, playerID string) error {
-	if m.disconnectedPlayers[tableID] == nil {
-		m.disconnectedPlayers[tableID] = make(map[string]bool)
-	}
-	m.disconnectedPlayers[tableID][playerID] = true
-	return nil
-}
-
-// SetPlayerConnected marks a player as connected
-func (m *InMemoryDB) SetPlayerConnected(tableID, playerID string) error {
-	if m.disconnectedPlayers[tableID] == nil {
-		m.disconnectedPlayers[tableID] = make(map[string]bool)
-	}
-	m.disconnectedPlayers[tableID][playerID] = false
-	return nil
-}
-
-// IsPlayerDisconnected checks if a player is disconnected
-func (m *InMemoryDB) IsPlayerDisconnected(tableID, playerID string) (bool, error) {
-	if m.disconnectedPlayers[tableID] == nil {
-		return false, fmt.Errorf("player state not found")
-	}
-	isDisconnected, exists := m.disconnectedPlayers[tableID][playerID]
-	if !exists {
-		return false, fmt.Errorf("player state not found")
-	}
-	return isDisconnected, nil
-}
-
 // GetAllTableIDs returns all table IDs
 func (m *InMemoryDB) GetAllTableIDs() ([]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	tableIDs := make([]string, 0, len(m.tableStates))
 	for tableID := range m.tableStates {
 		tableIDs = append(tableIDs, tableID)
@@ -837,9 +847,213 @@ func TestJoinTable(t *testing.T) {
 	assert.Contains(t, resp.Message, "Insufficient DCR balance")
 }
 
+// TestSnapshotRestoresCurrentPlayer ensures that when a snapshot is taken while it is a particular
+// player's turn (and that player subsequently disconnects), restoring the table from the persisted
+// snapshot correctly identifies the same player as the current player to act.
+func TestSnapshotRestoresCurrentPlayer(t *testing.T) {
+	// Use the same in-memory DB for the two server instances so that persisted state survives.
+	db := NewInMemoryDB()
+	defer db.Close()
+
+	logBackend := createTestLogBackend()
+	defer logBackend.Close()
+
+	// First server instance — runs the game and produces a snapshot.
+	srv1 := &TestServer{Server: NewServer(db, logBackend)}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Players
+	p1 := "p1"
+	p2 := "p2"
+	p3 := "p3"
+
+	// Fund players
+	for _, pid := range []string{p1, p2, p3} {
+		_, err := srv1.UpdateBalance(ctx, &pokerrpc.UpdateBalanceRequest{
+			PlayerId:    pid,
+			Amount:      5000,
+			Description: "initial",
+		})
+		require.NoError(t, err)
+	}
+
+	// p1 creates table
+	createResp, err := srv1.CreateTable(ctx, &pokerrpc.CreateTableRequest{
+		PlayerId:      p1,
+		SmallBlind:    5,
+		BigBlind:      10,
+		MinPlayers:    3,
+		MaxPlayers:    6,
+		BuyIn:         100,
+		StartingChips: 1000,
+	})
+	require.NoError(t, err)
+	tableID := createResp.TableId
+
+	// p2 and p3 join
+	for _, pid := range []string{p2, p3} {
+		joinResp, err := srv1.JoinTable(ctx, &pokerrpc.JoinTableRequest{
+			PlayerId: pid,
+			TableId:  tableID,
+		})
+		require.NoError(t, err)
+		assert.True(t, joinResp.Success)
+	}
+
+	// Everyone ready
+	for _, pid := range []string{p1, p2, p3} {
+		_, err := srv1.SetPlayerReady(ctx, &pokerrpc.SetPlayerReadyRequest{
+			PlayerId: pid,
+			TableId:  tableID,
+		})
+		require.NoError(t, err)
+	}
+
+	// Wait for game to start
+	var currentPlayer string
+	for i := 0; i < 20; i++ {
+		time.Sleep(25 * time.Millisecond)
+		stateResp, err := srv1.GetGameState(ctx, &pokerrpc.GetGameStateRequest{TableId: tableID})
+		require.NoError(t, err)
+
+		if stateResp.GameState.GameStarted && stateResp.GameState.CurrentPlayer != "" {
+			currentPlayer = stateResp.GameState.CurrentPlayer
+			break
+		}
+	}
+	require.NotEmpty(t, currentPlayer, "failed to retrieve current player")
+
+	// Simulate the current player disconnecting.
+	require.NoError(t, srv1.markPlayerDisconnected(tableID, currentPlayer))
+
+	// Give the async persistence some time to complete safely.
+	time.Sleep(50 * time.Millisecond)
+
+	// Second server instance — loads the previously saved snapshot.
+	srv2 := &TestServer{Server: NewServer(db, logBackend)}
+
+	// After restoration, the same player should still be the current player to act.
+	restoredState, err := srv2.GetGameState(ctx, &pokerrpc.GetGameStateRequest{TableId: tableID})
+	require.NoError(t, err)
+	assert.Equal(t, currentPlayer, restoredState.GameState.CurrentPlayer, "current player should be restored correctly from snapshot")
+}
+
 // Close properly stops the server and cleans up resources
 func (ts *TestServer) Close() {
 	if ts.Server != nil {
 		ts.Server.Stop()
 	}
+}
+
+// Add new test to verify correct blind posting and balances in heads-up game
+func TestBlindPostingAndBalances(t *testing.T) {
+	// Create isolated in-memory DB and server
+	db := NewInMemoryDB()
+	defer db.Close()
+
+	logBackend := createTestLogBackend()
+	defer logBackend.Close()
+
+	srv := &TestServer{Server: NewServer(db, logBackend)}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Players
+	p1 := "p1"
+	p2 := "p2"
+
+	// Fund players with sufficient DCR balance (atoms)
+	for _, pid := range []string{p1, p2} {
+		_, err := srv.UpdateBalance(ctx, &pokerrpc.UpdateBalanceRequest{
+			PlayerId:    pid,
+			Amount:      5000,
+			Description: "initial deposit",
+		})
+		require.NoError(t, err)
+	}
+
+	// p1 creates a heads-up table (minPlayers=2)
+	const (
+		startingChips int64 = 1000
+		smallBlind          = int64(5)
+		bigBlind            = int64(10)
+	)
+
+	createResp, err := srv.CreateTable(ctx, &pokerrpc.CreateTableRequest{
+		PlayerId:      p1,
+		SmallBlind:    smallBlind,
+		BigBlind:      bigBlind,
+		MinPlayers:    2,
+		MaxPlayers:    2,
+		BuyIn:         100,
+		StartingChips: startingChips,
+	})
+	require.NoError(t, err)
+	tableID := createResp.TableId
+
+	// p2 joins
+	joinResp, err := srv.JoinTable(ctx, &pokerrpc.JoinTableRequest{PlayerId: p2, TableId: tableID})
+	require.NoError(t, err)
+	require.True(t, joinResp.Success)
+
+	// Both players ready. Note: p1 ready first (common user flow)
+	for _, pid := range []string{p1, p2} {
+		_, err := srv.SetPlayerReady(ctx, &pokerrpc.SetPlayerReadyRequest{PlayerId: pid, TableId: tableID})
+		require.NoError(t, err)
+	}
+
+	// Wait for game to start
+	waitFor := func(cond func(*pokerrpc.GameUpdate) bool) *pokerrpc.GameUpdate {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			st, err := srv.GetGameState(ctx, &pokerrpc.GetGameStateRequest{TableId: tableID})
+			require.NoError(t, err)
+			if cond(st.GameState) {
+				return st.GameState
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatal("condition not satisfied in time")
+		return nil
+	}
+
+	gameState := waitFor(func(g *pokerrpc.GameUpdate) bool { return g.GameStarted && g.CurrentPlayer != "" })
+
+	// Identify current player (should be small blind/dealer in heads-up)
+	currentPlayer := gameState.CurrentPlayer
+	require.Contains(t, []string{p1, p2}, currentPlayer)
+
+	// Current player calls to match big blind
+	_, err = srv.Call(ctx, &pokerrpc.CallRequest{PlayerId: currentPlayer, TableId: tableID})
+	require.NoError(t, err)
+
+	// Fetch updated state
+	updatedState := waitFor(func(g *pokerrpc.GameUpdate) bool { return true })
+
+	// Helper to fetch player info
+	findPlayer := func(pid string) *pokerrpc.Player {
+		for _, pl := range updatedState.Players {
+			if pl.Id == pid {
+				return pl
+			}
+		}
+		return nil
+	}
+
+	p1Info := findPlayer(p1)
+	p2Info := findPlayer(p2)
+	require.NotNil(t, p1Info)
+	require.NotNil(t, p2Info)
+
+	// Both players should now have exactly bigBlind (10) committed and balances deducted once.
+	expectedBalance := startingChips - bigBlind // 1000 - 10 = 990
+
+	assert.Equal(t, bigBlind, p1Info.CurrentBet, "p1 CurrentBet should equal big blind once")
+	assert.Equal(t, bigBlind, p2Info.CurrentBet, "p2 CurrentBet should equal big blind once")
+
+	assert.Equal(t, expectedBalance, p1Info.Balance, "p1 balance incorrect after blinds and call")
+	assert.Equal(t, expectedBalance, p2Info.Balance, "p2 balance incorrect after blinds and call")
 }

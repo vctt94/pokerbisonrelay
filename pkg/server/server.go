@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort" // ensure deterministic ordering when (de)serializing player slices
 	"sync"
 	"time"
 
@@ -46,6 +47,9 @@ type Server struct {
 	saveMutexes map[string]*sync.Mutex // tableID -> mutex for that table's saves
 	saveMu      sync.RWMutex           // protects saveMutexes map
 
+	// WaitGroup to ensure all async save goroutines complete before Shutdown
+	saveWg sync.WaitGroup
+
 	// Event-driven architecture components
 	eventProcessor *EventProcessor
 }
@@ -80,6 +84,8 @@ func (s *Server) Stop() {
 	if s.eventProcessor != nil {
 		s.eventProcessor.Stop()
 	}
+	// Wait for any in-flight asynchronous saves to complete before returning.
+	s.saveWg.Wait()
 }
 
 // saveTableStateAsync saves table state asynchronously to avoid blocking game operations
@@ -93,7 +99,12 @@ func (s *Server) saveTableStateAsync(tableID string, reason string) {
 	}
 	s.saveMu.Unlock()
 
+	// Increment the WaitGroup to track this goroutine
+	s.saveWg.Add(1)
+
 	go func() {
+		// Ensure the WaitGroup is decremented upon completion
+		defer s.saveWg.Done()
 		// Acquire the table-specific mutex to serialize saves for this table
 		saveMutex.Lock()
 		defer saveMutex.Unlock()
@@ -156,9 +167,8 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 		AutoStartDelay: 5 * time.Second,
 	}
 
+	// Create table
 	table := poker.NewTable(cfg)
-
-	// Set up event manager with notification sender and state saver
 	table.SetNotificationSender(s)
 	table.SetStateSaver(s)
 
@@ -174,7 +184,10 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 		return nil, err
 	}
 
+	// Now that the table is fully initialized and the creator seated, register it.
 	s.tables[cfg.ID] = table
+
+	// Table already added to map above; no further action needed here.
 
 	return &pokerrpc.CreateTableResponse{TableId: cfg.ID}, nil
 }
@@ -238,7 +251,8 @@ func (s *Server) JoinTable(ctx context.Context, req *pokerrpc.JoinTableRequest) 
 		table.RemoveUser(req.PlayerId)
 		return nil, err
 	}
-	newUser.DCRAccountBalance = dcrBalance - config.BuyIn
+	// Update player's on-table DCR balance atomically to avoid data races with concurrent snapshots.
+	_ = table.SetUserDCRAccountBalance(req.PlayerId, dcrBalance-config.BuyIn)
 
 	// Persist player state.
 	if err := s.saveUserAsPlayerState(req.TableId, newUser); err != nil {
@@ -294,13 +308,13 @@ func (s *Server) LeaveTable(ctx context.Context, req *pokerrpc.LeaveTableRequest
 
 	// If game is in progress and player has chips, create placeholder instead of removing
 	if table.IsGameStarted() && playerChips > 0 {
-		// Mark player as disconnected but keep them in the game
-		err := s.markPlayerDisconnected(req.TableId, req.PlayerId)
-		if err != nil {
-			s.log.Errorf("Failed to mark player as disconnected: %v", err)
-		}
+		// Directly mark as disconnected while holding the existing server lock to
+		// avoid re-deadlocking by acquiring it a second time inside
+		// markPlayerDisconnected().
+		user.IsDisconnected = true
 
-		// Save current game state (async)
+		// Persist the table snapshot asynchronously after mutating the in-memory
+		// state.
 		s.saveTableStateAsync(req.TableId, "player disconnected")
 
 		return &pokerrpc.LeaveTableResponse{
@@ -510,7 +524,23 @@ func (s *Server) SetPlayerReady(ctx context.Context, req *pokerrpc.SetPlayerRead
 
 	// If all players are ready and the game hasn't started yet, start the game
 	if allReady && !gameStarted {
-		_ = table.StartGame()
+		if errStart := table.StartGame(); errStart != nil {
+			return nil, status.Error(codes.Internal, fmt.Sprintf("failed to start game: %v", errStart))
+		}
+
+		// Collect and publish a dedicated GAME_STARTED event *after* the game has been
+		// successfully created so that the emitted snapshot reflects the brand-new
+		// game state (dealer, blinds, current player, etc.). Without this, the first
+		// game update received by the clients would still be in the pre-start state
+		// which prevents the UI from progressing to the actual hand.
+		gameStartedEvent, errGS := CollectGameEventSnapshot(GameEventTypeGameStarted, s, req.TableId, req.PlayerId, 0, map[string]interface{}{
+			"message": fmt.Sprintf("Game started on table %s", req.TableId),
+		})
+		if errGS != nil {
+			s.log.Errorf("Failed to collect GAME_STARTED event snapshot: %v", errGS)
+		} else {
+			s.eventProcessor.PublishEvent(gameStartedEvent)
+		}
 	}
 
 	return &pokerrpc.SetPlayerReadyResponse{
@@ -1197,49 +1227,29 @@ func (s *Server) saveTableState(tableID string) error {
 		dbTableState.DeckState = tableSnapshot.Game.DeckState
 	}
 
-	// Save table state
-	err := s.db.SaveTableState(dbTableState)
-	if err != nil {
-		return fmt.Errorf("failed to save table state: %v", err)
-	}
+	// Build an aggregated, de-duplicated set of player states.
+	playerStateMap := make(map[string]*db.PlayerState)
 
-	// Save user states from snapshot
+	// First gather the table users (these include players that might not yet be seated in a running game).
 	for _, user := range tableSnapshot.Users {
-		err := s.saveUserSnapshotAsPlayerState(tableID, struct {
-			ID                string
-			TableSeat         int
-			IsReady           bool
-			DCRAccountBalance int64
-		}{
-			ID:                user.ID,
-			TableSeat:         user.TableSeat,
-			IsReady:           user.IsReady,
-			DCRAccountBalance: user.DCRAccountBalance,
-		})
-		if err != nil {
-			s.log.Errorf("Failed to save user state for %s: %v", user.ID, err)
+		ps := &db.PlayerState{
+			PlayerID:        user.ID,
+			TableID:         tableID,
+			TableSeat:       user.TableSeat,
+			IsReady:         user.IsReady,
+			Balance:         0,
+			StartingBalance: 0,
+			GameState:       "AT_TABLE",
 		}
+		playerStateMap[user.ID] = ps
 	}
 
-	// Save active game player states if game is running
+	// Then override/add any players that are part of the active game so that their in-game state is captured.
 	if tableSnapshot.Game != nil {
 		for _, player := range tableSnapshot.Game.Players {
-			err := s.savePlayerSnapshotAsPlayerState(tableID, struct {
-				ID              string
-				TableSeat       int
-				IsReady         bool
-				Balance         int64
-				StartingBalance int64
-				HasBet          int64
-				HasFolded       bool
-				IsAllIn         bool
-				IsDealer        bool
-				IsTurn          bool
-				GameState       string
-				Hand            []poker.Card
-				HandDescription string
-			}{
-				ID:              player.ID,
+			ps := &db.PlayerState{
+				PlayerID:        player.ID,
+				TableID:         tableID,
 				TableSeat:       player.TableSeat,
 				IsReady:         player.IsReady,
 				Balance:         player.Balance,
@@ -1252,11 +1262,27 @@ func (s *Server) saveTableState(tableID string) error {
 				GameState:       player.GetGameState(),
 				Hand:            player.Hand,
 				HandDescription: player.HandDescription,
-			})
-			if err != nil {
-				s.log.Errorf("Failed to save player state for %s: %v", player.ID, err)
 			}
+			playerStateMap[player.ID] = ps
 		}
+	}
+
+	// Convert map to slice for saving, but ensure deterministic ordering by table seat so
+	// that the saved CurrentPlayer index will correctly map back to the same player
+	// after restoration regardless of map iteration order.
+	aggregatedPlayerStates := make([]*db.PlayerState, 0, len(playerStateMap))
+	for _, ps := range playerStateMap {
+		aggregatedPlayerStates = append(aggregatedPlayerStates, ps)
+	}
+
+	// Sort by TableSeat to guarantee stable order across save/load cycles.
+	sort.Slice(aggregatedPlayerStates, func(i, j int) bool {
+		return aggregatedPlayerStates[i].TableSeat < aggregatedPlayerStates[j].TableSeat
+	})
+
+	// Persist the whole snapshot atomically.
+	if err := s.db.SaveSnapshot(dbTableState, aggregatedPlayerStates); err != nil {
+		return fmt.Errorf("failed to save table snapshot: %v", err)
 	}
 
 	return nil
@@ -1269,10 +1295,9 @@ func (s *Server) saveUserAsPlayerState(tableID string, user *poker.User) error {
 		TableID:         tableID,
 		TableSeat:       user.TableSeat,
 		IsReady:         user.IsReady,
-		IsDisconnected:  false, // Will be set separately when player disconnects
-		LastAction:      "",    // Will be set by database
-		Balance:         0,     // No game chips when just seated at table
-		StartingBalance: 0,     // No starting balance until game starts
+		LastAction:      "", // Will be set by database
+		Balance:         0,  // No game chips when just seated at table
+		StartingBalance: 0,  // No starting balance until game starts
 
 		IsAllIn:         false,
 		IsDealer:        false,
@@ -1296,10 +1321,9 @@ func (s *Server) saveUserSnapshotAsPlayerState(tableID string, snapshot struct {
 		TableID:         tableID,
 		TableSeat:       snapshot.TableSeat,
 		IsReady:         snapshot.IsReady,
-		IsDisconnected:  false, // Will be set separately when player disconnects
-		LastAction:      "",    // Will be set by database
-		Balance:         0,     // No game chips when just seated at table
-		StartingBalance: 0,     // No starting balance until game starts
+		LastAction:      "", // Will be set by database
+		Balance:         0,  // No game chips when just seated at table
+		StartingBalance: 0,  // No starting balance until game starts
 
 		IsAllIn:         false,
 		IsDealer:        false,
@@ -1318,8 +1342,7 @@ func (s *Server) savePlayerState(tableID string, player *poker.Player) error {
 		TableID:         tableID,
 		TableSeat:       player.TableSeat,
 		IsReady:         player.IsReady,
-		IsDisconnected:  false, // Will be set separately when player disconnects
-		LastAction:      "",    // Will be set by database
+		LastAction:      "", // Will be set by database
 		Balance:         player.Balance,
 		StartingBalance: player.StartingBalance,
 		HasBet:          player.HasBet,
@@ -1356,8 +1379,7 @@ func (s *Server) savePlayerSnapshotAsPlayerState(tableID string, snapshot struct
 		TableID:         tableID,
 		TableSeat:       snapshot.TableSeat,
 		IsReady:         snapshot.IsReady,
-		IsDisconnected:  false, // Will be set separately when player disconnects
-		LastAction:      "",    // Will be set by database
+		LastAction:      "", // Will be set by database
 		Balance:         snapshot.Balance,
 		StartingBalance: snapshot.StartingBalance,
 		HasBet:          snapshot.HasBet,
@@ -1402,11 +1424,24 @@ func (s *Server) loadTableFromDatabase(tableID string) (*poker.Table, error) {
 	table.SetNotificationSender(s)
 	table.SetStateSaver(s)
 
+	// Register the table early so that any asynchronous snapshot operations
+	// triggered during restoration can successfully locate it.
+	s.mu.Lock()
+	s.tables[tableID] = table
+	s.mu.Unlock()
+
 	// Load player states
 	dbPlayerStates, err := s.db.LoadPlayerStates(tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load player states: %v", err)
 	}
+
+	// Ensure deterministic order by sorting by seat before we recreate users. This guarantees
+	// that the index-based CurrentPlayer value persisted in the snapshot correctly
+	// references the same logical player once the game is restored.
+	sort.Slice(dbPlayerStates, func(i, j int) bool {
+		return dbPlayerStates[i].TableSeat < dbPlayerStates[j].TableSeat
+	})
 
 	// Restore users to table
 	for _, dbPlayerState := range dbPlayerStates {
@@ -1475,20 +1510,34 @@ func (s *Server) restoreGameState(table *poker.Table, dbTableState *db.TableStat
 	s.log.Infof("Restoring game state for table %s: phase=%s, dealer=%d, currentPlayer=%d",
 		dbTableState.ID, dbTableState.GamePhase, dbTableState.Dealer, dbTableState.CurrentPlayer)
 
-	// Start a new game which will create the internal game state
-	err := table.StartGame()
+	// Build a fresh *poker.Game without triggering any hand setup logic. This
+	// avoids posting blinds or dealing cards again during restoration.
+
+	tblCfg := table.GetConfig()
+
+	users := table.GetUsers()
+	// Ensure stable ordering by seat so indices match persisted data.
+	sort.Slice(users, func(i, j int) bool { return users[i].TableSeat < users[j].TableSeat })
+
+	gCfg := poker.GameConfig{
+		NumPlayers:     len(users),
+		StartingChips:  tblCfg.StartingChips,
+		SmallBlind:     tblCfg.SmallBlind,
+		BigBlind:       tblCfg.BigBlind,
+		AutoStartDelay: tblCfg.AutoStartDelay,
+		Log:            s.logBackend.Logger("GAME"),
+	}
+
+	game, err := poker.NewGame(gCfg)
 	if err != nil {
-		s.log.Errorf("Failed to start game during restoration: %v", err)
-		// If starting game fails, we'll just set the table to correct state without game
-
-		return err
+		return fmt.Errorf("failed to create game during restoration: %v", err)
 	}
 
-	// Get the game that was just created
-	game := table.GetGame()
-	if game == nil {
-		return fmt.Errorf("game is nil after starting")
-	}
+	// Populate game players from table users (creates fresh *Player objects).
+	game.SetPlayers(users)
+
+	// Inject the reconstructed game into the table (sets state to GAME_ACTIVE).
+	table.RestoreGame(game)
 
 	// Restore community cards
 	if dbTableState.CommunityCards != nil {
@@ -1514,9 +1563,13 @@ func (s *Server) restoreGameState(table *poker.Table, dbTableState *db.TableStat
 	)
 
 	// Restore player state from database, including hands
-	for _, dbPlayerState := range dbPlayerStates {
-		for _, player := range game.GetPlayers() {
-			if player.ID == dbPlayerState.PlayerID {
+	game.ModifyPlayers(func(players []*poker.Player) {
+		for _, dbPlayerState := range dbPlayerStates {
+			for _, player := range players {
+				if player.ID != dbPlayerState.PlayerID {
+					continue
+				}
+
 				// Restore game state fields
 				player.Balance = dbPlayerState.Balance
 				player.StartingBalance = dbPlayerState.StartingBalance
@@ -1544,7 +1597,6 @@ func (s *Server) restoreGameState(table *poker.Table, dbTableState *db.TableStat
 				// Set table-level state
 				player.TableSeat = dbPlayerState.TableSeat
 				player.IsReady = dbPlayerState.IsReady
-				player.IsDisconnected = dbPlayerState.IsDisconnected
 
 				s.log.Debugf("Restored player %s: balance=%d, hasbet=%d, folded=%v, disconnected=%v",
 					player.ID, player.Balance, player.HasBet, player.HasFolded, player.IsDisconnected)
@@ -1552,7 +1604,20 @@ func (s *Server) restoreGameState(table *poker.Table, dbTableState *db.TableStat
 				break
 			}
 		}
+	})
+
+	// Reconstruct pot based on each player's saved bet so that GetPot() matches
+	// the persisted total. We do this outside the ModifyPlayers block to avoid
+	// holding the game write-lock for the additional potManager updates.
+	for idx, p := range game.GetPlayers() {
+		if p.HasBet > 0 {
+			game.AddToPotForPlayer(idx, p.HasBet)
+		}
 	}
+
+	// Ensure the pot total matches the snapshot exactly (bets alone may not
+	// capture contributions from previous betting rounds).
+	game.ForceSetPot(dbTableState.Pot)
 
 	s.log.Infof("Successfully restored game state: dealer=%d, currentPlayer=%d, pot=%d, phase=%s, players=%d",
 		dbTableState.Dealer, dbTableState.CurrentPlayer, dbTableState.Pot, dbTableState.GamePhase, len(game.GetPlayers()))
@@ -1584,29 +1649,43 @@ func (s *Server) parseGamePhase(phaseStr string) pokerrpc.GamePhase {
 
 // markPlayerDisconnected marks a player as disconnected but keeps them in the game
 func (s *Server) markPlayerDisconnected(tableID, playerID string) error {
-	// Save current game state first
-	err := s.saveTableState(tableID)
-	if err != nil {
-		s.log.Errorf("Failed to save table state when player %s disconnected: %v", playerID, err)
+	s.mu.Lock()
+	table, ok := s.tables[tableID]
+	if !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("table not found")
 	}
-
-	// Mark player as disconnected in database
-	err = s.db.SetPlayerDisconnected(tableID, playerID)
-	if err != nil {
-		return fmt.Errorf("failed to mark player as disconnected: %v", err)
+	user := table.GetUser(playerID)
+	if user == nil {
+		s.mu.Unlock()
+		return fmt.Errorf("player not found at table")
 	}
+	user.IsDisconnected = true
+	s.mu.Unlock()
 
+	// Persist table snapshot asynchronously so flag is saved in memory snapshot only.
+	s.saveTableStateAsync(tableID, "player disconnected")
 	s.log.Infof("Player %s marked as disconnected from table %s", playerID, tableID)
 	return nil
 }
 
 // markPlayerConnected marks a player as connected
 func (s *Server) markPlayerConnected(tableID, playerID string) error {
-	err := s.db.SetPlayerConnected(tableID, playerID)
-	if err != nil {
-		return fmt.Errorf("failed to mark player as connected: %v", err)
+	s.mu.Lock()
+	table, ok := s.tables[tableID]
+	if !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("table not found")
 	}
+	user := table.GetUser(playerID)
+	if user == nil {
+		s.mu.Unlock()
+		return fmt.Errorf("player not found at table")
+	}
+	user.IsDisconnected = false
+	s.mu.Unlock()
 
+	s.saveTableStateAsync(tableID, "player reconnected")
 	s.log.Infof("Player %s marked as connected to table %s", playerID, tableID)
 	return nil
 }
@@ -1672,45 +1751,35 @@ func (s *Server) cleanupDisconnectedPlayersForTable(tableID string) {
 		return
 	}
 
-	// Get all player states for this table
-	dbPlayerStates, err := s.db.LoadPlayerStates(tableID)
-	if err != nil {
-		s.log.Errorf("Failed to load player states for cleanup: %v", err)
-		return
-	}
-
 	playersToRemove := []string{}
 
-	// Check each disconnected player
-	for _, dbPlayerState := range dbPlayerStates {
-		if dbPlayerState.IsDisconnected {
-			// Remove players with 0 chips who are disconnected
-			if dbPlayerState.Balance == 0 {
-				playersToRemove = append(playersToRemove, dbPlayerState.PlayerID)
-				s.log.Infof("Marking disconnected player %s with 0 chips for removal", dbPlayerState.PlayerID)
-			}
-			// TODO: Add time-based cleanup (remove players disconnected for more than X minutes)
-		}
-	}
-
-	// Remove the marked players
-	for _, playerID := range playersToRemove {
-		err := table.RemoveUser(playerID)
-		if err != nil {
-			s.log.Errorf("Failed to remove disconnected player %s: %v", playerID, err)
+	for _, user := range table.GetUsers() {
+		if !user.IsDisconnected {
 			continue
 		}
-
-		err = s.db.DeletePlayerState(tableID, playerID)
-		if err != nil {
-			s.log.Errorf("Failed to delete disconnected player state %s: %v", playerID, err)
+		// Determine chip balance: if game active, look at game player; else 0 chips triggers removal.
+		chipBalance := int64(0)
+		if table.IsGameStarted() && table.GetGame() != nil {
+			for _, gp := range table.GetGame().GetPlayers() {
+				if gp.ID == user.ID {
+					chipBalance = gp.Balance
+					break
+				}
+			}
 		}
+		if chipBalance == 0 {
+			playersToRemove = append(playersToRemove, user.ID)
+			s.log.Infof("Marking disconnected player %s with 0 chips for removal", user.ID)
+		}
+		// TODO: time-based cleanup as before
+	}
 
-		s.log.Infof("Cleaned up disconnected player %s from table %s", playerID, tableID)
+	for _, pid := range playersToRemove {
+		_ = table.RemoveUser(pid)
+		_ = s.db.DeletePlayerState(tableID, pid)
 	}
 
 	if len(playersToRemove) > 0 {
-		// Save updated table state
 		s.saveTableStateAsync(tableID, "disconnected player cleanup")
 	}
 }
@@ -1745,11 +1814,13 @@ func (s *Server) handlePlayerReconnection(tableID, playerID string) error {
 		return fmt.Errorf("player not found at table")
 	}
 
-	// Mark player as connected in database
-	err := s.markPlayerConnected(tableID, playerID)
-	if err != nil {
-		s.log.Errorf("Failed to mark player as connected: %v", err)
-	}
+	// Directly mark as connected while holding the server lock to prevent a
+	// nested lock deadlock.
+	user.IsDisconnected = false
+
+	// Persist the change so that the player's reconnected status survives server
+	// restarts.
+	s.saveTableStateAsync(tableID, "player reconnected")
 
 	// Collect all data needed for async operations while holding lock
 	playerIDs := s.getTablePlayerIDs(tableID)
@@ -1848,10 +1919,12 @@ func (s *Server) handlePlayerDisconnection(tableID, playerID string) error {
 
 	// If player has chips in an active game, mark as disconnected but keep in game
 	if table.IsGameStarted() && playerChips > 0 {
-		err := s.markPlayerDisconnected(tableID, playerID)
-		if err != nil {
-			s.log.Errorf("Failed to mark player as disconnected: %v", err)
-		}
+		// Directly mark as disconnected to avoid attempting to re-enter the
+		// server mutex inside markPlayerDisconnected() which would deadlock.
+		user.IsDisconnected = true
+
+		// Persist the updated disconnected flag.
+		s.saveTableStateAsync(tableID, "player disconnected")
 
 		// Collect all data needed for async operations while holding lock
 		playerIDs := s.getTablePlayerIDs(tableID)
@@ -1954,10 +2027,13 @@ func (s *Server) handlePlayerDisconnectionInternal(tableID, playerID string) err
 
 	// If player has chips in an active game, mark as disconnected but keep in game
 	if table.IsGameStarted() && playerChips > 0 {
-		err := s.markPlayerDisconnected(tableID, playerID)
-		if err != nil {
-			s.log.Errorf("Failed to mark player as disconnected: %v", err)
-		}
+		// Directly mark as disconnected to avoid attempting to re-enter the
+		// server mutex inside markPlayerDisconnected() which would deadlock.
+		user.IsDisconnected = true
+
+		// Collect all data needed for async operations while holding lock
+		playerIDs := s.getTablePlayerIDs(tableID)
+		gameStates := s.buildGameStatesForAllPlayers(tableID)
 
 		// Build notification data while holding lock
 		disconnectNotification := &pokerrpc.Notification{
@@ -1966,12 +2042,6 @@ func (s *Server) handlePlayerDisconnectionInternal(tableID, playerID string) err
 			TableId:  tableID,
 			Message:  fmt.Sprintf("Player %s has disconnected (chips preserved)", playerID),
 		}
-
-		// Build game states for all players while holding the lock
-		gameStates := s.buildGameStatesForAllPlayers(tableID)
-
-		// Get player IDs while holding the lock
-		playerIDs := s.getTablePlayerIDs(tableID)
 
 		// Release lock before async operations
 		s.mu.Unlock()

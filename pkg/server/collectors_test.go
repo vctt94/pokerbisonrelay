@@ -19,11 +19,9 @@ func (stubDB) SaveTableState(*db.TableState) error                     { return 
 func (stubDB) LoadTableState(string) (*db.TableState, error)           { return nil, nil }
 func (stubDB) DeleteTableState(string) error                           { return nil }
 func (stubDB) SavePlayerState(string, *db.PlayerState) error           { return nil }
+func (stubDB) SaveSnapshot(*db.TableState, []*db.PlayerState) error    { return nil }
 func (stubDB) LoadPlayerStates(string) ([]*db.PlayerState, error)      { return nil, nil }
 func (stubDB) DeletePlayerState(string, string) error                  { return nil }
-func (stubDB) SetPlayerDisconnected(string, string) error              { return nil }
-func (stubDB) SetPlayerConnected(string, string) error                 { return nil }
-func (stubDB) IsPlayerDisconnected(string, string) (bool, error)       { return false, nil }
 func (stubDB) GetAllTableIDs() ([]string, error)                       { return nil, nil }
 func (stubDB) Close() error                                            { return nil }
 

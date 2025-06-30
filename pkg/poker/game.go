@@ -194,33 +194,33 @@ func stateBlinds(entity *Game, callback func(stateName string, event statemachin
 		bigBlindPos = (entity.dealer + 1) % numPlayers
 	}
 
-	// Post small blind
-	if entity.players[smallBlindPos] != nil {
-		smallBlindAmount := entity.config.SmallBlind
-		if smallBlindAmount > entity.players[smallBlindPos].Balance {
-			if callback != nil {
-				callback("END", statemachine.StateEntered)
-			}
-			return stateEnd // Not enough balance for small blind
+	// Helper that posts a blind only if it hasn't already been posted for the hand.
+	postBlind := func(pos int, amount int64) {
+		p := entity.players[pos]
+		if p == nil {
+			return
 		}
-		entity.players[smallBlindPos].Balance -= smallBlindAmount
-		entity.players[smallBlindPos].HasBet = smallBlindAmount
-		entity.potManager.AddBet(smallBlindPos, smallBlindAmount)
+		// Skip if this player already has an equal or greater bet recorded (blind already posted).
+		if p.HasBet >= amount {
+			return
+		}
+		if amount > p.Balance {
+			// Player cannot cover blind – treat as all-in of remaining balance.
+			amount = p.Balance
+			p.IsAllIn = true
+		}
+		p.Balance -= amount
+		p.HasBet += amount
+		entity.potManager.AddBet(pos, amount)
 	}
 
-	// Post big blind
-	if entity.players[bigBlindPos] != nil {
-		bigBlindAmount := entity.config.BigBlind
-		if bigBlindAmount > entity.players[bigBlindPos].Balance {
-			if callback != nil {
-				callback("END", statemachine.StateEntered)
-			}
-			return stateEnd // Not enough balance for big blind
-		}
-		entity.players[bigBlindPos].Balance -= bigBlindAmount
-		entity.players[bigBlindPos].HasBet = bigBlindAmount
-		entity.potManager.AddBet(bigBlindPos, bigBlindAmount)
-		entity.currentBet = bigBlindAmount // Set current bet to big blind amount
+	// Post blinds, guarding against duplicates.
+	postBlind(smallBlindPos, entity.config.SmallBlind)
+	postBlind(bigBlindPos, entity.config.BigBlind)
+
+	// Ensure currentBet reflects the actual high blind.
+	if entity.currentBet < entity.config.BigBlind {
+		entity.currentBet = entity.config.BigBlind
 	}
 
 	// Set first player to act (after big blind for pre-flop)
@@ -1377,4 +1377,36 @@ func (g *Game) GetStateSnapshot() GameStateSnapshot {
 		DeckState:      g.deck.GetState(),
 		Players:        playersCopy,
 	}
+}
+
+// ModifyPlayers executes the provided function while holding the game's write
+// lock, giving callers safe, exclusive access to the underlying slice of
+// players. This is useful for code that needs to mutate player state outside
+// of the poker package (for example, when restoring snapshots) while still
+// guaranteeing there are no data races with concurrent reads performed via
+// GetStateSnapshot.
+func (g *Game) ModifyPlayers(fn func(players []*Player)) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	fn(g.players)
+}
+
+// ForceSetPot sets the amount of the main pot directly. This is intended to
+// be used only during server-side restoration when rebuilding a game from a
+// persisted snapshot where the individual betting history is not available.
+func (g *Game) ForceSetPot(amount int64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.potManager == nil {
+		g.potManager = NewPotManager()
+	}
+
+	// Ensure there is at least a main pot.
+	if len(g.potManager.Pots) == 0 {
+		g.potManager.Pots = []*Pot{NewPot(0)}
+	}
+
+	// Set the amount on the main pot directly.
+	g.potManager.Pots[0].Amount = amount
 }

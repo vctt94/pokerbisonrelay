@@ -23,6 +23,7 @@ type User struct {
 	TableSeat         int   // Seat position at the table
 	IsReady           bool  // Ready to start/continue games
 	JoinedAt          time.Time
+	IsDisconnected    bool // Whether the user is disconnected
 }
 
 // NewUser creates a new user
@@ -1061,4 +1062,37 @@ func (t *Table) getGamePhase() pokerrpc.GamePhase {
 		return pokerrpc.GamePhase_WAITING
 	}
 	return t.game.phase
+}
+
+// SetUserDCRAccountBalance safely updates the DCRAccountBalance of a user seated at the table.
+// It acquires the table lock to synchronize concurrent access so that readers (e.g. state snapshots)
+// don't race with writers like JoinTable.
+func (t *Table) SetUserDCRAccountBalance(userID string, newBalance int64) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	u, ok := t.users[userID]
+	if !ok {
+		return fmt.Errorf("user not found at table")
+	}
+
+	u.DCRAccountBalance = newBalance
+	return nil
+}
+
+// RestoreGame replaces the current game pointer with a previously reconstructed
+// *Game instance during table restoration. It sets the table state to
+// GAME_ACTIVE without running any of the normal new-hand setup logic. This is
+// intended to be used exclusively by the server layer when rebuilding tables
+// from persisted snapshots.
+func (t *Table) RestoreGame(g *Game) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Directly set the game instance.
+	t.game = g
+
+	// Ensure the table state reflects that an active game is in progress so
+	// that other table methods (IsGameStarted, etc.) behave correctly.
+	t.stateMachine.SetState(tableStateGameActive)
 }

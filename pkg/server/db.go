@@ -17,6 +17,8 @@ type Database interface {
 
 	// Game state persistence
 	SaveTableState(tableState *db.TableState) error
+	// SaveSnapshot atomically persists a table state together with its related player states.
+	SaveSnapshot(tableState *db.TableState, playerStates []*db.PlayerState) error
 	LoadTableState(tableID string) (*db.TableState, error)
 	DeleteTableState(tableID string) error
 
@@ -24,11 +26,6 @@ type Database interface {
 	SavePlayerState(tableID string, playerState *db.PlayerState) error
 	LoadPlayerStates(tableID string) ([]*db.PlayerState, error)
 	DeletePlayerState(tableID, playerID string) error
-
-	// Placeholder management
-	SetPlayerDisconnected(tableID, playerID string) error
-	SetPlayerConnected(tableID, playerID string) error
-	IsPlayerDisconnected(tableID, playerID string) (bool, error)
 
 	// Table discovery
 	GetAllTableIDs() ([]string, error)
