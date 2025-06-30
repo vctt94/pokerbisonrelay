@@ -113,3 +113,29 @@ func TestCollectGameEventSnapshotInjectsPlayerID(t *testing.T) {
 		t.Fatalf("playerID mismatch: got %v", pid)
 	}
 }
+
+func TestPlayerJoinedCollectorNoTable(t *testing.T) {
+	s := newBareServer()
+
+	collector := &PlayerJoinedCollector{}
+	evt, err := collector.CollectSnapshot(s, "tid", "pid", 0, map[string]interface{}{"message": "joined"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if evt.TableSnapshot != nil {
+		t.Errorf("expected nil TableSnapshot when table doesn't exist")
+	}
+	if len(evt.PlayerIDs) != 1 || evt.PlayerIDs[0] != "pid" {
+		t.Errorf("expected PlayerIDs to contain only joining player, got %v", evt.PlayerIDs)
+	}
+}
+
+// TestCollectTableSnapshotMissingTable ensures an error is returned when trying
+// to snapshot a non-existent table.
+func TestCollectTableSnapshotMissingTable(t *testing.T) {
+	s := newBareServer()
+	_, err := s.collectTableSnapshot("unknown")
+	if err == nil {
+		t.Fatalf("expected error when table is missing, got nil")
+	}
+}
