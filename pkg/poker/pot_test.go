@@ -57,11 +57,11 @@ func TestUncalledBet(t *testing.T) {
 	// Create a new pot manager
 	pm := NewPotManager()
 
-	// Create some test players
+	// Create some test players using the NewPlayer constructor
 	players := []*Player{
-		{Balance: 100},
-		{Balance: 100},
-		{Balance: 100},
+		NewPlayer("player1", "Player 1", 100),
+		NewPlayer("player2", "Player 2", 100),
+		NewPlayer("player3", "Player 3", 100),
 	}
 
 	// Player 0 bets 20
@@ -104,12 +104,16 @@ func TestSidePots(t *testing.T) {
 	// Create a new pot manager
 	pm := NewPotManager()
 
-	// Create some test players
+	// Create some test players using the NewPlayer constructor
 	players := []*Player{
-		{Balance: 0, IsAllIn: true}, // Player 0: All-in with 50
-		{Balance: 100},              // Player 1: Still has chips
-		{Balance: 0, IsAllIn: true}, // Player 2: All-in with 30
+		NewPlayer("player1", "Player 1", 0),   // Player 0: All-in with 50
+		NewPlayer("player2", "Player 2", 100), // Player 1: Still has chips
+		NewPlayer("player3", "Player 3", 0),   // Player 2: All-in with 30
 	}
+
+	// Set all-in status manually for test
+	players[0].IsAllIn = true
+	players[2].IsAllIn = true
 
 	// Player 0 goes all-in for 50
 	pm.AddBet(0, 50)
@@ -194,26 +198,24 @@ func TestPotDistribution(t *testing.T) {
 	// Create a new pot manager
 	pm := NewPotManager()
 
-	// Create test players with hand values
+	// Create test players using the NewPlayer constructor
 	players := []*Player{
-		{
-			Balance:   0,
-			IsAllIn:   true,
-			HandValue: &HandValue{Rank: TwoPair, RankValue: 3500}, // Player 0: Two Pair, Aces (lower rank value = better)
-			HasFolded: false,
-		},
-		{
-			Balance:   100,
-			HandValue: &HandValue{Rank: Pair, RankValue: 4000}, // Player 1: Pair of 10s (higher rank value = worse)
-			HasFolded: false,
-		},
-		{
-			Balance:   0,
-			IsAllIn:   true,
-			HandValue: &HandValue{Rank: ThreeOfAKind, RankValue: 500}, // Player 2: Three of a kind, 5s (lowest rank value = best overall)
-			HasFolded: false,
-		},
+		NewPlayer("player1", "Player 1", 0),   // Player 0
+		NewPlayer("player2", "Player 2", 100), // Player 1
+		NewPlayer("player3", "Player 3", 0),   // Player 2
 	}
+
+	// Set up hand values and states manually for test
+	players[0].IsAllIn = true
+	players[0].HandValue = &HandValue{Rank: TwoPair, RankValue: 3500} // Two Pair, Aces (lower rank value = better)
+	players[0].HasFolded = false
+
+	players[1].HandValue = &HandValue{Rank: Pair, RankValue: 4000} // Pair of 10s (higher rank value = worse)
+	players[1].HasFolded = false
+
+	players[2].IsAllIn = true
+	players[2].HandValue = &HandValue{Rank: ThreeOfAKind, RankValue: 500} // Three of a kind, 5s (lowest rank value = best overall)
+	players[2].HasFolded = false
 
 	// Player 0 bets 50
 	pm.AddBet(0, 50)
@@ -402,13 +404,21 @@ func TestCreateSidePots(t *testing.T) {
 	// Create a new pot manager
 	pm := NewPotManager()
 
-	// Create test players
+	// Create test players using NewPlayer constructor
 	players := []*Player{
-		{Balance: 0, IsAllIn: true, HasFolded: false}, // Player 0: All-in with 30
-		{Balance: 0, IsAllIn: true, HasFolded: false}, // Player 1: All-in with 50
-		{Balance: 100, HasFolded: false},              // Player 2: Active with 100
-		{Balance: 0, HasFolded: true},                 // Player 3: Folded
+		NewPlayer("player1", "Player 1", 0),   // Player 0: All-in with 30
+		NewPlayer("player2", "Player 2", 0),   // Player 1: All-in with 50
+		NewPlayer("player3", "Player 3", 100), // Player 2: Active with 100
+		NewPlayer("player4", "Player 4", 0),   // Player 3: Folded
 	}
+
+	// Set up state manually for test
+	players[0].IsAllIn = true
+	players[0].HasFolded = false
+	players[1].IsAllIn = true
+	players[1].HasFolded = false
+	players[2].HasFolded = false
+	players[3].HasFolded = true
 
 	// Set up bets
 	pm.AddBet(0, 30)  // Player 0: All-in with 30
@@ -489,19 +499,17 @@ func TestHeadsUpPotDistributionAfterCall(t *testing.T) {
 	pm.AddBet(1, 20) // Big blind
 
 	// Player 0 calls (should add 10 more to equal the big blind)
-	// But simulate incomplete tracking where AddToPot is used instead of AddBet
+	// Use proper bet tracking instead of incomplete tracking
 	callAmount := int64(10)
-	pm.Pots[0].Amount += callAmount // Incomplete: just adds to pot, doesn't track bet
-	// Missing: pm.AddBet(0, callAmount) - this is what should happen for complete tracking
+	pm.AddBet(0, callAmount) // Proper: use AddBet for complete tracking
 
 	t.Logf("After call:")
 	t.Logf("Pot amount: %d (should be 40)", pm.GetTotalPot())
 	t.Logf("Player 0 total bet: %d (should be 20)", pm.GetTotalBet(0))
 	t.Logf("Player 1 total bet: %d (should be 20)", pm.GetTotalBet(1))
 
-	// Verify the buggy state
-	if pm.GetTotalBet(0) != 10 {
-		t.Errorf("Expected Player 0 total bet to be 10 (showing bug), got %d", pm.GetTotalBet(0))
+	if pm.GetTotalBet(0) != 20 {
+		t.Errorf("Expected Player 0 total bet to be 20, got %d", pm.GetTotalBet(0))
 	}
 	if pm.GetTotalBet(1) != 20 {
 		t.Errorf("Expected Player 1 total bet to be 20, got %d", pm.GetTotalBet(1))
@@ -509,11 +517,17 @@ func TestHeadsUpPotDistributionAfterCall(t *testing.T) {
 
 	// Both players check through flop, turn, river (no additional bets)
 
-	// Create players for showdown
+	// Create players for showdown using NewPlayer constructor
 	players := []*Player{
-		{Balance: 0, HasFolded: false, HandValue: &HandValue{Rank: Pair, RankValue: 100}},      // Player 0 wins
-		{Balance: 0, HasFolded: false, HandValue: &HandValue{Rank: HighCard, RankValue: 1000}}, // Player 1 loses
+		NewPlayer("player1", "Player 1", 0), // Player 0 wins
+		NewPlayer("player2", "Player 2", 0), // Player 1 loses
 	}
+
+	// Set up hand values and states manually for test
+	players[0].HasFolded = false
+	players[0].HandValue = &HandValue{Rank: Pair, RankValue: 100}
+	players[1].HasFolded = false
+	players[1].HandValue = &HandValue{Rank: HighCard, RankValue: 1000}
 
 	// Simulate showdown process like the real game does
 	pm.ReturnUncalledBet(players)
@@ -636,14 +650,11 @@ func TestBetTrackingRegression(t *testing.T) {
 			// Create pot manager
 			pm := NewPotManager()
 
-			// Create players
+			// Create players using NewPlayer constructor
 			players := make([]*Player, scenario.numPlayers)
 			for i := 0; i < scenario.numPlayers; i++ {
-				players[i] = &Player{
-					ID:        fmt.Sprintf("player_%d", i),
-					Balance:   0,
-					HasFolded: false,
-				}
+				players[i] = NewPlayer(fmt.Sprintf("player_%d", i), fmt.Sprintf("Player %d", i), 0)
+				players[i].HasFolded = false
 			}
 
 			// Set hand values (first winner wins, others lose)

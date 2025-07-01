@@ -1,6 +1,8 @@
 package poker
 
 import (
+	"encoding/json"
+	"fmt"
 	"math/rand"
 )
 
@@ -37,6 +39,76 @@ const (
 type Card struct {
 	suit  Suit
 	value Value
+}
+
+// CardJSON represents a card for JSON serialization
+type CardJSON struct {
+	Suit  string `json:"suit"`
+	Value string `json:"value"`
+}
+
+// MarshalJSON implements json.Marshaler interface for Card
+func (c Card) MarshalJSON() ([]byte, error) {
+	return json.Marshal(CardJSON{
+		Suit:  string(c.suit),
+		Value: string(c.value),
+	})
+}
+
+// UnmarshalJSON implements json.Unmarshaler interface for Card
+func (c *Card) UnmarshalJSON(data []byte) error {
+	var cardJSON CardJSON
+	if err := json.Unmarshal(data, &cardJSON); err != nil {
+		return err
+	}
+
+	// Validate and convert suit
+	switch cardJSON.Suit {
+	case "♠", "s", "S", "spades", "Spades":
+		c.suit = Spades
+	case "♥", "h", "H", "hearts", "Hearts":
+		c.suit = Hearts
+	case "♦", "d", "D", "diamonds", "Diamonds":
+		c.suit = Diamonds
+	case "♣", "c", "C", "clubs", "Clubs":
+		c.suit = Clubs
+	default:
+		return fmt.Errorf("invalid suit: %s", cardJSON.Suit)
+	}
+
+	// Validate and convert value
+	switch cardJSON.Value {
+	case "A", "a", "ace", "Ace":
+		c.value = Ace
+	case "K", "k", "king", "King":
+		c.value = King
+	case "Q", "q", "queen", "Queen":
+		c.value = Queen
+	case "J", "j", "jack", "Jack":
+		c.value = Jack
+	case "10", "T", "t", "ten", "Ten":
+		c.value = Ten
+	case "9", "nine", "Nine":
+		c.value = Nine
+	case "8", "eight", "Eight":
+		c.value = Eight
+	case "7", "seven", "Seven":
+		c.value = Seven
+	case "6", "six", "Six":
+		c.value = Six
+	case "5", "five", "Five":
+		c.value = Five
+	case "4", "four", "Four":
+		c.value = Four
+	case "3", "three", "Three":
+		c.value = Three
+	case "2", "two", "Two":
+		c.value = Two
+	default:
+		return fmt.Errorf("invalid value: %s", cardJSON.Value)
+	}
+
+	return nil
 }
 
 // String returns a string representation of the card
@@ -121,4 +193,66 @@ func initializeDeck() []Card {
 	cards := make([]Card, len(deck.cards))
 	copy(cards, deck.cards)
 	return cards
+}
+
+// GetCards returns the remaining cards in the deck (for persistence)
+func (d *Deck) GetCards() []Card {
+	return d.cards
+}
+
+// SetCards sets the remaining cards in the deck (for restoration)
+func (d *Deck) SetCards(cards []Card) {
+	d.cards = make([]Card, len(cards))
+	copy(d.cards, cards)
+}
+
+// NewDeckFromCards creates a deck from a specific set of cards (for restoration)
+func NewDeckFromCards(cards []Card, rng *rand.Rand) *Deck {
+	deck := &Deck{
+		cards: make([]Card, len(cards)),
+		rng:   rng,
+	}
+	copy(deck.cards, cards)
+	return deck
+}
+
+// DeckState represents the serializable state of a deck
+type DeckState struct {
+	RemainingCards []Card `json:"remaining_cards"`
+	Seed           int64  `json:"seed,omitempty"` // Optional: for deterministic restoration
+}
+
+// GetState returns the current state of the deck for persistence
+func (d *Deck) GetState() *DeckState {
+	return &DeckState{
+		RemainingCards: d.cards,
+	}
+}
+
+// RestoreState restores the deck from a saved state
+func (d *Deck) RestoreState(state *DeckState) error {
+	if state == nil {
+		return fmt.Errorf("deck state is nil")
+	}
+
+	// Restore the remaining cards
+	d.cards = make([]Card, len(state.RemainingCards))
+	copy(d.cards, state.RemainingCards)
+
+	return nil
+}
+
+// NewDeckFromState creates a new deck from a saved state
+func NewDeckFromState(state *DeckState, rng *rand.Rand) (*Deck, error) {
+	if state == nil {
+		return nil, fmt.Errorf("deck state is nil")
+	}
+
+	deck := &Deck{
+		cards: make([]Card, len(state.RemainingCards)),
+		rng:   rng,
+	}
+	copy(deck.cards, state.RemainingCards)
+
+	return deck, nil
 }

@@ -185,8 +185,8 @@ func (s *State) handleCreateTable(ctx context.Context, bot *kit.Bot, pm *types.R
 		AutoStartDelay: 3 * time.Second, // Auto-start next hand after 3 seconds
 	})
 
-	// Add creator to table with starting chips (DCR buy-in handled separately)
-	err = table.AddPlayer(playerID, startingChips)
+	// Add creator as user to table
+	_, err = table.AddNewUser(playerID, pm.Nick, balance, 0)
 	if err != nil {
 		bot.SendPM(ctx, pm.Nick, "Error creating table: "+err.Error())
 		return
@@ -239,8 +239,23 @@ func (s *State) handleJoinTable(ctx context.Context, bot *kit.Bot, pm *types.Rec
 		return
 	}
 
-	// Add player to table with starting chips (not DCR balance)
-	err = table.AddPlayer(playerID, config.StartingChips)
+	// Find next available seat
+	users := table.GetUsers()
+	occupiedSeats := make(map[int]bool)
+	for _, user := range users {
+		occupiedSeats[user.TableSeat] = true
+	}
+
+	nextSeat := 0
+	for i := 0; i < config.MaxPlayers; i++ {
+		if !occupiedSeats[i] {
+			nextSeat = i
+			break
+		}
+	}
+
+	// Add user to table
+	_, err = table.AddNewUser(playerID, pm.Nick, dcrBalance, nextSeat)
 	if err != nil {
 		bot.SendPM(ctx, pm.Nick, "Error joining table: "+err.Error())
 		return
@@ -250,16 +265,16 @@ func (s *State) handleJoinTable(ctx context.Context, bot *kit.Bot, pm *types.Rec
 	err = s.db.UpdatePlayerBalance(playerID, -config.BuyIn, "table buy-in", "joined table")
 	if err != nil {
 		// If balance update fails, remove player from table
-		table.RemovePlayer(playerID)
+		table.RemoveUser(playerID)
 		bot.SendPM(ctx, pm.Nick, "Error deducting buy-in: "+err.Error())
 		return
 	}
 
-	// Notify all players at the table
-	players := table.GetPlayers()
-	for _, p := range players {
-		if p.ID != playerID {
-			bot.SendPM(ctx, p.ID, fmt.Sprintf("%s has joined the table.", pm.Nick))
+	// Notify all users at the table
+	users = table.GetUsers()
+	for _, u := range users {
+		if u.ID != playerID {
+			bot.SendPM(ctx, u.ID, fmt.Sprintf("%s has joined the table.", pm.Nick))
 		}
 	}
 
@@ -267,16 +282,16 @@ func (s *State) handleJoinTable(ctx context.Context, bot *kit.Bot, pm *types.Rec
 		tableID, table.GetStatus()))
 
 	// Check if we can start the game
-	if len(players) >= table.GetMinPlayers() {
+	if len(users) >= table.GetMinPlayers() {
 		err = table.StartGame()
 		if err != nil {
 			bot.SendPM(ctx, pm.Nick, "Error starting game: "+err.Error())
 			return
 		}
 
-		// Notify all players
-		for _, p := range players {
-			bot.SendPM(ctx, p.ID, "Game started!")
+		// Notify all users
+		for _, u := range users {
+			bot.SendPM(ctx, u.ID, "Game started!")
 		}
 	}
 }
@@ -292,7 +307,7 @@ func (s *State) handleListTables(ctx context.Context, bot *kit.Bot, pm *types.Re
 
 	msg := "Active tables:\n"
 	for id, table := range s.tables {
-		msg += fmt.Sprintf("%s: %d/%d players\n", id, len(table.GetPlayers()), table.GetMaxPlayers())
+		msg += fmt.Sprintf("%s: %d/%d players\n", id, len(table.GetUsers()), table.GetMaxPlayers())
 	}
 	bot.SendPM(ctx, pm.Nick, msg)
 }

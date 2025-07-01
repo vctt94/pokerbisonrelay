@@ -32,6 +32,7 @@ import (
 type testEnv struct {
 	t           *testing.T
 	db          server.Database
+	pokerSrv    *server.Server
 	grpcSrv     *grpc.Server
 	conn        *grpc.ClientConn
 	lobbyClient pokerrpc.LobbyServiceClient
@@ -81,6 +82,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	return &testEnv{
 		t:           t,
 		db:          database,
+		pokerSrv:    pokerSrv,
 		grpcSrv:     grpcSrv,
 		conn:        conn,
 		lobbyClient: pokerrpc.NewLobbyServiceClient(conn),
@@ -91,6 +93,7 @@ func newTestEnv(t *testing.T) *testEnv {
 // Close gracefully shuts down all resources.
 func (e *testEnv) Close() {
 	e.conn.Close()
+	e.pokerSrv.Stop()
 	e.grpcSrv.Stop()
 	_ = e.db.Close()
 }
@@ -890,7 +893,7 @@ func TestStartingChipsDefault(t *testing.T) {
 		MaxPlayers:    3,
 		BuyIn:         1_500,
 		MinBalance:    1_000,
-		StartingChips: 0, // This should default to BuyIn (1500)
+		StartingChips: 0, // This should default to 1000
 	})
 	require.NoError(t, err)
 	tableID := createResp.TableId
@@ -918,23 +921,23 @@ func TestStartingChipsDefault(t *testing.T) {
 	// Get game state and verify that players have the expected starting chips
 	state := env.getGameState(ctx, tableID)
 
-	// All players should have starting chips equal to BuyIn (1500)
+	// All players should have starting chips equal to default (1000)
 	// minus any blinds they've posted
 	for _, player := range state.Players {
 		switch player.Id {
 		case "player1":
-			// Dealer, no blind posted, should have full 1500 chips
-			expectedChips := int64(1500)
+			// Dealer, no blind posted, should have full 1000 chips
+			expectedChips := int64(1000)
 			actualChips := expectedChips - player.CurrentBet
 			t.Logf("Player %s: has bet %d, should have balance %d", player.Id, player.CurrentBet, actualChips)
 		case "player2":
-			// Small blind, should have 1500 - 10 = 1490 chips
-			expectedChips := int64(1500) - int64(10)
+			// Small blind, should have 1000 - 10 = 990 chips
+			expectedChips := int64(1000) - int64(10)
 			actualChips := expectedChips - (player.CurrentBet - int64(10))
 			t.Logf("Player %s: has bet %d, should have balance %d", player.Id, player.CurrentBet, actualChips)
 		case "player3":
-			// Big blind, should have 1500 - 20 = 1480 chips
-			expectedChips := int64(1500) - int64(20)
+			// Big blind, should have 1000 - 20 = 980 chips
+			expectedChips := int64(1000) - int64(20)
 			actualChips := expectedChips - (player.CurrentBet - int64(20))
 			t.Logf("Player %s: has bet %d, should have balance %d", player.Id, player.CurrentBet, actualChips)
 		}
