@@ -35,7 +35,7 @@ echo "[*] Using CLIENT2=$CLIENT2"
 # Markers from your UI (strings in handleNotification + menus)
 ###############################################################################
 MAIN_MENU_MARKER="List Tables|Create Table|Join Table|Check Balance|Quit"
-CREATED_RX="Created table[[:space:]]+([A-Za-z0-9_.:-]+)"
+CREATED_RX="Created table[[:space:]]*[:]?[[:space:]]*([A-Za-z0-9_.:-]+)"
 JOINED_RX="Joined table[[:space:]]+([A-Za-z0-9_.:-]+)"
 GAME_LOBBY_MARKER="Set Ready|Set Unready|Leave Table"
 GAME_STARTED_RX="Game started!"
@@ -64,8 +64,8 @@ wait_for(){ # wait_for <target> <regex> [timeout]
 
 top_option(){ for _ in {1..10}; do send "$1" Up; done; }
 
-extract_table_id(){
-  cap "$1" 800 | grep -E "$CREATED_RX" | tail -n1 | sed -nE "s/.*$CREATED_RX.*/\1/p"
+extract_table_id() {
+  cap "$1" 800 | grep -E "$CREATED_RX" | tail -n1 | sed -nE "s/.*$CREATED_RX.*/\\1/p" | tr -d '[:space:]'
 }
 
 is_turn(){
@@ -135,9 +135,39 @@ if ! try_create "$CLIENT1" 1; then
   fi
 fi
 
+verify_table_exists() {
+  local table_id="$1"
+  echo "[*] Verifying table $table_id exists..."
+  
+  # Try to get table info from client1 (creator)
+  local table_info
+  table_info=$(cap "$CLIENT1" 100)
+  
+  if echo "$table_info" | grep -q "$table_id"; then
+    echo "[*] Table $table_id verified as existing"
+    return 0
+  else
+    echo "[!] Warning: Table $table_id not found in creator's view"
+    return 1
+  fi
+}
+
+# Add verification after table creation
 TABLE_ID="$(extract_table_id "$CLIENT1")"
 [[ -n "$TABLE_ID" ]] || die "Failed to extract Table ID from CLIENT1 screen"
 echo "[*] Table ID: $TABLE_ID"
+
+# Verify table exists before proceeding
+verify_table_exists "$TABLE_ID" || {
+  echo "[!] Table verification failed, retrying..."
+  sleep 3
+  TABLE_ID="$(extract_table_id "$CLIENT1")"
+  [[ -n "$TABLE_ID" ]] || die "Still failed to extract valid Table ID"
+}
+
+# Add delay to ensure table is fully registered
+echo "[*] Waiting for table registration..."
+sleep 2
 
 ###############################################################################
 # Step 2: CLIENT2 joins by typing the ID
@@ -148,11 +178,55 @@ top_option "$CLIENT2"
 # We'll try both patterns robustly.
 try_join(){
   local t="$1" downs="$2"
+  echo "DEBUG: Trying to join with $downs downs" >&2
   for _ in $(seq 1 "$downs"); do send "$t" Down; done
   enter "$t"                # open join form
+  
+  # Clear any existing text first
+  send "$t" C-u
+  sleep 0.1
+  
+  echo "DEBUG: Typing table ID: '$TABLE_ID'" >&2
   type_text "$t" "$TABLE_ID"
+  sleep 0.2
   enter "$t"
-  if wait_for "$t" "$JOINED_RX" 6; then return 0; fi
+  
+  # Add explicit verification after sending table ID
+  sleep 1
+  local typed_id
+  typed_id=$(cap "$t" 50 | grep -oE "[A-Za-z0-9_.:-]{5,}" | tail -n1)
+  if [[ -z "$typed_id" || "$typed_id" != *"$TABLE_ID"* ]]; then
+    echo "[!] WARNING: Table ID '$TABLE_ID' not properly typed (detected: '$typed_id')" >&2
+    # Retry typing with more deliberate input
+    send "$t" C-u
+    sleep 0.1
+    for (( i=0; i<${#TABLE_ID}; i++ )); do
+      char="${TABLE_ID:$i:1}"
+      type_text "$t" "$char"
+      sleep 0.05
+    done
+    sleep 0.2
+    enter "$t"
+  fi
+  
+  # Wait a bit longer and check for various outcomes
+  sleep 1
+  local join_output
+  join_output=$(cap "$t" 200)
+  echo "DEBUG: Join attempt output:" >&2
+  echo "$join_output" >&2
+  
+  # Check for success or specific error messages
+  if echo "$join_output" | grep -q "Joined table"; then
+    echo "DEBUG: Successfully joined table" >&2
+    return 0
+  elif echo "$join_output" | grep -q "no table found\|not found\|invalid"; then
+    echo "DEBUG: Table not found error detected" >&2
+    return 1
+  fi
+  
+  if wait_for "$t" "$JOINED_RX" 8; then return 0; fi
+  
   # back to main menu (safe)
   tmux send-keys -t "$t" q
   sleep 0.3
