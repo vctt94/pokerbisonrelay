@@ -1,38 +1,23 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+IFS=$'\n\t'
 
 ###############################################################################
-# Discovery: two sessions (from your scripts) and the "pokerclient" window.
-# Override via env: SESSION1, SESSION2, WIN_NAME
+# Config (env-overridable)
 ###############################################################################
 SESSION1="${SESSION1:-pokerclient_session1}"
 SESSION2="${SESSION2:-pokerclient_session2}"
 WIN_NAME="${WIN_NAME:-pokerclient}"
 
-pane_for() { # pane_for <session> <window-name>
-  local s="$1" wname="$2"
-  local widx
-  widx="$(tmux list-windows -t "$s" -F '#I #W' 2>/dev/null | awk -v n="$wname" '$2==n{print $1; exit}')"
-  [[ -n "$widx" ]] || return 1
-  echo "${s}:${widx}.0"
-}
-
-CLIENT1="$(pane_for "$SESSION1" "$WIN_NAME")" || {
-  echo "ERR: could not find window '$WIN_NAME' in session '$SESSION1'." >&2
-  tmux list-windows -t "$SESSION1" -F '#S:#I #W' 2>/dev/null || true
-  exit 1
-}
-CLIENT2="$(pane_for "$SESSION2" "$WIN_NAME")" || {
-  echo "ERR: could not find window '$WIN_NAME' in session '$SESSION2'." >&2
-  tmux list-windows -t "$SESSION2" -F '#S:#I #W' 2>/dev/null || true
-  exit 1
-}
-
-echo "[*] Using CLIENT1=$CLIENT1"
-echo "[*] Using CLIENT2=$CLIENT2"
+# Timeouts (seconds)
+TO_MAIN_MENU=${TO_MAIN_MENU:-60}
+TO_CREATE_RX=${TO_CREATE_RX:-5}
+TO_JOIN_RX=${TO_JOIN_RX:-8}
+TO_START_RX=${TO_START_RX:-60}
+TO_AUTOPLAY=${TO_AUTOPLAY:-240}
 
 ###############################################################################
-# Markers from your UI (strings in handleNotification + menus)
+# UI markers / regexes
 ###############################################################################
 MAIN_MENU_MARKER="List Tables|Create Table|Join Table|Check Balance|Quit"
 CREATED_RX="Created table[[:space:]]*[:]?[[:space:]]*([A-Za-z0-9_.:-]+)"
@@ -45,18 +30,36 @@ ACTION_MARKER="Check|Call|Bet|Fold"
 ONLY_LEAVE_RX="^[[:space:]]*Leave Table$"
 
 ###############################################################################
+# Logging / errors
+###############################################################################
+ts(){ date '+%H:%M:%S'; }
+log(){ printf '[%s] %s\n' "$(ts)" "$*"; }
+warn(){ printf '[%s] [!] %s\n' "$(ts)" "$*" >&2; }
+die(){ printf '[%s] ERR: %s\n' "$(ts)" "$*" >&2; exit 1; }
+
+###############################################################################
 # tmux helpers
 ###############################################################################
-cap(){ tmux capture-pane -t "$1" -p -J -S -400; }
+pane_for(){ # pane_for <session> <window-name>
+  local s="$1" wname="$2" widx
+  widx="$(tmux list-windows -t "$s" -F '#I #W' 2>/dev/null | awk -v n="$wname" '$2==n{print $1; exit}')"
+  [[ -n "$widx" ]] || return 1
+  echo "${s}:${widx}.0"
+}
+
+cap(){ # cap <target> [lines]
+  local t="$1" lines="${2:-400}"
+  tmux capture-pane -t "$t" -p -J -S "-$lines"
+}
+
 send(){ tmux send-keys -t "$1" "$2"; }
 enter(){ tmux send-keys -t "$1" Enter; }
 type_text(){ tmux send-keys -t "$1" -- "$2"; }
-die(){ echo "ERR: $*" >&2; exit 1; }
 
 wait_for(){ # wait_for <target> <regex> [timeout]
   local t="$1" rx="$2" to="${3:-40}" start=$SECONDS
   while (( SECONDS - start < to )); do
-    if cap "$t" | grep -E -q "$rx"; then return 0; fi
+    if cap "$t" 600 | grep -E -q "$rx"; then return 0; fi
     sleep 0.25
   done
   die "timeout waiting for /$rx/ in $t"
@@ -64,11 +67,31 @@ wait_for(){ # wait_for <target> <regex> [timeout]
 
 top_option(){ for _ in {1..10}; do send "$1" Up; done; }
 
-extract_table_id() {
-  cap "$1" 800 | grep -E "$CREATED_RX" | tail -n1 | sed -nE "s/.*$CREATED_RX.*/\\1/p" | tr -d '[:space:]'
+safe_back_to_menu(){ # safe_back_to_menu <target>
+  tmux send-keys -t "$1" q
+  sleep 0.3
+  wait_for "$1" "$MAIN_MENU_MARKER" 10
+  top_option "$1"
 }
 
-is_turn(){
+ensure_running(){ # ensure_running <pane>
+  local t="$1"
+  if cap "$t" 300 | grep -E -q "$MAIN_MENU_MARKER|$GAME_LOBBY_MARKER|$GAME_STARTED_RX|$NEW_HAND_RX|Using client ID|Current balance"; then
+    return 0
+  fi
+  send "$t" Up; enter "$t"
+  wait_for "$t" "$MAIN_MENU_MARKER|$GAME_LOBBY_MARKER|$GAME_STARTED_RX|$NEW_HAND_RX|Using client ID|Current balance" 60 \
+    || die "could not detect running client UI in $t"
+}
+
+###############################################################################
+# Domain helpers
+###############################################################################
+extract_table_id(){ # extract_table_id <pane>
+  cap "$1" 800 | sed -nE "s/.*$CREATED_RX.*/\1/p" | tail -n1 | tr -d '[:space:]'
+}
+
+is_turn(){ # is_turn <pane>
   local txt; txt="$(cap "$1" 120)"
   if grep -E -q "$ACTION_MARKER" <<<"$txt"; then
     if ! grep -E -q "$ONLY_LEAVE_RX" <<<"$(printf "%s\n" "$txt" | sed -n '/Leave Table/p')"; then
@@ -78,173 +101,109 @@ is_turn(){
   return 1
 }
 
-ensure_running(){ # ensure_running <pane>
+create_table(){ # create_table <pane>
   local t="$1"
-  # Already looks like UI?
-  if cap "$t" | grep -E -q "$MAIN_MENU_MARKER|$GAME_LOBBY_MARKER|$GAME_STARTED_RX|$NEW_HAND_RX|Using client ID|Current balance"; then
-    return 0
-  fi
-  # Try rerun previous command (your pane shows "↑ to rerun")
-  send "$t" Up; enter "$t"
-  wait_for "$t" "$MAIN_MENU_MARKER|$GAME_LOBBY_MARKER|$GAME_STARTED_RX|$NEW_HAND_RX|Using client ID|Current balance" 60 \
-    || die "could not detect running client UI in $t"
+  top_option "$t"
+  for downs in 1 2; do
+    for _ in $(seq 1 "$downs"); do send "$t" Down; done
+    enter "$t"     # open Create Table
+    enter "$t"     # submit defaults
+    if wait_for "$t" "$CREATED_RX" "$TO_CREATE_RX"; then
+      local id; id="$(extract_table_id "$t")"
+      [[ -n "$id" ]] || die "created table but failed to parse ID"
+      echo "$id"
+      return 0
+    fi
+    warn "Create attempt (downs=$downs) failed; backing out"
+    safe_back_to_menu "$t"
+  done
+  die "failed to create table"
+}
+
+join_table(){ # join_table <pane> <table_id>
+  local t="$1" table_id="$2"
+  top_option "$t"
+  for downs in 2 3; do
+    for _ in $(seq 1 "$downs"); do send "$t" Down; done
+    enter "$t"             # open Join form
+    send "$t" C-u; sleep 0.1
+    type_text "$t" "$table_id"; sleep 0.2; enter "$t"
+    sleep 1
+    # verify success / retry slow typing if needed
+    if ! cap "$t" 80 | grep -q "$table_id"; then
+      warn "Typed ID not detected; retrying slow type"
+      send "$t" C-u; sleep 0.1
+      for (( i=0; i<${#table_id}; i++ )); do
+        type_text "$t" "${table_id:$i:1}"; sleep 0.05
+      done
+      sleep 0.2; enter "$t"
+    fi
+    if wait_for "$t" "$JOINED_RX" "$TO_JOIN_RX"; then return 0; fi
+    warn "Join attempt (downs=$downs) failed; backing out"
+    safe_back_to_menu "$t"
+  done
+  die "failed to join table"
+}
+
+autoplay_one_hand(){ # autoplay_one_hand <pane> <end_rx>
+  local t="$1" end_rx="$2" start=$SECONDS
+  while (( SECONDS - start < TO_AUTOPLAY )); do
+    if cap "$t" 200 | grep -E -q "$end_rx"; then
+      log "$t: hand over."
+      return 0
+    fi
+    if is_turn "$t"; then enter "$t"; sleep 0.15; fi
+    sleep 0.25
+  done
+  warn "$t: autoplay timeout"
+  return 1
 }
 
 ###############################################################################
-# Preflight: start both UIs WITHOUT sending 'q'
+# Discover panes
+###############################################################################
+CLIENT1="$(pane_for "$SESSION1" "$WIN_NAME")" || {
+  tmux list-windows -t "$SESSION1" -F '#S:#I #W' 2>/dev/null || true
+  die "could not find window '$WIN_NAME' in session '$SESSION1'"
+}
+CLIENT2="$(pane_for "$SESSION2" "$WIN_NAME")" || {
+  tmux list-windows -t "$SESSION2" -F '#S:#I #W' 2>/dev/null || true
+  die "could not find window '$WIN_NAME' in session '$SESSION2'"
+}
+log "[*] Using CLIENT1=$CLIENT1"
+log "[*] Using CLIENT2=$CLIENT2"
+
+###############################################################################
+# Preflight
 ###############################################################################
 ensure_running "$CLIENT1"
 ensure_running "$CLIENT2"
-
-# Require main menu before proceeding (we won't send 'q' here to avoid quitting)
-wait_for "$CLIENT1" "$MAIN_MENU_MARKER" 60
-wait_for "$CLIENT2" "$MAIN_MENU_MARKER" 60
+wait_for "$CLIENT1" "$MAIN_MENU_MARKER" "$TO_MAIN_MENU"
+wait_for "$CLIENT2" "$MAIN_MENU_MARKER" "$TO_MAIN_MENU"
 
 ###############################################################################
-# Step 1: CLIENT1 creates table with defaults.
-# Strategy:
-#  - go to first menu item (top_option)
-#  - try "Down + Enter + Enter" (Create Table if no "Return to Table")
-#  - if not created, we back out safely (we're in a subview) with 'q'
-#  - then try "Down Down + Enter + Enter" (Create Table if "Return to Table" exists)
+# Step 1: Create table on CLIENT1
 ###############################################################################
-echo "[*] Creating table on $CLIENT1…"
-top_option "$CLIENT1"
-
-try_create(){
-  local t="$1" downs="$2" # 1 or 2 downs depending on presence of "Return to Table"
-  for _ in $(seq 1 "$downs"); do send "$t" Down; done
-  enter "$t"      # enter Create Table form
-  enter "$t"      # submit defaults
-  # Wait briefly to see if table was created
-  if wait_for "$t" "$CREATED_RX" 5; then return 0; fi
-  # If we didn't create, we're in some subview; 'q' here is SAFE (doesn't quit app)
-  tmux send-keys -t "$t" q
-  # Give UI a moment to return to main menu
-  sleep 0.3
-  # Ensure main menu again
-  wait_for "$t" "$MAIN_MENU_MARKER" 10 || return 1
-  top_option "$t"
-  return 1
-}
-
-if ! try_create "$CLIENT1" 1; then
-  # Try the 2-down variant
-  if ! try_create "$CLIENT1" 2; then
-    die "failed to create table from $CLIENT1"
-  fi
-fi
-
-verify_table_exists() {
-  local table_id="$1"
-  echo "[*] Verifying table $table_id exists..."
-  
-  # Try to get table info from client1 (creator)
-  local table_info
-  table_info=$(cap "$CLIENT1" 100)
-  
-  if echo "$table_info" | grep -q "$table_id"; then
-    echo "[*] Table $table_id verified as existing"
-    return 0
-  else
-    echo "[!] Warning: Table $table_id not found in creator's view"
-    return 1
-  fi
-}
-
-# Add verification after table creation
-TABLE_ID="$(extract_table_id "$CLIENT1")"
-[[ -n "$TABLE_ID" ]] || die "Failed to extract Table ID from CLIENT1 screen"
-echo "[*] Table ID: $TABLE_ID"
-
-# Verify table exists before proceeding
-verify_table_exists "$TABLE_ID" || {
-  echo "[!] Table verification failed, retrying..."
-  sleep 3
+log "[*] Creating table on $CLIENT1…"
+TABLE_ID="$(create_table "$CLIENT1")"
+log "[*] Table ID: $TABLE_ID"
+# quick confirmation pass
+if ! cap "$CLIENT1" 120 | grep -q "$TABLE_ID"; then
+  warn "Table $TABLE_ID not visible yet in creator; re-extracting…"
   TABLE_ID="$(extract_table_id "$CLIENT1")"
   [[ -n "$TABLE_ID" ]] || die "Still failed to extract valid Table ID"
-}
-
-# Add delay to ensure table is fully registered
-echo "[*] Waiting for table registration..."
-sleep 2
-
-###############################################################################
-# Step 2: CLIENT2 joins by typing the ID
-###############################################################################
-echo "[*] Joining from $CLIENT2…"
-top_option "$CLIENT2"
-# Navigate to "Join Table" (Down twice if no "Return to Table"; thrice if it exists).
-# We'll try both patterns robustly.
-try_join(){
-  local t="$1" downs="$2"
-  echo "DEBUG: Trying to join with $downs downs" >&2
-  for _ in $(seq 1 "$downs"); do send "$t" Down; done
-  enter "$t"                # open join form
-  
-  # Clear any existing text first
-  send "$t" C-u
-  sleep 0.1
-  
-  echo "DEBUG: Typing table ID: '$TABLE_ID'" >&2
-  type_text "$t" "$TABLE_ID"
-  sleep 0.2
-  enter "$t"
-  
-  # Add explicit verification after sending table ID
-  sleep 1
-  local typed_id
-  typed_id=$(cap "$t" 50 | grep -oE "[A-Za-z0-9_.:-]{5,}" | tail -n1)
-  if [[ -z "$typed_id" || "$typed_id" != *"$TABLE_ID"* ]]; then
-    echo "[!] WARNING: Table ID '$TABLE_ID' not properly typed (detected: '$typed_id')" >&2
-    # Retry typing with more deliberate input
-    send "$t" C-u
-    sleep 0.1
-    for (( i=0; i<${#TABLE_ID}; i++ )); do
-      char="${TABLE_ID:$i:1}"
-      type_text "$t" "$char"
-      sleep 0.05
-    done
-    sleep 0.2
-    enter "$t"
-  fi
-  
-  # Wait a bit longer and check for various outcomes
-  sleep 1
-  local join_output
-  join_output=$(cap "$t" 200)
-  echo "DEBUG: Join attempt output:" >&2
-  echo "$join_output" >&2
-  
-  # Check for success or specific error messages
-  if echo "$join_output" | grep -q "Joined table"; then
-    echo "DEBUG: Successfully joined table" >&2
-    return 0
-  elif echo "$join_output" | grep -q "no table found\|not found\|invalid"; then
-    echo "DEBUG: Table not found error detected" >&2
-    return 1
-  fi
-  
-  if wait_for "$t" "$JOINED_RX" 8; then return 0; fi
-  
-  # back to main menu (safe)
-  tmux send-keys -t "$t" q
-  sleep 0.3
-  wait_for "$t" "$MAIN_MENU_MARKER" 10 || return 1
-  top_option "$t"
-  return 1
-}
-
-# Without "Return to Table": index = 2 downs; with it: 3 downs.
-if ! try_join "$CLIENT2" 2; then
-  if ! try_join "$CLIENT2" 3; then
-    die "failed to join table from $CLIENT2"
-  fi
 fi
-echo "[*] Joined."
+sleep 2   # allow registration
 
 ###############################################################################
-# Step 3: Both Set Ready (first option in lobby)
+# Step 2: Join from CLIENT2
+###############################################################################
+log "[*] Joining from $CLIENT2…"
+join_table "$CLIENT2" "$TABLE_ID"
+log "[*] Joined."
+
+###############################################################################
+# Step 3: Both Set Ready
 ###############################################################################
 wait_for "$CLIENT1" "$GAME_LOBBY_MARKER" 60
 wait_for "$CLIENT2" "$GAME_LOBBY_MARKER" 60
@@ -252,37 +211,20 @@ top_option "$CLIENT1"; enter "$CLIENT1"
 top_option "$CLIENT2"; enter "$CLIENT2"
 
 ###############################################################################
-# Step 4: Wait for game to start
+# Step 4: Wait for game start
 ###############################################################################
-echo "[*] Waiting for game to start…"
-wait_for "$CLIENT1" "$GAME_STARTED_RX|$NEW_HAND_RX" 60
-wait_for "$CLIENT2" "$GAME_STARTED_RX|$NEW_HAND_RX" 60
-echo "[*] Game started."
+log "[*] Waiting for game to start…"
+wait_for "$CLIENT1" "$GAME_STARTED_RX|$NEW_HAND_RX" "$TO_START_RX"
+wait_for "$CLIENT2" "$GAME_STARTED_RX|$NEW_HAND_RX" "$TO_START_RX"
+log "[*] Game started."
 
 ###############################################################################
-# Step 5: Autoplay a single hand (Enter when it's our turn => Check/Call)
+# Step 5: Autoplay one hand
 ###############################################################################
-autoplay(){
-  local t="$1" end_rx="$2" start=$SECONDS
-  while (( SECONDS - start < 240 )); do
-    if cap "$t" | grep -E -q "$end_rx"; then
-      echo "[*] $t: hand over."
-      return 0
-    fi
-    if is_turn "$t"; then
-      enter "$t"
-      sleep 0.15
-    fi
-    sleep 0.25
-  done
-  echo "[!] $t: autoplay timeout" >&2
-  return 1
-}
-
-echo "[*] Autoplaying one hand…"
-autoplay "$CLIENT1" "$SHOWDOWN_RX|$GAME_LOBBY_MARKER" &
+log "[*] Autoplaying one hand…"
+autoplay_one_hand "$CLIENT1" "$SHOWDOWN_RX|$GAME_LOBBY_MARKER" &
 P1=$!
-autoplay "$CLIENT2" "$SHOWDOWN_RX|$GAME_LOBBY_MARKER" &
+autoplay_one_hand "$CLIENT2" "$SHOWDOWN_RX|$GAME_LOBBY_MARKER" &
 P2=$!
 wait $P1 $P2 || true
-echo "[*] Done."
+log "[*] Done."
