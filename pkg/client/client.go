@@ -505,9 +505,7 @@ func (pc *PokerClient) JoinTable(ctx context.Context, tableID string) error {
 		return fmt.Errorf("failed to join table: %s", resp.Message)
 	}
 
-	pc.Lock()
 	pc.tableID = tableID
-	pc.Unlock()
 
 	// Start game stream for real-time updates
 	if err := pc.StartGameStream(ctx); err != nil {

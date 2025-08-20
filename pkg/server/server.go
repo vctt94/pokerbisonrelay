@@ -135,6 +135,7 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 		return nil, err
 	}
 
+	s.log.Debugf("Creating table with buy-in %d", req.BuyIn)
 	// Check if creator has enough DCR for the buy-in
 	if creatorBalance < req.BuyIn {
 		return nil, fmt.Errorf("insufficient DCR balance for buy-in: need %d, have %d", req.BuyIn, creatorBalance)
@@ -192,10 +193,14 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 }
 
 func (s *Server) JoinTable(ctx context.Context, req *pokerrpc.JoinTableRequest) (*pokerrpc.JoinTableResponse, error) {
-	table, ok := s.getTable(req.TableId)
+	s.mu.RLock()
+	table, ok := s.tables[req.TableId]
+	s.mu.RUnlock()
 	if !ok {
 		return &pokerrpc.JoinTableResponse{Success: false, Message: "Table not found"}, nil
 	}
+
+	s.log.Debugf("Joining table %s", req.TableId)
 
 	config := table.GetConfig()
 
@@ -793,7 +798,9 @@ func (s *Server) buildGameStateForPlayer(table *poker.Table, game *poker.Game, r
 }
 
 func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*pokerrpc.MakeBetResponse, error) {
-	table, ok := s.getTable(req.TableId)
+	s.mu.RLock()
+	table, ok := s.tables[req.TableId]
+	s.mu.RUnlock()
 	if !ok {
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
@@ -831,7 +838,9 @@ func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*po
 }
 
 func (s *Server) Fold(ctx context.Context, req *pokerrpc.FoldRequest) (*pokerrpc.FoldResponse, error) {
-	table, ok := s.getTable(req.TableId)
+	s.mu.RLock()
+	table, ok := s.tables[req.TableId]
+	s.mu.RUnlock()
 	if !ok {
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
@@ -858,7 +867,9 @@ func (s *Server) Fold(ctx context.Context, req *pokerrpc.FoldRequest) (*pokerrpc
 
 // Call implements the Call RPC method
 func (s *Server) Call(ctx context.Context, req *pokerrpc.CallRequest) (*pokerrpc.CallResponse, error) {
-	table, ok := s.getTable(req.TableId)
+	s.mu.RLock()
+	table, ok := s.tables[req.TableId]
+	s.mu.RUnlock()
 	if !ok {
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
@@ -905,7 +916,9 @@ func (s *Server) Call(ctx context.Context, req *pokerrpc.CallRequest) (*pokerrpc
 
 // Check implements the Check RPC method
 func (s *Server) Check(ctx context.Context, req *pokerrpc.CheckRequest) (*pokerrpc.CheckResponse, error) {
-	table, ok := s.getTable(req.TableId)
+	s.mu.RLock()
+	table, ok := s.tables[req.TableId]
+	s.mu.RUnlock()
 	if !ok {
 		return nil, status.Error(codes.NotFound, "table not found")
 	}

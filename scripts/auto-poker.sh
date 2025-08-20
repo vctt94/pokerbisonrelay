@@ -92,9 +92,11 @@ extract_table_id(){ # extract_table_id <pane>
 }
 
 is_turn(){ # is_turn <pane>
-  local txt; txt="$(cap "$1" 120)"
-  if grep -E -q "$ACTION_MARKER" <<<"$txt"; then
-    if ! grep -E -q "$ONLY_LEAVE_RX" <<<"$(printf "%s\n" "$txt" | sed -n '/Leave Table/p')"; then
+  # Most reliable cue on your client: "YOUR TURN - CHOOSE ACTION"
+  # Also ensure we aren't in the "Leave Table" only state.
+  local txt; txt="$(cap "$1" 160)"
+  if grep -qE 'YOUR TURN[[:space:]]*- CHOOSE ACTION' <<<"$txt"; then
+    if ! grep -qE "$ONLY_LEAVE_RX" <<<"$(printf "%s\n" "$txt" | sed -n '/Leave Table/p')"; then
       return 0
     fi
   fi
@@ -145,14 +147,45 @@ join_table(){ # join_table <pane> <table_id>
   die "failed to join table"
 }
 
-autoplay_one_hand(){ # autoplay_one_hand <pane> <end_rx>
-  local t="$1" end_rx="$2" start=$SECONDS
+choose_top_action(){ # ensure Call/Check
+  local t="$1"
+  for _ in {1..6}; do send "$t" Up; done
+  enter "$t"
+}
+
+# --- Replace autoplay_one_hand with this version (ignores 2nd arg) ---
+autoplay_one_hand(){ # autoplay_one_hand <pane> [_]
+  local t="$1" start=$SECONDS
+  local seen_hand=0
+
   while (( SECONDS - start < TO_AUTOPLAY )); do
-    if cap "$t" 200 | grep -E -q "$end_rx"; then
-      log "$t: hand over."
+    # Only look at a short recent tail to avoid stale lobby lines
+    local buf="$(cap "$t" 70)"
+
+    # Mark that the hand actually started
+    if (( !seen_hand )) && grep -Eq "$GAME_STARTED_RX|$NEW_HAND_RX" <<<"$buf"; then
+      seen_hand=1
+    fi
+
+    # End only on showdown (not lobby)
+    if (( seen_hand )) && grep -Eq "$SHOWDOWN_RX" <<<"$buf"; then
+      log "$t: showdown detected."
+      # Optionally wait to see lobby again, but don't require it to finish
+      wait_for "$t" "$GAME_LOBBY_MARKER" 30 || true
       return 0
     fi
-    if is_turn "$t"; then enter "$t"; sleep 0.15; fi
+
+    # Take action when it's our turn
+    if is_turn "$t"; then
+      choose_top_action "$t"     # Call/Check
+      # If a bet amount prompt appears, back out and retry top action
+      if cap "$t" 50 | grep -qiE 'enter (bet|raise) amount'; then
+        send "$t" q; sleep 0.1; choose_top_action "$t"
+      fi
+      sleep 0.25
+      continue
+    fi
+
     sleep 0.25
   done
   warn "$t: autoplay timeout"

@@ -23,7 +23,7 @@ tmux new-window -t "$SESSION":1 -n dcrwallet \
    2>&1 | tee '"$LOGDIR"'/dcrwallet.log'
 
 tmux new-window -t "$SESSION":2 -n dcrlnd \
-  'until nc -z localhost 19109; do echo waiting for dcrwallet; sleep 3; done;
+  'until nc -z localhost 19110; do echo waiting for dcrwallet; sleep 3; done;
    dcrlnd '"$NET"' --dcrd.rpchost=localhost --dcrd.rpcuser='"$RPCUSER"' \
           --dcrd.rpcpass='"$RPCPASS"' 2>&1 | tee '"$LOGDIR"'/dcrlnd.log'
 

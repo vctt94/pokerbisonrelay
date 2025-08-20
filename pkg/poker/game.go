@@ -220,11 +220,6 @@ func stateBlinds(entity *Game, callback func(stateName string, event statemachin
 	postBlind(smallBlindPos, entity.config.SmallBlind)
 	postBlind(bigBlindPos, entity.config.BigBlind)
 
-	// Ensure currentBet reflects the actual high blind.
-	if entity.currentBet < entity.config.BigBlind {
-		entity.currentBet = entity.config.BigBlind
-	}
-
 	// Set first player to act (after big blind for pre-flop)
 	if numPlayers == 2 {
 		// In heads-up, small blind acts first pre-flop

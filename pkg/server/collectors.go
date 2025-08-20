@@ -135,8 +135,7 @@ func (s *Server) collectGameSnapshot(game *poker.Game) *GameSnapshot {
 }
 
 // buildGameEvent constructs a GameEvent with a fresh table snapshot and the
-// list of current player IDs. It centralises the repetitive logic that was
-// previously duplicated across the individual collectors.
+// list of current player IDs.
 func (s *Server) buildGameEvent(eventType GameEventType, tableID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
 	tableSnapshot, err := s.collectTableSnapshot(tableID)
 	if err != nil {
