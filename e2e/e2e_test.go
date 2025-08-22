@@ -518,7 +518,7 @@ func TestCompleteHandFlow(t *testing.T) {
 	env.waitForGamePhase(ctx, tableID, pokerrpc.GamePhase_SHOWDOWN, 3*time.Second)
 
 	// Verify Player4 won the pot
-	winners, err := env.pokerClient.GetWinners(ctx, &pokerrpc.GetWinnersRequest{
+	winners, err := env.pokerClient.GetLastWinners(ctx, &pokerrpc.GetLastWinnersRequest{
 		TableId: tableID,
 	})
 	require.NoError(t, err)
@@ -1064,4 +1064,94 @@ func TestStartingChipsDefaultWithZeroBuyIn(t *testing.T) {
 	// Verify pot is now 80 (60 + 20 additional from BB calling)
 	state = env.getGameState(ctx, tableID)
 	assert.Equal(t, int64(80), state.Pot, "pot should be 80 after BB's call (60+20)")
+}
+
+// -----------------------------------------------------------------------------
+//
+//	SCENARIO: Autoplay a single hand with 3 players until showdown
+//
+// -----------------------------------------------------------------------------
+func TestThreePlayersAutoplayOneHand(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	defer env.Close()
+
+	ctx := context.Background()
+
+	// Setup 3 players and bankroll
+	players := []string{"a3", "b3", "c3"}
+	for _, p := range players {
+		env.setBalance(ctx, p, 10_000)
+	}
+
+	// Create a 3-max table and join remaining players
+	tableID := env.createStandardTable(ctx, players[0], 3, 3)
+	for _, p := range players[1:] {
+		_, err := env.lobbyClient.JoinTable(ctx, &pokerrpc.JoinTableRequest{PlayerId: p, TableId: tableID})
+		require.NoError(t, err)
+	}
+
+	// Everyone ready
+	for _, p := range players {
+		_, err := env.lobbyClient.SetPlayerReady(ctx, &pokerrpc.SetPlayerReadyRequest{PlayerId: p, TableId: tableID})
+		require.NoError(t, err)
+	}
+
+	// Wait for game to start
+	env.waitForGameStart(ctx, tableID, 3*time.Second)
+
+	// Autoplay loop: for the current player, if needs to match current bet, call; otherwise check.
+	deadline := time.NewTimer(30 * time.Second)
+	defer deadline.Stop()
+
+	for {
+		select {
+		case <-deadline.C:
+			t.Fatal("autoplay timed out before reaching showdown")
+		default:
+		}
+
+		state := env.getGameState(ctx, tableID)
+		if state.GameStarted && state.Phase == pokerrpc.GamePhase_SHOWDOWN {
+			break
+		}
+
+		// Identify current player and their contribution
+		curr := state.CurrentPlayer
+		var currPlayer *pokerrpc.Player
+		for _, p := range state.Players {
+			if p.Id == curr {
+				currPlayer = p
+				break
+			}
+		}
+		if currPlayer == nil {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+
+		// Decide action
+		if currPlayer.CurrentBet >= state.CurrentBet {
+			_, err := env.pokerClient.Check(ctx, &pokerrpc.CheckRequest{PlayerId: curr, TableId: tableID})
+			if err != nil {
+				// If cannot check, try calling to the current bet
+				_, err2 := env.pokerClient.MakeBet(ctx, &pokerrpc.MakeBetRequest{PlayerId: curr, TableId: tableID, Amount: state.CurrentBet})
+				require.NoError(t, err2)
+			}
+		} else {
+			_, err := env.pokerClient.MakeBet(ctx, &pokerrpc.MakeBetRequest{PlayerId: curr, TableId: tableID, Amount: state.CurrentBet})
+			require.NoError(t, err)
+		}
+
+		// Avoid spamming
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Final assertions
+	final := env.getGameState(ctx, tableID)
+	require.Equal(t, pokerrpc.GamePhase_SHOWDOWN, final.Phase)
+	require.Equal(t, int32(3), final.PlayersJoined)
+	assert.Greater(t, final.Pot, int64(0))
+	// Ensure we still see 3 players in the final state
+	assert.Equal(t, 3, len(final.Players))
 }

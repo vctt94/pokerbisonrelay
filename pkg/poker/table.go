@@ -88,6 +88,12 @@ type Table struct {
 	// Event manager for notifications
 	eventManager *TableEventManager
 
+	// Persist the last showdown result for retrieval after phase advances
+	lastShowdown *ShowdownResult
+
+	// Idempotency guard: track which hand (by game round) has been resolved
+	resolvedRound int
+
 	// State machine - Rob Pike's pattern
 	stateMachine *statemachine.StateMachine[Table]
 }
@@ -292,8 +298,16 @@ func (t *Table) handleShowdown() {
 		return
 	}
 
-	// Delegate all showdown logic to the game
-	_ = t.game.handleShowdown()
+	currentRound := t.game.GetRound()
+	if t.lastShowdown != nil && t.resolvedRound == currentRound {
+		// Already resolved winners for this hand
+		return
+	}
+
+	// Delegate showdown logic to the game and cache authoritative result
+	result := t.game.handleShowdown()
+	t.lastShowdown = result
+	t.resolvedRound = currentRound
 
 	// Count players still at the table with sufficient balance for the next hand
 	playersReadyForNextHand := 0
@@ -303,10 +317,11 @@ func (t *Table) handleShowdown() {
 		}
 	}
 
+	// Reset round-local counters and update timestamp
 	t.game.ResetActionsInRound()
 	t.lastAction = time.Now()
 
-	// Auto-start functionality is now handled by the Game layer in handleShowdown
+	// Auto-start functionality is handled by the Game layer
 }
 
 // startNewHand is the internal implementation that assumes the lock is already held
@@ -612,6 +627,13 @@ func (t *Table) GetGame() *Game {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.game
+}
+
+// GetLastShowdown returns the last recorded showdown result (if any).
+func (t *Table) GetLastShowdown() *ShowdownResult {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.lastShowdown
 }
 
 // GetCurrentBet returns the current highest bet for the ongoing betting round.

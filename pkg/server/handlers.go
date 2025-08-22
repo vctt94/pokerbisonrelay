@@ -238,6 +238,7 @@ func (gsh *GameStateHandler) buildGameUpdateFromSnapshot(tableSnapshot *TableSna
 	return &pokerrpc.GameUpdate{
 		TableId:         tableSnapshot.ID,
 		Phase:           gamePhase,
+		PhaseName:       gamePhase.String(),
 		Players:         players,
 		CommunityCards:  communityCards,
 		Pot:             pot,

@@ -34,6 +34,15 @@ func (s *Server) collectTableSnapshot(tableID string) (*TableSnapshot, error) {
 	var gameSnapshot *GameSnapshot
 	if game != nil {
 		gameSnapshot = s.collectGameSnapshot(game)
+		// Mirror authoritative winners from table's cached lastShowdown, if any
+		if ls := table.GetLastShowdown(); ls != nil && gameSnapshot != nil {
+			if len(ls.Winners) > 0 {
+				gameSnapshot.Winners = make([]string, len(ls.Winners))
+				copy(gameSnapshot.Winners, ls.Winners)
+			} else {
+				gameSnapshot.Winners = nil
+			}
+		}
 	}
 
 	// Collect table state

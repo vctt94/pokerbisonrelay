@@ -154,18 +154,17 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 	}
 
 	cfg := poker.TableConfig{
-		ID:             fmt.Sprintf("table_%d", time.Now().UnixNano()),
-		Log:            s.log,
-		HostID:         req.PlayerId,
-		BuyIn:          req.BuyIn,
-		MinPlayers:     int(req.MinPlayers),
-		MaxPlayers:     int(req.MaxPlayers),
-		SmallBlind:     req.SmallBlind,
-		BigBlind:       req.BigBlind,
-		MinBalance:     req.MinBalance,
-		StartingChips:  startingChips, // Chips amount for the game with default logic
-		TimeBank:       timeBank,
-		AutoStartDelay: 5 * time.Second,
+		ID:            fmt.Sprintf("table_%d", time.Now().UnixNano()),
+		Log:           s.log,
+		HostID:        req.PlayerId,
+		BuyIn:         req.BuyIn,
+		MinPlayers:    int(req.MinPlayers),
+		MaxPlayers:    int(req.MaxPlayers),
+		SmallBlind:    req.SmallBlind,
+		BigBlind:      req.BigBlind,
+		MinBalance:    req.MinBalance,
+		StartingChips: startingChips, // Chips amount for the game with default logic
+		TimeBank:      timeBank,
 	}
 
 	// Create table
@@ -786,6 +785,7 @@ func (s *Server) buildGameStateForPlayer(table *poker.Table, game *poker.Game, r
 	return &pokerrpc.GameUpdate{
 		TableId:         table.GetConfig().ID,
 		Phase:           table.GetGamePhase(),
+		PhaseName:       table.GetGamePhase().String(),
 		Players:         players,
 		CommunityCards:  communityCards,
 		Pot:             pot,
@@ -1142,7 +1142,7 @@ func convertGRPCCardToInternal(grpcCard *pokerrpc.Card) (poker.Card, error) {
 	return poker.NewCardFromSuitValue(suit, value), nil
 }
 
-func (s *Server) GetWinners(ctx context.Context, req *pokerrpc.GetWinnersRequest) (*pokerrpc.GetWinnersResponse, error) {
+func (s *Server) GetLastWinners(ctx context.Context, req *pokerrpc.GetLastWinnersRequest) (*pokerrpc.GetLastWinnersResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1150,64 +1150,32 @@ func (s *Server) GetWinners(ctx context.Context, req *pokerrpc.GetWinnersRequest
 	if !ok {
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
-
-	// If game hasn't started or is nil, return empty winners.
-	if !table.IsGameStarted() || table.GetGame() == nil {
-		return &pokerrpc.GetWinnersResponse{
+	last := table.GetLastShowdown()
+	if last == nil {
+		return &pokerrpc.GetLastWinnersResponse{
 			Winners: []*pokerrpc.Winner{},
-			Pot:     0,
 		}, nil
+	}
+
+	winners := make([]*pokerrpc.Winner, 0, len(last.WinnerInfo))
+
+	// If game hasn't started or is nil, fall back to last showdown if available.
+	if !table.IsGameStarted() || table.GetGame() == nil {
+		s.log.Debugf("GetLastWinners: table %s returning cached showdown: winners=%d pot=%d", req.TableId, len(last.WinnerInfo), last.TotalPot)
+		for _, wi := range last.WinnerInfo {
+			winners = append(winners, &pokerrpc.Winner{PlayerId: wi.PlayerId, Winnings: wi.Winnings, HandRank: wi.HandRank, BestHand: wi.BestHand})
+		}
+		return &pokerrpc.GetLastWinnersResponse{Winners: winners}, nil
 	}
 
 	game := table.GetGame()
-	pot := game.GetPot()
 
-	// If the game is in showdown phase and we have tracked winners, use them
-	gameWinners := game.GetWinners()
-	if game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN && len(gameWinners) > 0 {
-		winners := []*pokerrpc.Winner{}
-		for _, winnerID := range gameWinners {
-			winners = append(winners, &pokerrpc.Winner{
-				PlayerId: winnerID,
-				Winnings: pot / int64(len(gameWinners)),
-			})
-		}
-		return &pokerrpc.GetWinnersResponse{
-			Winners: winners,
-			Pot:     pot,
-		}, nil
+	s.log.Debugf("GetLastWinners: table %s game phase=%v", req.TableId, game.GetPhase())
+	for _, wi := range last.WinnerInfo {
+		winners = append(winners, &pokerrpc.Winner{PlayerId: wi.PlayerId, Winnings: wi.Winnings, HandRank: wi.HandRank, BestHand: wi.BestHand})
 	}
+	return &pokerrpc.GetLastWinnersResponse{Winners: winners}, nil
 
-	// If the game is not in showdown phase, determine winners based on current active players
-	if game.GetPhase() != pokerrpc.GamePhase_SHOWDOWN {
-		// Determine last active player (non-folded) from game players
-		var winnerID string
-		for _, p := range game.GetPlayers() {
-			if !p.HasFolded {
-				winnerID = p.ID
-				break
-			}
-		}
-
-		winners := []*pokerrpc.Winner{}
-		if winnerID != "" {
-			winners = append(winners, &pokerrpc.Winner{
-				PlayerId: winnerID,
-				Winnings: pot,
-			})
-		}
-
-		return &pokerrpc.GetWinnersResponse{
-			Winners: winners,
-			Pot:     pot,
-		}, nil
-	}
-
-	// Fallback: no tracked winners in showdown phase - shouldn't happen but return empty
-	return &pokerrpc.GetWinnersResponse{
-		Winners: []*pokerrpc.Winner{},
-		Pot:     pot,
-	}, nil
 }
 
 // Game state persistence methods
@@ -1442,8 +1410,8 @@ func (s *Server) loadTableFromDatabase(tableID string) (*poker.Table, error) {
 		BigBlind:       dbTableState.BigBlind,
 		MinBalance:     dbTableState.MinBalance,
 		StartingChips:  dbTableState.StartingChips,
-		TimeBank:       30 * time.Second, // Default
-		AutoStartDelay: 3 * time.Second,  // Default
+		TimeBank:       dbTableState.TimeBank,       // Default
+		AutoStartDelay: dbTableState.AutoStartDelay, // Default
 	}
 
 	// Create table
@@ -1550,6 +1518,7 @@ func (s *Server) restoreGameState(table *poker.Table, dbTableState *db.TableStat
 		StartingChips:  tblCfg.StartingChips,
 		SmallBlind:     tblCfg.SmallBlind,
 		BigBlind:       tblCfg.BigBlind,
+		TimeBank:       tblCfg.TimeBank,
 		AutoStartDelay: tblCfg.AutoStartDelay,
 		Log:            s.logBackend.Logger("GAME"),
 	}

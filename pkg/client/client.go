@@ -20,6 +20,7 @@ import (
 	"github.com/companyzero/bisonrelay/clientrpc/types"
 	"github.com/vctt94/bisonbotkit/botclient"
 	"github.com/vctt94/bisonbotkit/logging"
+	"github.com/vctt94/poker-bisonrelay/pkg/poker"
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 	pokerutils "github.com/vctt94/poker-bisonrelay/pkg/utils"
 	"google.golang.org/grpc"
@@ -28,17 +29,6 @@ import (
 
 // Message types for UI communication
 type GameUpdateMsg *pokerrpc.GameUpdate
-
-// TableCreateConfig holds configuration for creating a new table
-type TableCreateConfig struct {
-	SmallBlind    int64
-	BigBlind      int64
-	MinPlayers    int32
-	MaxPlayers    int32
-	BuyIn         int64
-	MinBalance    int64
-	StartingChips int64
-}
 
 // PokerClient represents a poker client with notification handling
 type PokerClient struct {
@@ -114,52 +104,69 @@ func NewPokerClient(ctx context.Context, cfg *PokerClientConfig) (*PokerClient, 
 
 // newBaseClient creates a basic client without notification support (internal use)
 func newClient(ctx context.Context, cfg *PokerClientConfig) (*PokerClient, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("cfg is nil")
+	}
 	// Ensure datadir exists
 	if err := pokerutils.EnsureDataDirExists(cfg.DataDir); err != nil {
 		return nil, fmt.Errorf("failed to create datadir: %v", err)
 	}
 
-	// Convert to BisonRelay config
-	clientConfig := cfg.ToBisonRelayConfig()
+	// Convert to BisonRelay config (unless offline)
+	var brClient *botclient.BotClient
+	var log slog.Logger
+	var logBackend *logging.LogBackend
+	var clientID string
+	if cfg.Offline {
+		if cfg.PlayerID == "" {
+			return nil, fmt.Errorf("clientID is required when running offline")
+		}
+		// If running offline, require explicit PlayerID from config.
+		clientID = cfg.PlayerID
+		// Minimal logging backend when offline
+		lb, _ := logging.NewLogBackend(logging.LogConfig{DebugLevel: "info"})
+		log = lb.Logger("PokerClient")
+		logBackend = lb
+	} else {
+		// connect to BisonRelay
+		clientConfig := cfg.ToBisonRelayConfig()
 
-	// Initialize BisonRelay client
-	brClient, err := botclient.NewClient(clientConfig)
-	if err != nil {
-		fmt.Printf("Failed to create bot client: %v\n", err)
-		os.Exit(1)
-	}
-	log := brClient.LogBackend.Logger("PokerClient")
-
-	client := &PokerClient{
-		DataDir:    cfg.DataDir,
-		BRClient:   brClient,
-		log:        log,
-		logBackend: brClient.LogBackend,
-		cfg:        cfg,
-	}
-
-	// Start the RPC client in a goroutine if brClient was created successfully
-	if brClient != nil {
+		// Initialize BisonRelay client
+		bc, err := botclient.NewClient(clientConfig)
+		if err != nil {
+			fmt.Printf("Failed to create bot client: %v\n", err)
+			os.Exit(1)
+		}
+		if bc == nil {
+			return nil, fmt.Errorf("bot client is nil")
+		}
+		brClient = bc
+		// Start the RPC client in a goroutine if brClient was created successfully
 		go brClient.RunRPC(ctx)
-
 		// Get the client ID
 		var publicIdentity types.PublicIdentity
 		err = brClient.Chat.UserPublicIdentity(ctx, &types.PublicIdentityReq{}, &publicIdentity)
 		if err != nil {
-			log.Errorf("Failed to get user public identity: %v", err)
-		} else {
-			// Convert the identity to a hex string for use as client ID
-			client.ID = hex.EncodeToString(publicIdentity.Identity[:])
+			return nil, fmt.Errorf("Failed to get user public identity: %v", err)
 		}
+		clientID = hex.EncodeToString(publicIdentity.Identity[:])
+		if clientID == "" {
+			return nil, fmt.Errorf("clientID can not be empty")
+		}
+		log = brClient.LogBackend.Logger("PokerClient")
+		logBackend = brClient.LogBackend
 	}
 
-	// Use a fallback client ID if BR client failed or no ID was obtained
-	if client.ID == "" {
-		client.ID = fmt.Sprintf("client-%d", os.Getpid())
-		log.Warnf("Using fallback client ID: %s", client.ID)
+	client := &PokerClient{
+		ID:         clientID,
+		DataDir:    cfg.DataDir,
+		BRClient:   brClient,
+		log:        log,
+		logBackend: logBackend,
+		cfg:        cfg,
 	}
 
-	log.Infof("Using client ID: %s", client.ID)
+	log.Debugf("Using client ID: %s", client.ID)
 
 	// Connect to the poker server
 	if err := client.connectToPokerServer(ctx, cfg.GRPCHost); err != nil {
@@ -190,47 +197,53 @@ func (pc *PokerClient) connectToPokerServer(ctx context.Context, grpcHost string
 		return fmt.Errorf("GRPCPort is not configured")
 	}
 
-	// Use TLS
-	grpcServerCertPath := pc.cfg.GRPCServerCert
-	if grpcServerCertPath == "" {
-		grpcServerCertPath = filepath.Join(pc.DataDir, "server.cert")
-	}
-
-	// Check if server certificate exists, create default one if not
-	if _, err := os.Stat(grpcServerCertPath); os.IsNotExist(err) {
-		if err := CreateDefaultServerCert(grpcServerCertPath); err != nil {
-			return fmt.Errorf("failed to create default server certificate: %v", err)
+	// TLS or insecure
+	if pc.cfg.Insecure {
+		// Note: WithInsecure is deprecated but fine for tests; we keep local usage to integration paths
+		dialOpts = append(dialOpts, grpc.WithInsecure())
+	} else {
+		// Use TLS
+		grpcServerCertPath := pc.cfg.GRPCServerCert
+		if grpcServerCertPath == "" {
+			grpcServerCertPath = filepath.Join(pc.DataDir, "server.cert")
 		}
-	}
 
-	// Load the server certificate
-	pemServerCA, err := os.ReadFile(grpcServerCertPath)
-	if err != nil {
-		return fmt.Errorf("failed to read server certificate: %v", err)
-	}
+		// Check if server certificate exists, create default one if not
+		if _, err := os.Stat(grpcServerCertPath); os.IsNotExist(err) {
+			if err := CreateDefaultServerCert(grpcServerCertPath); err != nil {
+				return fmt.Errorf("failed to create default server certificate: %v", err)
+			}
+		}
 
-	certPool := x509.NewCertPool()
-	if !certPool.AppendCertsFromPEM(pemServerCA) {
-		return fmt.Errorf("failed to add server certificate to pool")
-	}
+		// Load the server certificate
+		pemServerCA, err := os.ReadFile(grpcServerCertPath)
+		if err != nil {
+			return fmt.Errorf("failed to read server certificate: %v", err)
+		}
 
-	// Use GRPCHost for TLS ServerName, fallback to grpcHost parameter if needed
-	serverName := pc.cfg.GRPCHost
-	if serverName == "" {
-		serverName = grpcHost
-	}
-	if serverName == "" {
-		serverName = "localhost" // fallback
-	}
+		certPool := x509.NewCertPool()
+		if !certPool.AppendCertsFromPEM(pemServerCA) {
+			return fmt.Errorf("failed to add server certificate to pool")
+		}
 
-	// Create the TLS credentials with ServerName
-	tlsConfig := &tls.Config{
-		RootCAs:    certPool,
-		ServerName: serverName,
-	}
+		// Use GRPCHost for TLS ServerName, fallback to grpcHost parameter if needed
+		serverName := pc.cfg.GRPCHost
+		if serverName == "" {
+			serverName = grpcHost
+		}
+		if serverName == "" {
+			serverName = "localhost" // fallback
+		}
 
-	creds := credentials.NewTLS(tlsConfig)
-	dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
+		// Create the TLS credentials with ServerName
+		tlsConfig := &tls.Config{
+			RootCAs:    certPool,
+			ServerName: serverName,
+		}
+
+		creds := credentials.NewTLS(tlsConfig)
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
+	}
 
 	// Construct server address from GRPCHost and GRPCPort
 	serverAddr := fmt.Sprintf("%s:%s", pc.cfg.GRPCHost, pc.cfg.GRPCPort)
@@ -264,11 +277,11 @@ func (pc *PokerClient) initializeAccount(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("could not initialize balance: %v", err)
 		}
-		fmt.Printf("Initialized balance: %d\n", updateResp.NewBalance)
-	} else {
-		fmt.Printf("Current balance: %d\n", balanceResp.Balance)
+		pc.log.Debugf("Initialized DCR account balance: %d", updateResp.NewBalance)
+		return nil
 	}
 
+	pc.log.Debugf("Current DCR account balance: %d", balanceResp.Balance)
 	return nil
 }
 
@@ -516,19 +529,20 @@ func (pc *PokerClient) JoinTable(ctx context.Context, tableID string) error {
 	return nil
 }
 
-// CreateTable creates a new poker table and tracks the table ID
-func (pc *PokerClient) createTable(ctx context.Context,
-	smallBlind, bigBlind int64, maxPlayers, minPlayers int32, minBalance, buyIn, startingChips int64,
-) (string, error) {
+// CreateTable creates a new poker table using poker.TableConfig
+func (pc *PokerClient) CreateTable(ctx context.Context, config poker.TableConfig) (string, error) {
+	// Convert poker.TableConfig to RPC CreateTableRequest
+	timeBankSeconds := int32(config.TimeBank.Seconds())
 	resp, err := pc.LobbyService.CreateTable(ctx, &pokerrpc.CreateTableRequest{
-		PlayerId:      pc.ID,
-		SmallBlind:    smallBlind,
-		BigBlind:      bigBlind,
-		MaxPlayers:    maxPlayers,
-		MinPlayers:    minPlayers,
-		MinBalance:    minBalance,
-		BuyIn:         buyIn,
-		StartingChips: startingChips,
+		PlayerId:        pc.ID,
+		SmallBlind:      config.SmallBlind,
+		BigBlind:        config.BigBlind,
+		MaxPlayers:      int32(config.MaxPlayers),
+		MinPlayers:      int32(config.MinPlayers),
+		MinBalance:      config.MinBalance,
+		BuyIn:           config.BuyIn,
+		StartingChips:   config.StartingChips,
+		TimeBankSeconds: timeBankSeconds,
 	})
 	if err != nil {
 		return "", err
@@ -538,23 +552,13 @@ func (pc *PokerClient) createTable(ctx context.Context,
 	pc.tableID = resp.TableId
 	pc.Unlock()
 
-	return resp.TableId, nil
-}
-
-// CreateTable creates a new poker table using a configuration struct
-func (pc *PokerClient) CreateTable(ctx context.Context, config TableCreateConfig) (string, error) {
-	tableID, err := pc.createTable(ctx, config.SmallBlind, config.BigBlind, config.MaxPlayers, config.MinPlayers, config.MinBalance, config.BuyIn, config.StartingChips)
-	if err != nil {
-		return "", err
-	}
-
 	// Start game stream for real-time updates
 	if err := pc.StartGameStream(ctx); err != nil {
 		pc.log.Warnf("Failed to start game stream: %v", err)
 		// Don't return error here since table creation was successful
 	}
 
-	return tableID, nil
+	return resp.TableId, nil
 }
 
 // LeaveTable leaves the current table and clears the table ID
@@ -746,6 +750,14 @@ func (pc *PokerClient) GetCurrentTableID() string {
 	pc.RLock()
 	defer pc.RUnlock()
 	return pc.tableID
+}
+
+// SetCurrentTableID sets the current table ID without making any RPC calls.
+// This is useful for stateless CLI invocations that need to target a table by ID.
+func (pc *PokerClient) SetCurrentTableID(tableID string) {
+	pc.Lock()
+	pc.tableID = tableID
+	pc.Unlock()
 }
 
 // Action methods for poker gameplay

@@ -23,6 +23,7 @@ type GameConfig struct {
 	BigBlind       int64         // Big blind amount
 	Seed           int64         // Optional seed for deterministic games
 	AutoStartDelay time.Duration // Delay before automatically starting next hand after showdown
+	TimeBank       time.Duration // Time bank for each player
 	Log            slog.Logger   // Logger for game events
 }
 
@@ -360,87 +361,17 @@ func stateRiver(entity *Game, callback func(stateName string, event statemachine
 
 // stateShowdown determines the winner of the hand
 func stateShowdown(entity *Game, callback func(stateName string, event statemachine.StateEvent)) GameStateFn {
-	// Debug: Log that we entered stateShowdown
+	// Mark phase as SHOWDOWN; actual showdown resolution is handled by Table.handleShowdown → Game.handleShowdown
 	entity.log.Debugf("stateShowdown: entered showdown state")
-
-	// Update phase to SHOWDOWN
 	entity.phase = pokerrpc.GamePhase_SHOWDOWN
-
-	// Count active (non-folded) players
-	activePlayers := make([]*Player, 0)
-	for _, player := range entity.players {
-		if !player.HasFolded {
-			activePlayers = append(activePlayers, player)
-		}
-	}
-
-	// Track winners before distributing pots
-	entity.winners = make([]string, 0)
-
-	// If only one player remains, they win automatically without hand evaluation
-	if len(activePlayers) <= 1 {
-		// Award the pot to the remaining player (if any)
-		if len(activePlayers) == 1 {
-			winnings := entity.GetPot()
-			activePlayers[0].Balance += winnings
-			entity.winners = append(entity.winners, activePlayers[0].ID)
-		}
-	} else {
-		// Multiple players remain - need proper hand evaluation
-		// Only evaluate hands if we have enough cards (player hand + community cards >= 5)
-		validEvaluations := true
-
-		for _, player := range activePlayers {
-			totalCards := len(player.Hand) + len(entity.communityCards)
-			if totalCards < 5 {
-				validEvaluations = false
-				break
-			}
-		}
-
-		if validEvaluations {
-			// Evaluate each active player's hand
-			for _, player := range activePlayers {
-				handValue := EvaluateHand(player.Hand, entity.communityCards)
-				player.HandValue = &handValue
-				player.HandDescription = GetHandDescription(handValue)
-			}
-
-			// Check for any uncalled bets and return them
-			entity.potManager.ReturnUncalledBet(entity.players)
-
-			// Create side pots if needed
-			entity.potManager.CreateSidePots(entity.players)
-
-			// Distribute pots to winners
-			entity.potManager.DistributePots(entity.players)
-
-			// Track all winners who won money
-			for _, player := range activePlayers {
-				// Check if player received winnings by comparing balance before and after
-				if player.Balance > 0 {
-					entity.winners = append(entity.winners, player.ID)
-				}
-			}
-		} else {
-			// Can't properly evaluate hands - award pot to first active player
-			// This is a fallback for incomplete games
-			if len(activePlayers) > 0 {
-				winnings := entity.GetPot()
-				activePlayers[0].Balance += winnings
-				entity.winners = append(entity.winners, activePlayers[0].ID)
-			}
-		}
-	}
 
 	if callback != nil {
 		callback("SHOWDOWN", statemachine.StateEntered)
 	}
 
-	// Schedule auto-start if configured
+	// Optionally schedule auto-start; handleShowdown may also schedule when appropriate.
 	if entity.config.AutoStartDelay > 0 {
 		if entity.autoStartCallbacks != nil {
-			// Debug: Log that we're scheduling auto-start
 			entity.log.Debugf("Scheduling auto-start from stateShowdown, delay=%v", entity.config.AutoStartDelay)
 			entity.scheduleAutoStart()
 		}
@@ -643,7 +574,16 @@ func (g *Game) ResetForNewHand(activePlayers []*Player) {
 	}
 
 	// Create new shuffled deck for new hand
-	g.deck = NewDeck(g.deck.rng)
+	// If a deterministic seed is configured, re-seed per hand so each hand starts
+	// from the same RNG state (useful for deterministic tests). Otherwise reuse
+	// the existing RNG to continue the random sequence across hands.
+	var nextRng *rand.Rand
+	if g.config.Seed != 0 {
+		nextRng = rand.New(rand.NewSource(g.config.Seed))
+	} else {
+		nextRng = g.deck.rng
+	}
+	g.deck = NewDeck(nextRng)
 
 	// Set phase to NEW_HAND_DEALING to signal setup in progress
 	g.phase = pokerrpc.GamePhase_NEW_HAND_DEALING
@@ -952,39 +892,35 @@ func (g *Game) handleShowdown() *ShowdownResult {
 			// Create side pots if needed
 			g.potManager.CreateSidePots(g.players)
 
-			// Find the actual winners by comparing hand values
-			var bestPlayers []*Player
-			var bestHandValue *HandValue
-
-			for _, player := range activePlayers {
-				if player.HandValue != nil {
-					if bestHandValue == nil || CompareHands(*player.HandValue, *bestHandValue) > 0 {
-						bestHandValue = player.HandValue
-						bestPlayers = []*Player{player}
-					} else if CompareHands(*player.HandValue, *bestHandValue) == 0 {
-						bestPlayers = append(bestPlayers, player)
-					}
-				}
+			// Snapshot balances before distribution to compute per-player winnings precisely
+			prevBalances := make(map[string]int64, len(g.players))
+			for _, p := range g.players {
+				prevBalances[p.ID] = p.Balance
 			}
-
-			// Store total pot before distribution
-			totalPot := g.getPot()
 
 			// Distribute pots to winners
 			g.potManager.DistributePots(g.players)
 
-			// Create winner notifications
-			winningsPerPlayer := totalPot / int64(len(bestPlayers))
-
-			for _, winner := range bestPlayers {
-				result.Winners = append(result.Winners, winner.ID)
-
-				result.WinnerInfo = append(result.WinnerInfo, &pokerrpc.Winner{
-					PlayerId: winner.ID,
-					HandRank: winner.HandValue.HandRank,
-					BestHand: CreateHandFromCards(winner.HandValue.BestHand),
-					Winnings: winningsPerPlayer,
-				})
+			// Build winner list based on balance deltas (captures main/side pots and remainder)
+			for _, p := range g.players {
+				delta := p.Balance - prevBalances[p.ID]
+				if delta > 0 {
+					result.Winners = append(result.Winners, p.ID)
+					var handRank pokerrpc.HandRank
+					var bestHand []Card
+					if p.HandValue != nil {
+						handRank = p.HandValue.HandRank
+						bestHand = p.HandValue.BestHand
+					} else {
+						bestHand = p.Hand
+					}
+					result.WinnerInfo = append(result.WinnerInfo, &pokerrpc.Winner{
+						PlayerId: p.ID,
+						HandRank: handRank,
+						BestHand: CreateHandFromCards(bestHand),
+						Winnings: delta,
+					})
+				}
 			}
 		} else {
 			// Can't properly evaluate hands - award pot to first active player
@@ -1243,7 +1179,7 @@ func (g *Game) ScheduleAutoStart() {
 	g.scheduleAutoStart()
 }
 
-// scheduleAutoStart is the internal implementation (assumes lock is held)
+// scheduleAutoStart is the internal implementation
 func (g *Game) scheduleAutoStart() {
 	// Cancel any existing auto-start timer
 	g.cancelAutoStart()
@@ -1293,9 +1229,7 @@ func (g *Game) scheduleAutoStart() {
 			} else {
 				log.Debugf("Auto-started new hand successfully with %d players", readyCount)
 				if callbacks.OnNewHandStarted != nil {
-					// Invoke the callback without holding the game's mutex to
-					// avoid potential deadlocks with external code acquiring
-					// server-side locks.
+					// Invoke the callback
 					go callbacks.OnNewHandStarted()
 				}
 			}
