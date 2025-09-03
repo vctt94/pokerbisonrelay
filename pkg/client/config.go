@@ -21,6 +21,9 @@ type PokerClientConfig struct {
 	// Data directory
 	DataDir string
 
+	// Explicit player ID (used in offline/testing mode)
+	PlayerID string
+
 	// gRPC server configuration
 	GRPCHost       string
 	GRPCPort       string
@@ -28,6 +31,10 @@ type PokerClientConfig struct {
 
 	// Notifications
 	Notifications *NotificationManager
+
+	// Test/dev toggles
+	Insecure bool // use insecure gRPC (no TLS)
+	Offline  bool // do not initialize/connect to BisonRelay
 }
 
 // LoadConfig loads and processes the complete configuration from files only
@@ -44,10 +51,11 @@ func (cfg *PokerClientConfig) LoadConfig(appName string, datadir string) error {
 		return fmt.Errorf("failed to create log directory: %v", err)
 	}
 
-	// Load existing configuration file if it exists
+	// Load existing configuration file if it exists.
 	existingConfig, err := config.LoadClientConfig(datadir, appName+".conf")
 	if err != nil {
-		return fmt.Errorf("failed to load configuration: %v", err)
+		// Proceed with an empty config; flags may override
+		existingConfig = &config.ClientConfig{ExtraConfig: make(map[string]string)}
 	}
 
 	if cfg.BRConfig == nil {
@@ -91,6 +99,10 @@ func (cfg *PokerClientConfig) LoadConfig(appName string, datadir string) error {
 func (cfg *PokerClientConfig) SetConfigValues(values map[string]interface{}) {
 	for key, value := range values {
 		switch key {
+		case "id", "playerid":
+			if v, ok := value.(string); ok && v != "" {
+				cfg.PlayerID = v
+			}
 		case "rpcurl":
 			if v, ok := value.(string); ok && v != "" {
 				cfg.BRConfig.RPCURL = v
@@ -143,6 +155,14 @@ func (cfg *PokerClientConfig) SetConfigValues(values map[string]interface{}) {
 			if v, ok := value.(string); ok && v != "" {
 				cfg.BRConfig.Debug = v
 			}
+		case "grpcinsecure":
+			if v, ok := value.(bool); ok {
+				cfg.Insecure = v
+			}
+		case "offline":
+			if v, ok := value.(bool); ok {
+				cfg.Offline = v
+			}
 		}
 	}
 }
@@ -151,32 +171,37 @@ func (cfg *PokerClientConfig) SetConfigValues(values map[string]interface{}) {
 func (cfg *PokerClientConfig) ValidateConfig() error {
 	var missingConfigs []string
 
-	if cfg.BRConfig.RPCURL == "" {
-		missingConfigs = append(missingConfigs, "RPCURL")
-	}
-	if cfg.BRConfig.RPCUser == "" {
-		missingConfigs = append(missingConfigs, "RPCUser")
-	}
-	if cfg.BRConfig.RPCPass == "" {
-		missingConfigs = append(missingConfigs, "RPCPass")
-	}
 	if cfg.GRPCHost == "" {
 		missingConfigs = append(missingConfigs, "GRPCHost")
 	}
 	if cfg.GRPCPort == "" {
 		missingConfigs = append(missingConfigs, "GRPCPort")
 	}
-	if cfg.BRConfig.BRClientCert == "" {
-		missingConfigs = append(missingConfigs, "BRClientCert")
+	if !cfg.Insecure {
+		if cfg.GRPCServerCert == "" {
+			missingConfigs = append(missingConfigs, "GRPCServerCert")
+		}
 	}
-	if cfg.BRConfig.BRClientRPCCert == "" {
-		missingConfigs = append(missingConfigs, "BRClientRPCCert")
-	}
-	if cfg.BRConfig.BRClientRPCKey == "" {
-		missingConfigs = append(missingConfigs, "BRClientRPCKey")
-	}
-	if cfg.GRPCServerCert == "" {
-		missingConfigs = append(missingConfigs, "GRPCServerCert")
+
+	if !cfg.Offline {
+		if cfg.BRConfig.RPCURL == "" {
+			missingConfigs = append(missingConfigs, "RPCURL")
+		}
+		if cfg.BRConfig.RPCUser == "" {
+			missingConfigs = append(missingConfigs, "RPCUser")
+		}
+		if cfg.BRConfig.RPCPass == "" {
+			missingConfigs = append(missingConfigs, "RPCPass")
+		}
+		if cfg.BRConfig.BRClientCert == "" {
+			missingConfigs = append(missingConfigs, "BRClientCert")
+		}
+		if cfg.BRConfig.BRClientRPCCert == "" {
+			missingConfigs = append(missingConfigs, "BRClientRPCCert")
+		}
+		if cfg.BRConfig.BRClientRPCKey == "" {
+			missingConfigs = append(missingConfigs, "BRClientRPCKey")
+		}
 	}
 
 	if len(missingConfigs) > 0 {

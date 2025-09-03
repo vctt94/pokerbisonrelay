@@ -20,7 +20,8 @@ service PokerService {
   
   // Hand evaluation
   rpc EvaluateHand(EvaluateHandRequest) returns (EvaluateHandResponse) {}
-  rpc GetWinners(GetWinnersRequest) returns (GetWinnersResponse) {}
+  // Returns the last completed showdown winners (cached), independent of current phase
+  rpc GetLastWinners(GetLastWinnersRequest) returns (GetLastWinnersResponse) {}
 }
 
 // LobbyService handles table management and player connections
@@ -118,6 +119,7 @@ message GameUpdate {
   bool game_started = 10;
   int32 players_required = 11;
   int32 players_joined = 12;
+  string phase_name = 13;  // Human-readable name of the current phase
 }
 
 message MakeBetRequest {
@@ -180,13 +182,12 @@ message EvaluateHandResponse {
   repeated Card best_hand = 3;
 }
 
-message GetWinnersRequest {
+message GetLastWinnersRequest {
   string table_id = 1;
 }
 
-message GetWinnersResponse {
+message GetLastWinnersResponse {
   repeated Winner winners = 1;
-  int64 pot = 2;
 }
 
 message Winner {
@@ -207,6 +208,7 @@ message CreateTableRequest {
   int64 buy_in = 7;         // DCR amount to join table (in atoms)
   int64 starting_chips = 8; // Poker chips each player starts with
   int32 time_bank_seconds = 9; // Player timeout in seconds (default: 30)
+  int32 auto_start_ms = 10; // Auto-start delay between hands in ms (0 = disabled)
 }
 
 message CreateTableResponse {

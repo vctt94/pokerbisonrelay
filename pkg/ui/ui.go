@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/vctt94/poker-bisonrelay/pkg/client"
+	"github.com/vctt94/poker-bisonrelay/pkg/poker"
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
@@ -260,11 +261,11 @@ func (m *PokerUI) stateCreateTable(ui *PokerUI, msg tea.Msg) (stateFn, tea.Cmd) 
 			minBalance, _ := strconv.ParseInt(m.minBalance, 10, 64)
 			startingChips, _ := strconv.ParseInt(m.startingChips, 10, 64)
 
-			config := client.TableCreateConfig{
+			config := poker.TableConfig{
 				SmallBlind:    smallBlind,
 				BigBlind:      bigBlind,
-				MinPlayers:    int32(requiredPlayers),
-				MaxPlayers:    int32(requiredPlayers), // Using same value for min and max for now
+				MinPlayers:    int(requiredPlayers),
+				MaxPlayers:    int(requiredPlayers), // Using same value for min and max for now
 				BuyIn:         buyIn,
 				MinBalance:    minBalance,
 				StartingChips: startingChips,

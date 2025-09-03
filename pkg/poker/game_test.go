@@ -327,6 +327,102 @@ func TestTieBreakerShowdown(t *testing.T) {
 	}
 }
 
+// Split pot: Board makes the best five-card hand for both players.
+func TestSplitPotShowdown(t *testing.T) {
+	cfg := GameConfig{NumPlayers: 2, Seed: 1, Log: createTestLogger()}
+	game, err := NewGame(cfg)
+	require.NoError(t, err)
+
+	users := []*User{
+		NewUser("p1", "p1", 0, 0),
+		NewUser("p2", "p2", 0, 1),
+	}
+	game.SetPlayers(users)
+
+	// Force hands that don't improve beyond board
+	game.players[0].Hand = []Card{{suit: Hearts, value: Two}, {suit: Clubs, value: Three}}
+	game.players[1].Hand = []Card{{suit: Diamonds, value: Four}, {suit: Spades, value: Five}}
+
+	// Board: Straight 10-J-Q-K-A (broadway) split; use 10,J,Q,K,A in mixed suits
+	game.communityCards = []Card{
+		{suit: Hearts, value: Ten},
+		{suit: Clubs, value: Jack},
+		{suit: Diamonds, value: Queen},
+		{suit: Spades, value: King},
+		{suit: Hearts, value: Ace},
+	}
+
+	game.potManager = NewPotManager()
+	game.potManager.AddBet(0, 50)
+	game.potManager.AddBet(1, 50)
+
+	// Resolve showdown
+	res := game.handleShowdown()
+	require.NotNil(t, res)
+
+	// Both players should split 100 → 50 each
+	if game.players[0].Balance != 50 {
+		t.Fatalf("p1 expected 50, got %d", game.players[0].Balance)
+	}
+	if game.players[1].Balance != 50 {
+		t.Fatalf("p2 expected 50, got %d", game.players[1].Balance)
+	}
+}
+
+// Side pot: p3 all-in short, p1/p2 create side pot; winners differ per pot.
+func TestSidePotShowdown(t *testing.T) {
+	cfg := GameConfig{NumPlayers: 3, Seed: 1, Log: createTestLogger()}
+	game, err := NewGame(cfg)
+	require.NoError(t, err)
+
+	users := []*User{
+		NewUser("p1", "p1", 0, 0),
+		NewUser("p2", "p2", 0, 1),
+		NewUser("p3", "p3", 0, 2),
+	}
+	game.SetPlayers(users)
+
+	// Set balances to simulate all-in thresholds via bets recorded in pot manager
+	// We control through PotManager directly for test.
+	game.potManager = NewPotManager()
+
+	// Bets: p3 short 30, p1 50, p2 50 → main 90 (all eligible), side 40 (p1,p2)
+	game.potManager.AddBet(0, 50)
+	game.potManager.AddBet(1, 50)
+	game.potManager.AddBet(2, 30)
+
+	// Hand strengths: p3 wins main, p1 wins side
+	game.players[0].HasFolded = false
+	game.players[1].HasFolded = false
+	game.players[2].HasFolded = false
+
+	// Give explicit evaluated values via EvaluateHand semantics
+	hv3 := EvaluateHand([]Card{{suit: Hearts, value: Five}, {suit: Clubs, value: Five}}, []Card{{suit: Diamonds, value: Five}, {suit: Spades, value: Two}, {suit: Hearts, value: Three}, {suit: Clubs, value: Nine}, {suit: Diamonds, value: Queen}}) // trips
+	hv1 := EvaluateHand([]Card{{suit: Hearts, value: Ace}, {suit: Clubs, value: Ace}}, []Card{{suit: Diamonds, value: King}, {suit: Spades, value: Two}, {suit: Hearts, value: Three}, {suit: Clubs, value: Nine}, {suit: Diamonds, value: Queen}})   // pair aces
+	hv2 := EvaluateHand([]Card{{suit: Hearts, value: Ten}, {suit: Clubs, value: Nine}}, []Card{{suit: Diamonds, value: King}, {suit: Spades, value: Two}, {suit: Hearts, value: Three}, {suit: Clubs, value: Nine}, {suit: Diamonds, value: Queen}})  // pair nines
+
+	game.players[0].HandValue = &hv1
+	game.players[1].HandValue = &hv2
+	game.players[2].HandValue = &hv3
+
+	// Create side pots based on current bets
+	game.potManager.CreateSidePots(game.players)
+
+	// Distribute pots
+	game.potManager.DistributePots(game.players)
+
+	// Expected: p3 gets 90 (main), p1 gets 40 (side)
+	if game.players[2].Balance != 90 {
+		t.Fatalf("p3 expected 90 from main pot, got %d", game.players[2].Balance)
+	}
+	if game.players[0].Balance != 40 {
+		t.Fatalf("p1 expected 40 from side pot, got %d", game.players[0].Balance)
+	}
+	if game.players[1].Balance != 0 {
+		t.Fatalf("p2 expected 0, got %d", game.players[1].Balance)
+	}
+}
+
 func TestAutoStartOnNewHandStarted(t *testing.T) {
 	cfg := GameConfig{
 		NumPlayers:     2,

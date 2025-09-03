@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/vctt94/poker-bisonrelay/pkg/client"
+	"github.com/vctt94/poker-bisonrelay/pkg/poker"
 	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
@@ -86,7 +87,7 @@ func (d *CommandDispatcher) leaveTableCmd() tea.Cmd {
 	}
 }
 
-func (d *CommandDispatcher) createTableCmd(config client.TableCreateConfig) tea.Cmd {
+func (d *CommandDispatcher) createTableCmd(config poker.TableConfig) tea.Cmd {
 	return func() tea.Msg {
 		tableID, err := d.pc.CreateTable(d.ctx, config)
 		if err != nil {

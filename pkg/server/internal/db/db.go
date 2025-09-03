@@ -38,6 +38,9 @@ type TableState struct {
 
 	// Deck state (stored as JSON)
 	DeckState interface{}
+
+	TimeBank       time.Duration
+	AutoStartDelay time.Duration
 }
 
 // PlayerState represents the persistent state of a player at a table

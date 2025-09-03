@@ -34,6 +34,15 @@ func (s *Server) collectTableSnapshot(tableID string) (*TableSnapshot, error) {
 	var gameSnapshot *GameSnapshot
 	if game != nil {
 		gameSnapshot = s.collectGameSnapshot(game)
+		// Mirror authoritative winners from table's cached lastShowdown, if any
+		if ls := table.GetLastShowdown(); ls != nil && gameSnapshot != nil {
+			if len(ls.Winners) > 0 {
+				gameSnapshot.Winners = make([]string, len(ls.Winners))
+				copy(gameSnapshot.Winners, ls.Winners)
+			} else {
+				gameSnapshot.Winners = nil
+			}
+		}
 	}
 
 	// Collect table state
@@ -135,8 +144,7 @@ func (s *Server) collectGameSnapshot(game *poker.Game) *GameSnapshot {
 }
 
 // buildGameEvent constructs a GameEvent with a fresh table snapshot and the
-// list of current player IDs. It centralises the repetitive logic that was
-// previously duplicated across the individual collectors.
+// list of current player IDs.
 func (s *Server) buildGameEvent(eventType GameEventType, tableID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
 	tableSnapshot, err := s.collectTableSnapshot(tableID)
 	if err != nil {
