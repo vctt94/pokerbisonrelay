@@ -153,18 +153,24 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 		startingChips = 1000 // Default to 1000 poker chips when not specified
 	}
 
+	// Use dedicated loggers (levels controlled by backend debug level)
+	tblLog := s.logBackend.Logger("TABLE")
+	gameLog := s.logBackend.Logger("GAME")
+
 	cfg := poker.TableConfig{
-		ID:            fmt.Sprintf("table_%d", time.Now().UnixNano()),
-		Log:           s.log,
-		HostID:        req.PlayerId,
-		BuyIn:         req.BuyIn,
-		MinPlayers:    int(req.MinPlayers),
-		MaxPlayers:    int(req.MaxPlayers),
-		SmallBlind:    req.SmallBlind,
-		BigBlind:      req.BigBlind,
-		MinBalance:    req.MinBalance,
-		StartingChips: startingChips, // Chips amount for the game with default logic
-		TimeBank:      timeBank,
+		ID:             fmt.Sprintf("table_%d", time.Now().UnixNano()),
+		Log:            tblLog,
+		GameLog:        gameLog,
+		HostID:         req.PlayerId,
+		BuyIn:          req.BuyIn,
+		MinPlayers:     int(req.MinPlayers),
+		MaxPlayers:     int(req.MaxPlayers),
+		SmallBlind:     req.SmallBlind,
+		BigBlind:       req.BigBlind,
+		MinBalance:     req.MinBalance,
+		StartingChips:  startingChips, // Chips amount for the game with default logic
+		TimeBank:       timeBank,
+		AutoStartDelay: time.Duration(req.AutoStartMs) * time.Millisecond,
 	}
 
 	// Create table
@@ -779,7 +785,11 @@ func (s *Server) buildGameStateForPlayer(table *poker.Table, game *poker.Game, r
 
 	var currentPlayerID string
 	if table.IsGameStarted() && game != nil {
-		currentPlayerID = table.GetCurrentPlayerID()
+		// Only expose current player when action is valid (not during setup or showdown)
+		phase := game.GetPhase()
+		if phase != pokerrpc.GamePhase_NEW_HAND_DEALING && phase != pokerrpc.GamePhase_SHOWDOWN {
+			currentPlayerID = table.GetCurrentPlayerID()
+		}
 	}
 
 	return &pokerrpc.GameUpdate{
@@ -1399,9 +1409,14 @@ func (s *Server) loadTableFromDatabase(tableID string) (*poker.Table, error) {
 	}
 
 	// Create table config
+	// Use dedicated loggers (levels controlled by backend debug level)
+	tblLog := s.logBackend.Logger("TABLE")
+	gameLog := s.logBackend.Logger("GAME")
+
 	cfg := poker.TableConfig{
 		ID:             dbTableState.ID,
-		Log:            s.logBackend.Logger("TABLE"),
+		Log:            tblLog,
+		GameLog:        gameLog,
 		HostID:         dbTableState.HostID,
 		BuyIn:          dbTableState.BuyIn,
 		MinPlayers:     dbTableState.MinPlayers,
@@ -1513,6 +1528,7 @@ func (s *Server) restoreGameState(table *poker.Table, dbTableState *db.TableStat
 	// Ensure stable ordering by seat so indices match persisted data.
 	sort.Slice(users, func(i, j int) bool { return users[i].TableSeat < users[j].TableSeat })
 
+	gameLog := s.logBackend.Logger("GAME")
 	gCfg := poker.GameConfig{
 		NumPlayers:     len(users),
 		StartingChips:  tblCfg.StartingChips,
@@ -1520,7 +1536,7 @@ func (s *Server) restoreGameState(table *poker.Table, dbTableState *db.TableStat
 		BigBlind:       tblCfg.BigBlind,
 		TimeBank:       tblCfg.TimeBank,
 		AutoStartDelay: tblCfg.AutoStartDelay,
-		Log:            s.logBackend.Logger("GAME"),
+		Log:            gameLog,
 	}
 
 	game, err := poker.NewGame(gCfg)

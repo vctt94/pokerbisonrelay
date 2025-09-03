@@ -42,6 +42,7 @@ func NewUser(id, name string, dcrAccountBalance int64, seat int) *User {
 type TableConfig struct {
 	ID             string
 	Log            slog.Logger
+	GameLog        slog.Logger
 	HostID         string
 	BuyIn          int64 // DCR amount required to join table (in atoms)
 	MinPlayers     int
@@ -230,6 +231,12 @@ func (t *Table) StartGame() error {
 		return activePlayers[i].TableSeat < activePlayers[j].TableSeat
 	})
 
+	var gameLog slog.Logger
+	if t.config.GameLog != nil {
+		gameLog = t.config.GameLog
+	} else {
+		gameLog = t.log
+	}
 	// Create a new game - players are managed by the table
 	g, err := NewGame(GameConfig{
 		NumPlayers:     len(activePlayers),
@@ -237,7 +244,7 @@ func (t *Table) StartGame() error {
 		SmallBlind:     t.config.SmallBlind,
 		BigBlind:       t.config.BigBlind,
 		AutoStartDelay: t.config.AutoStartDelay,
-		Log:            t.log,
+		Log:            gameLog,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create game: %w", err)
@@ -306,6 +313,7 @@ func (t *Table) handleShowdown() {
 
 	// Delegate showdown logic to the game and cache authoritative result
 	result := t.game.handleShowdown()
+	// Persist result for retrieval after phase advances
 	t.lastShowdown = result
 	t.resolvedRound = currentRound
 
@@ -321,11 +329,28 @@ func (t *Table) handleShowdown() {
 	t.game.ResetActionsInRound()
 	t.lastAction = time.Now()
 
-	// Auto-start functionality is handled by the Game layer
+	// Schedule auto-start of the next hand strictly after showdown resolution
+	if t.config.AutoStartDelay > 0 && t.game != nil {
+		// Provide callbacks if not already set
+		if t.game.autoStartCallbacks == nil {
+			// This is safe because we hold the table lock and SetAutoStartCallbacks locks the game.
+			t.game.SetAutoStartCallbacks(&AutoStartCallbacks{
+				MinPlayers:       func() int { return t.config.MinPlayers },
+				StartNewHand:     func() error { return t.startNewHand() },
+				OnNewHandStarted: nil,
+			})
+		}
+		// Call internal scheduler without holding the game lock to avoid deadlocks
+		t.game.ScheduleAutoStart()
+	}
 }
 
-// startNewHand is the internal implementation that assumes the lock is already held
+// startNewHand starts a fresh hand atomically (acquires the table lock internally)
 func (t *Table) startNewHand() error {
+	// Ensure hand setup is atomic for readers of table/game state
+	// This prevents clients from observing partially-initialized new-hand state.
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	// Ensure game exists - if not, this is a bug
 	if t.game == nil {
 		return fmt.Errorf("startNewHand called but game is nil - this should not happen")
@@ -613,10 +638,12 @@ func (t *Table) maybeAdvancePhase() {
 	}
 
 	// Delegate to Game layer - this handles all the phase advancement logic
+	t.log.Debugf("table.maybeAdvancePhase: delegating (phase=%v actionsInRound=%d currentBet=%d)", t.game.phase, t.game.GetActionsInRound(), t.game.GetCurrentBet())
 	t.game.maybeAdvancePhase()
 
 	// Handle showdown if we reached that phase
 	if t.game.phase == pokerrpc.GamePhase_SHOWDOWN {
+		t.log.Debugf("table.maybeAdvancePhase: entering SHOWDOWN, handling showdown")
 		t.handleShowdown()
 	}
 
@@ -741,7 +768,7 @@ func (t *Table) HandleCall(userID string) error {
 			return err
 		}
 
-		t.log.Debugf("HandleCall: user %s called, actionsInRound=%d, advancing to next player", userID, t.game.GetActionsInRound())
+		t.log.Debugf("HandleCall: user %s called; actionsInRound=%d currentBet=%d", userID, t.game.GetActionsInRound(), t.game.GetCurrentBet())
 
 		// Check if this action completes the betting round
 		t.maybeAdvancePhase()
@@ -776,7 +803,7 @@ func (t *Table) HandleCheck(userID string) error {
 			return err
 		}
 
-		t.log.Debugf("HandleCheck: incremented actionsInRound to %d", t.game.GetActionsInRound())
+		t.log.Debugf("HandleCheck: user %s checked; actionsInRound=%d currentBet=%d", userID, t.game.GetActionsInRound(), t.game.GetCurrentBet())
 
 		// Check if this action completes the betting round
 		t.maybeAdvancePhase()

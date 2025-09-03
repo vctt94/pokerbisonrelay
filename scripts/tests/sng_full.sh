@@ -48,6 +48,8 @@ STARTING_CHIPS="${STARTING_CHIPS:-1000}"
 EXPECT_PAYOUT="${EXPECT_PAYOUT:-false}"
 # Deterministic RNG seed (override with POKER_SEED env var if desired)
 SEED="${POKER_SEED:-42}"
+# Increase auto-start delay to reliably observe SHOWDOWN snapshots (override via env)
+AUTO_START_MS="${AUTO_START_MS:-500}"
 
 # Build binaries
 log "Building binaries…"
@@ -71,7 +73,8 @@ trap cleanup EXIT
 
 # Start server
 log "Starting server… (seed=$SEED)"
-"$BIN_DIR/pokersrv" -db "$DB" -host 127.0.0.1 -port 0 -portfile "$PORTFILE" -seed "$SEED" -autostartms 300 &
+DEBUGLEVEL_INPUT=${DEBUGLEVEL:-debug}
+"$BIN_DIR/pokersrv" -db "$DB" -host 127.0.0.1 -port 0 -portfile "$PORTFILE" -seed "$SEED" -debuglevel "$DEBUGLEVEL_INPUT" &
 SRV_PID=$!
 for i in {1..50}; do [[ -s "$PORTFILE" ]] && break; sleep 0.1; done
 [[ -s "$PORTFILE" ]] || die "server did not write portfile"
@@ -145,7 +148,7 @@ wait_phase(){
 		if echo "$json" | jq -e ".phase_name == \"$phase\" or (.phase == 6 and \"$phase\" == \"SHOWDOWN\")" >/dev/null 2>&1; then
 			printf '%s\n' "$json"; return 0
 		fi
-		sleep 0.2
+		sleep 0.05
 	done
 	printf '%s\n' "$json"; return 1
 }
@@ -213,7 +216,7 @@ set_balance "$P3" "$INITIAL_BANKROLL"
 
 # Create SNG-like table
 log "Creating 3-player table with buy-in $BUY_IN…"
-TABLE_ID=$(pc "$P1" create-table --min-players 3 --max-players 3 --buy-in "$BUY_IN" --min-balance "$BUY_IN" --small-blind "$SMALL_BLIND" --big-blind "$BIG_BLIND" --starting-chips "$STARTING_CHIPS" --time-bank-seconds 1 | grep -E '^table_')
+TABLE_ID=$(pc "$P1" create-table --min-players 3 --max-players 3 --buy-in "$BUY_IN" --min-balance "$BUY_IN" --small-blind "$SMALL_BLIND" --big-blind "$BIG_BLIND" --starting-chips "$STARTING_CHIPS" --time-bank-seconds 1 --auto-start-ms "$AUTO_START_MS" | grep -E '^table_')
 [[ -n "$TABLE_ID" ]] || die "failed to create table"
 log "Table: $TABLE_ID"
 
@@ -279,9 +282,9 @@ step_once(){
 	# Decide action: call if behind; otherwise check
 	if [[ -z "$p_bet" ]]; then p_bet=0; fi
 	if (( p_bet < curr_bet )); then
-		# Match to current bet explicitly
-		if ! pc "$act_dir" act --table-id "$tid" bet "$curr_bet"; then
-			print_state "$P1" "$tid" "act_bet_failed"; return 1
+		# Use explicit call to match current bet (robust against race/state changes)
+		if ! pc "$act_dir" act --table-id "$tid" call; then
+			print_state "$P1" "$tid" "act_call_failed"; return 1
 		fi
 	else
 		if ! pc "$act_dir" act --table-id "$tid" check; then
@@ -289,7 +292,7 @@ step_once(){
 		fi
 	fi
 	# Small delay to let server advance
-	sleep 0.2
+	sleep 0.02
 	return 0
 }
 
@@ -297,12 +300,19 @@ play_hand_to_showdown(){
 	# args: table_id timeout_seconds
 	local tid="$1"; local to="$2"
 	local end=$((SECONDS+to))
+	local js ph
 	while (( SECONDS < end )); do
-		# If already at showdown, we're done
-		if state_json "$P1" "$tid" | jq -e '.phase_name=="SHOWDOWN" or .phase==6' >/dev/null 2>&1; then
+		# Check if we've reached SHOWDOWN already
+		js=$(state_json "$P1" "$tid" || true)
+		ph=$(echo "$js" | jq -r '.phase_name // .phase // ""') || ph=""
+		if [[ "$ph" == "SHOWDOWN" || "$ph" == "6" ]]; then
+			# Return the exact SHOWDOWN snapshot for caller consumption
+			printf '%s\n' "$js"
 			return 0
 		fi
-		step_once "$tid" || sleep 0.2
+		# Progress one action; on failure, backoff briefly and retry
+		step_once "$tid" || true
+		sleep 0.02
 	done
 	return 1
 }
@@ -312,14 +322,22 @@ log "Playing $HANDS_TO_PLAY hands with deterministic driver…"
 declare -A wins; wins["p1"]=0; wins["p2"]=0; wins["p3"]=0
 for (( hand=1; hand<=HANDS_TO_PLAY; hand++ )); do
 	log "Hand #$hand"
-	# Ensure game progresses to SHOWDOWN within timeout
-	play_hand_to_showdown "$TABLE_ID" 20 || { print_state "$P1" "$TABLE_ID" "wait_phase_timeout"; die "did not reach SHOWDOWN"; }
-	# Snapshot after showdown
-	J=$(state_json "$P1" "$TABLE_ID")
-	log "Reached SHOWDOWN; dumping state snapshot"
+	# Ensure we've left previous SHOWDOWN (new hand started)
+	end=$((SECONDS+1))
+	while (( SECONDS < end )); do
+		ph=$(state_json "$P1" "$TABLE_ID" | jq -r '.phase_name // .phase // ""')
+		if [[ "$ph" != "SHOWDOWN" && "$ph" != "6" ]]; then
+			break
+		fi
+		sleep 0.05
+	done
+	# Ensure game progresses to SHOWDOWN within timeout, capturing the exact snapshot
+	J=$(play_hand_to_showdown "$TABLE_ID" 20) || { print_state "$P1" "$TABLE_ID" "wait_phase_timeout"; die "did not reach SHOWDOWN"; }
+	# Print concise header then full snapshot for easy debugging
+	pot=$(echo "$J" | jq -r '.pot // 0')
+	echo "phase=SHOWDOWN pot=$pot"
 	echo "$J" | jq '.' 2>/dev/null || echo "$J"
 	# Validate pot and winners via authoritative RPC
-	pot=$(echo "$J" | jq -r '.pot // 0')
 	[[ "$pot" -gt 0 ]] || { print_state "$P1" "$TABLE_ID" "pot_check_failed"; die "pot not > 0 at showdown"; }
 	LW=$(winners_json "$P1" "$TABLE_ID")
 	winners_count=$(echo "$LW" | jq -r '.winners | length')

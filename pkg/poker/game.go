@@ -369,16 +369,8 @@ func stateShowdown(entity *Game, callback func(stateName string, event statemach
 		callback("SHOWDOWN", statemachine.StateEntered)
 	}
 
-	// Optionally schedule auto-start; handleShowdown may also schedule when appropriate.
-	if entity.config.AutoStartDelay > 0 {
-		if entity.autoStartCallbacks != nil {
-			entity.log.Debugf("Scheduling auto-start from stateShowdown, delay=%v", entity.config.AutoStartDelay)
-			entity.scheduleAutoStart()
-		}
-	}
-
-	// Return to pre-deal to start a new hand
-	return statePreDeal
+	// Remain in SHOWDOWN state until the Table schedules the next hand.
+	return stateShowdown
 }
 
 // stateEnd terminates the game
@@ -573,15 +565,24 @@ func (g *Game) ResetForNewHand(activePlayers []*Player) {
 		g.dealer = (g.dealer + 1) % len(activePlayers)
 	}
 
-	// Create new shuffled deck for new hand
-	// If a deterministic seed is configured, re-seed per hand so each hand starts
-	// from the same RNG state (useful for deterministic tests). Otherwise reuse
-	// the existing RNG to continue the random sequence across hands.
+	// Create a shuffled deck for the new hand.
+	// If a deterministic seed is configured, advance the sequence by incorporating
+	// the round to avoid identical decks each hand.
 	var nextRng *rand.Rand
 	if g.config.Seed != 0 {
-		nextRng = rand.New(rand.NewSource(g.config.Seed))
+		// Derive a unique seed per hand deterministically
+		derived := g.config.Seed + int64(g.round)
+		nextRng = rand.New(rand.NewSource(derived))
 	} else {
-		nextRng = g.deck.rng
+		// For non-deterministic games, ensure each hand gets a fresh RNG seed so
+		// rapid successive hands don't accidentally reuse identical shuffles.
+		base := time.Now().UnixNano()
+		var mix int64 = 0
+		if g.deck != nil && g.deck.rng != nil {
+			mix = g.deck.rng.Int63()
+		}
+		seed := base ^ mix ^ int64(g.round)
+		nextRng = rand.New(rand.NewSource(seed))
 	}
 	g.deck = NewDeck(nextRng)
 
@@ -944,9 +945,6 @@ func (g *Game) handleShowdown() *ShowdownResult {
 	g.winners = result.Winners
 
 	// Schedule auto-start if configured
-	if g.config.AutoStartDelay > 0 && g.autoStartCallbacks != nil {
-		g.scheduleAutoStart()
-	}
 
 	return result
 }
@@ -971,6 +969,10 @@ func (g *Game) maybeAdvancePhase() {
 		return
 	}
 
+	// Diagnostic: log entry state
+	g.log.Debugf("maybeAdvancePhase: phase=%v actionsInRound=%d currentBet=%d",
+		g.phase, g.actionsInRound, g.currentBet)
+
 	// Count active players (non-folded) from game players
 	activePlayers := 0
 	for _, p := range g.players {
@@ -983,6 +985,7 @@ func (g *Game) maybeAdvancePhase() {
 	if activePlayers <= 1 {
 		g.phase = pokerrpc.GamePhase_SHOWDOWN
 		g.stateMachine.SetState(stateShowdown)
+		g.log.Debugf("maybeAdvancePhase: only %d active players, moving to SHOWDOWN", activePlayers)
 		return
 	}
 
@@ -992,6 +995,7 @@ func (g *Game) maybeAdvancePhase() {
 	// 2. All active players have matching bets (or have folded)
 
 	if g.actionsInRound < activePlayers {
+		g.log.Debugf("maybeAdvancePhase: waiting for actions: %d/%d", g.actionsInRound, activePlayers)
 		return // Not all players have acted yet
 	}
 
@@ -1007,6 +1011,7 @@ func (g *Game) maybeAdvancePhase() {
 	}
 
 	if unmatchedPlayers > 0 {
+		g.log.Debugf("maybeAdvancePhase: %d players have unmatched bets (currentBet=%d)", unmatchedPlayers, g.currentBet)
 		return // Still players with unmatched bets
 	}
 
@@ -1015,15 +1020,19 @@ func (g *Game) maybeAdvancePhase() {
 	case pokerrpc.GamePhase_PRE_FLOP:
 		g.StateFlop()
 		g.stateMachine.SetState(stateFlop)
+		g.log.Debug("maybeAdvancePhase: advanced to FLOP")
 	case pokerrpc.GamePhase_FLOP:
 		g.StateTurn()
 		g.stateMachine.SetState(stateTurn)
+		g.log.Debug("maybeAdvancePhase: advanced to TURN")
 	case pokerrpc.GamePhase_TURN:
 		g.StateRiver()
 		g.stateMachine.SetState(stateRiver)
+		g.log.Debug("maybeAdvancePhase: advanced to RIVER")
 	case pokerrpc.GamePhase_RIVER:
 		g.phase = pokerrpc.GamePhase_SHOWDOWN
 		g.stateMachine.SetState(stateShowdown)
+		g.log.Debug("maybeAdvancePhase: advanced to SHOWDOWN")
 		return
 	}
 
@@ -1036,6 +1045,10 @@ func (g *Game) maybeAdvancePhase() {
 
 	// Reset current player for new betting round
 	g.initializeCurrentPlayer()
+	if g.currentPlayer >= 0 && g.currentPlayer < len(g.players) {
+		g.log.Debug("maybeAdvancePhase: new round currentPlayer=%d id=%s",
+			g.currentPlayer, g.players[g.currentPlayer].ID)
+	}
 
 	// Set the new current player's LastAction to now for the new betting round
 	if g.currentPlayer >= 0 && g.currentPlayer < len(g.players) {

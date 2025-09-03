@@ -208,6 +208,7 @@ message CreateTableRequest {
   int64 buy_in = 7;         // DCR amount to join table (in atoms)
   int64 starting_chips = 8; // Poker chips each player starts with
   int32 time_bank_seconds = 9; // Player timeout in seconds (default: 30)
+  int32 auto_start_ms = 10; // Auto-start delay between hands in ms (0 = disabled)
 }
 
 message CreateTableResponse {

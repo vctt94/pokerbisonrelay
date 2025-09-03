@@ -303,19 +303,21 @@ func handleCreateTable(ctx context.Context, pcli *client.PokerClient, args []str
 	minBalance := fs.Int64("min-balance", 0, "Min balance")
 	startingChips := fs.Int64("starting-chips", 1000, "Starting chips")
 	timeBank := fs.Int("time-bank-seconds", 0, "Player timebank in seconds (0=default)")
+	autoStartMs := fs.Int("auto-start-ms", 0, "Auto-start delay between hands in ms (0=disabled)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("create-table: %w", err)
 	}
 
 	cfg := poker.TableConfig{
-		SmallBlind:    *smallBlind,
-		BigBlind:      *bigBlind,
-		MinPlayers:    *minPlayers,
-		MaxPlayers:    *maxPlayers,
-		BuyIn:         *buyIn,
-		MinBalance:    *minBalance,
-		StartingChips: *startingChips,
-		TimeBank:      time.Duration(*timeBank) * time.Second,
+		SmallBlind:     *smallBlind,
+		BigBlind:       *bigBlind,
+		MinPlayers:     *minPlayers,
+		MaxPlayers:     *maxPlayers,
+		BuyIn:          *buyIn,
+		MinBalance:     *minBalance,
+		StartingChips:  *startingChips,
+		TimeBank:       time.Duration(*timeBank) * time.Second,
+		AutoStartDelay: time.Duration(*autoStartMs) * time.Millisecond,
 	}
 
 	id, err := pcli.CreateTable(ctx, cfg)
@@ -462,11 +464,8 @@ func handleAct(ctx context.Context, pcli *client.PokerClient, args []string) err
 	case "fold":
 		return pcli.Fold(ctx)
 	case "call":
-		gs, err := pcli.PokerService.GetGameState(ctx, &pokerrpc.GetGameStateRequest{TableId: pcli.GetCurrentTableID()})
-		if err != nil {
-			return err
-		}
-		return pcli.Call(ctx, gs.GameState.CurrentBet)
+		// Use the dedicated Call RPC via client wrapper to avoid fetching state first
+		return pcli.Call(ctx, 0)
 	case "bet", "raise":
 		if len(rest) < 2 {
 			return errors.New("bet/raise requires amount")

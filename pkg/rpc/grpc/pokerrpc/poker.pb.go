@@ -1247,6 +1247,7 @@ type CreateTableRequest struct {
 	BuyIn           int64                  `protobuf:"varint,7,opt,name=buy_in,json=buyIn,proto3" json:"buy_in,omitempty"`                                 // DCR amount to join table (in atoms)
 	StartingChips   int64                  `protobuf:"varint,8,opt,name=starting_chips,json=startingChips,proto3" json:"starting_chips,omitempty"`         // Poker chips each player starts with
 	TimeBankSeconds int32                  `protobuf:"varint,9,opt,name=time_bank_seconds,json=timeBankSeconds,proto3" json:"time_bank_seconds,omitempty"` // Player timeout in seconds (default: 30)
+	AutoStartMs     int32                  `protobuf:"varint,10,opt,name=auto_start_ms,json=autoStartMs,proto3" json:"auto_start_ms,omitempty"`            // Auto-start delay between hands in ms (0 = disabled)
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1340,6 +1341,13 @@ func (x *CreateTableRequest) GetStartingChips() int64 {
 func (x *CreateTableRequest) GetTimeBankSeconds() int32 {
 	if x != nil {
 		return x.TimeBankSeconds
+	}
+	return 0
+}
+
+func (x *CreateTableRequest) GetAutoStartMs() int32 {
+	if x != nil {
+		return x.AutoStartMs
 	}
 	return 0
 }
@@ -3105,7 +3113,7 @@ const file_poker_proto_rawDesc = "" +
 	"\tplayer_id\x18\x01 \x01(\tR\bplayerId\x12/\n" +
 	"\thand_rank\x18\x02 \x01(\x0e2\x12.pokerrpc.HandRankR\bhandRank\x12+\n" +
 	"\tbest_hand\x18\x03 \x03(\v2\x0e.pokerrpc.CardR\bbestHand\x12\x1a\n" +
-	"\bwinnings\x18\x04 \x01(\x03R\bwinnings\"\xbc\x02\n" +
+	"\bwinnings\x18\x04 \x01(\x03R\bwinnings\"\xe0\x02\n" +
 	"\x12CreateTableRequest\x12\x1b\n" +
 	"\tplayer_id\x18\x01 \x01(\tR\bplayerId\x12\x1f\n" +
 	"\vsmall_blind\x18\x02 \x01(\x03R\n" +
@@ -3119,7 +3127,9 @@ const file_poker_proto_rawDesc = "" +
 	"minBalance\x12\x15\n" +
 	"\x06buy_in\x18\a \x01(\x03R\x05buyIn\x12%\n" +
 	"\x0estarting_chips\x18\b \x01(\x03R\rstartingChips\x12*\n" +
-	"\x11time_bank_seconds\x18\t \x01(\x05R\x0ftimeBankSeconds\"0\n" +
+	"\x11time_bank_seconds\x18\t \x01(\x05R\x0ftimeBankSeconds\x12\"\n" +
+	"\rauto_start_ms\x18\n" +
+	" \x01(\x05R\vautoStartMs\"0\n" +
 	"\x13CreateTableResponse\x12\x19\n" +
 	"\btable_id\x18\x01 \x01(\tR\atableId\"J\n" +
 	"\x10JoinTableRequest\x12\x1b\n" +

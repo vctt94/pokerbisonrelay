@@ -23,6 +23,7 @@ func main() {
 		portFile    string
 		seed        int64
 		autoStartMs int
+		debugLevel  string
 	)
 	flag.StringVar(&dbPath, "db", "", "Path to SQLite database file (created if missing)")
 	flag.StringVar(&host, "host", "127.0.0.1", "Host to listen on")
@@ -30,6 +31,7 @@ func main() {
 	flag.StringVar(&portFile, "portfile", "", "If set, write selected port to this file")
 	flag.Int64Var(&seed, "seed", 0, "Deterministic RNG seed for decks (0 = random)")
 	flag.IntVar(&autoStartMs, "autostartms", 0, "Auto-start delay between hands in milliseconds (0 = server default)")
+	flag.StringVar(&debugLevel, "debuglevel", "info", "Logging level: trace, debug, info, warn, error")
 	flag.Parse()
 
 	if dbPath == "" {
@@ -47,7 +49,7 @@ func main() {
 	defer db.Close()
 
 	// Logging backend
-	logBackend, _ := logging.NewLogBackend(logging.LogConfig{DebugLevel: "info"})
+	logBackend, _ := logging.NewLogBackend(logging.LogConfig{DebugLevel: debugLevel})
 
 	// Create server
 	pokerSrv := server.NewServer(db, logBackend)

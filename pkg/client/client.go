@@ -543,6 +543,7 @@ func (pc *PokerClient) CreateTable(ctx context.Context, config poker.TableConfig
 		BuyIn:           config.BuyIn,
 		StartingChips:   config.StartingChips,
 		TimeBankSeconds: timeBankSeconds,
+		AutoStartMs:     int32(config.AutoStartDelay.Milliseconds()),
 	})
 	if err != nil {
 		return "", err
@@ -797,10 +798,10 @@ func (pc *PokerClient) Call(ctx context.Context, currentBet int64) error {
 		return fmt.Errorf("not at any table")
 	}
 
-	_, err := pc.PokerService.MakeBet(ctx, &pokerrpc.MakeBetRequest{
+	// Use dedicated Call RPC to avoid race with fetching current bet separately
+	_, err := pc.PokerService.Call(ctx, &pokerrpc.CallRequest{
 		PlayerId: pc.ID,
 		TableId:  currentTableID,
-		Amount:   currentBet,
 	})
 	return err
 }
