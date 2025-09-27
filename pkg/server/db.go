@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/vctt94/poker-bisonrelay/pkg/server/internal/db"
+	"github.com/vctt94/pokerbisonrelay/pkg/server/internal/db"
 )
 
 // Database defines the interface for database operations

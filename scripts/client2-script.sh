@@ -13,7 +13,7 @@ BRSERVER_PORT=12345                    # relay TCP port
 BR_RPC_PORT=7778                       # this client’s WS RPC port
 
 # poker client
-POKERCLIENT_DIR=$HOME/projects/BR/poker-bisonrelay/cmd/client
+POKERCLIENT_DIR=$HOME/projects/BR/pokerbisonrelay/cmd/client
 POKER_DATADIR=$HOME/pokerclientdirs/dir2
 
 ###############################################################################

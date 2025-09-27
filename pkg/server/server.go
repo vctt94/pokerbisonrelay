@@ -10,9 +10,9 @@ import (
 
 	"github.com/decred/slog"
 	"github.com/vctt94/bisonbotkit/logging"
-	"github.com/vctt94/poker-bisonrelay/pkg/poker"
-	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
-	"github.com/vctt94/poker-bisonrelay/pkg/server/internal/db"
+	"github.com/vctt94/pokerbisonrelay/pkg/poker"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
+	"github.com/vctt94/pokerbisonrelay/pkg/server/internal/db"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -847,7 +847,7 @@ func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*po
 	}, nil
 }
 
-func (s *Server) Fold(ctx context.Context, req *pokerrpc.FoldRequest) (*pokerrpc.FoldResponse, error) {
+func (s *Server) Fold(ctx context.Context, req *pokerrpc.FoldBetRequest) (*pokerrpc.FoldBetResponse, error) {
 	s.mu.RLock()
 	table, ok := s.tables[req.TableId]
 	s.mu.RUnlock()
@@ -872,11 +872,11 @@ func (s *Server) Fold(ctx context.Context, req *pokerrpc.FoldRequest) (*pokerrpc
 		s.log.Errorf("Failed to collect event snapshot: %v", err)
 	}
 
-	return &pokerrpc.FoldResponse{Success: true, Message: "Folded successfully"}, nil
+	return &pokerrpc.FoldBetResponse{Success: true, Message: "Folded successfully"}, nil
 }
 
 // Call implements the Call RPC method
-func (s *Server) Call(ctx context.Context, req *pokerrpc.CallRequest) (*pokerrpc.CallResponse, error) {
+func (s *Server) Call(ctx context.Context, req *pokerrpc.CallBetRequest) (*pokerrpc.CallBetResponse, error) {
 	s.mu.RLock()
 	table, ok := s.tables[req.TableId]
 	s.mu.RUnlock()
@@ -921,11 +921,11 @@ func (s *Server) Call(ctx context.Context, req *pokerrpc.CallRequest) (*pokerrpc
 		s.log.Errorf("Failed to collect event snapshot: %v", err)
 	}
 
-	return &pokerrpc.CallResponse{Success: true, Message: "Call successful"}, nil
+	return &pokerrpc.CallBetResponse{Success: true, Message: "Call successful"}, nil
 }
 
 // Check implements the Check RPC method
-func (s *Server) Check(ctx context.Context, req *pokerrpc.CheckRequest) (*pokerrpc.CheckResponse, error) {
+func (s *Server) Check(ctx context.Context, req *pokerrpc.CheckBetRequest) (*pokerrpc.CheckBetResponse, error) {
 	s.mu.RLock()
 	table, ok := s.tables[req.TableId]
 	s.mu.RUnlock()
@@ -951,7 +951,7 @@ func (s *Server) Check(ctx context.Context, req *pokerrpc.CheckRequest) (*pokerr
 		s.log.Errorf("Failed to collect event snapshot: %v", err)
 	}
 
-	return &pokerrpc.CheckResponse{Success: true, Message: "Check successful"}, nil
+	return &pokerrpc.CheckBetResponse{Success: true, Message: "Check successful"}, nil
 }
 
 // buildPlayers creates a slice of Player proto messages with appropriate card visibility

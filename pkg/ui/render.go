@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
 // Renderer handles all rendering of UI screens and game elements

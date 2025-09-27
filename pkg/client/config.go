@@ -214,6 +214,7 @@ func (cfg *PokerClientConfig) ValidateConfig() error {
 // ToBisonRelayConfig converts PokerClientConfig to BisonRelay's ClientConfig
 func (cfg *PokerClientConfig) ToBisonRelayConfig() *config.ClientConfig {
 	brConfig := &config.ClientConfig{
+		DataDir:         cfg.DataDir,
 		RPCURL:          cfg.BRConfig.RPCURL,
 		BRClientCert:    cfg.BRConfig.BRClientCert,
 		BRClientRPCCert: cfg.BRConfig.BRClientRPCCert,

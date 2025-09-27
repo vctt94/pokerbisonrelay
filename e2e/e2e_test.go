@@ -19,8 +19,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/vctt94/bisonbotkit/logging"
-	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
-	"github.com/vctt94/poker-bisonrelay/pkg/server"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
+	"github.com/vctt94/pokerbisonrelay/pkg/server"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -270,7 +270,7 @@ func TestSitAndGoEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 
 	// Carol decides to fold (0 bet via Fold API).
-	_, err = env.pokerClient.Fold(ctx, &pokerrpc.FoldRequest{
+	_, err = env.pokerClient.FoldBet(ctx, &pokerrpc.FoldBetRequest{
 		PlayerId: "carol",
 		TableId:  tableID,
 	})
@@ -415,7 +415,7 @@ func TestCompleteHandFlow(t *testing.T) {
 
 	// Post-flop betting starts with small blind (player2)
 	// Player2 checks
-	_, err = env.pokerClient.Check(ctx, &pokerrpc.CheckRequest{
+	_, err = env.pokerClient.CheckBet(ctx, &pokerrpc.CheckBetRequest{
 		PlayerId: "player2",
 		TableId:  tableID,
 	})
@@ -438,14 +438,14 @@ func TestCompleteHandFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	// Player1 folds
-	_, err = env.pokerClient.Fold(ctx, &pokerrpc.FoldRequest{
+	_, err = env.pokerClient.FoldBet(ctx, &pokerrpc.FoldBetRequest{
 		PlayerId: "player1",
 		TableId:  tableID,
 	})
 	require.NoError(t, err)
 
 	// Player2 folds
-	_, err = env.pokerClient.Fold(ctx, &pokerrpc.FoldRequest{
+	_, err = env.pokerClient.FoldBet(ctx, &pokerrpc.FoldBetRequest{
 		PlayerId: "player2",
 		TableId:  tableID,
 	})
@@ -493,7 +493,7 @@ func TestCompleteHandFlow(t *testing.T) {
 	assert.Equal(t, 5, len(state.CommunityCards), "expected 5 community cards after river")
 
 	// Player3 checks
-	_, err = env.pokerClient.Check(ctx, &pokerrpc.CheckRequest{
+	_, err = env.pokerClient.CheckBet(ctx, &pokerrpc.CheckBetRequest{
 		PlayerId: "player3",
 		TableId:  tableID,
 	})
@@ -508,7 +508,7 @@ func TestCompleteHandFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	// Player3 folds
-	_, err = env.pokerClient.Fold(ctx, &pokerrpc.FoldRequest{
+	_, err = env.pokerClient.FoldBet(ctx, &pokerrpc.FoldBetRequest{
 		PlayerId: "player3",
 		TableId:  tableID,
 	})
@@ -526,7 +526,7 @@ func TestCompleteHandFlow(t *testing.T) {
 	assert.Equal(t, "player4", winners.Winners[0].PlayerId, "expected player4 to win")
 
 	// Verify pot amount: 240 (pre-flop) + 200 (flop) + 400 (turn) + 300 (river) = 1140
-	assert.Equal(t, int64(1140), winners.Pot, "unexpected pot amount in winner response")
+	assert.Equal(t, int64(1140), winners.Winners[0].Winnings, "unexpected pot amount in winner response")
 }
 
 // -----------------------------------------------------------------------------
@@ -854,7 +854,7 @@ func TestBasicBetting(t *testing.T) {
 	assert.Equal(t, int64(60), state.Pot, "pot should be 60 after p2's call (50+10)")
 
 	// P3 (big blind) can check (already has 20 bet)
-	_, err = env.pokerClient.Check(ctx, &pokerrpc.CheckRequest{
+	_, err = env.pokerClient.CheckBet(ctx, &pokerrpc.CheckBetRequest{
 		PlayerId: "p3",
 		TableId:  tableID,
 	})
@@ -1132,7 +1132,7 @@ func TestThreePlayersAutoplayOneHand(t *testing.T) {
 
 		// Decide action
 		if currPlayer.CurrentBet >= state.CurrentBet {
-			_, err := env.pokerClient.Check(ctx, &pokerrpc.CheckRequest{PlayerId: curr, TableId: tableID})
+			_, err := env.pokerClient.CheckBet(ctx, &pokerrpc.CheckBetRequest{PlayerId: curr, TableId: tableID})
 			if err != nil {
 				// If cannot check, try calling to the current bet
 				_, err2 := env.pokerClient.MakeBet(ctx, &pokerrpc.MakeBetRequest{PlayerId: curr, TableId: tableID, Amount: state.CurrentBet})

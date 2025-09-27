@@ -4,7 +4,7 @@ import (
 	"sort"
 
 	"github.com/chehsunliu/poker"
-	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
 // HandRank represents the rank of a poker hand

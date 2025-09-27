@@ -5,9 +5,9 @@ import (
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/vctt94/poker-bisonrelay/pkg/client"
-	"github.com/vctt94/poker-bisonrelay/pkg/poker"
-	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
+	"github.com/vctt94/pokerbisonrelay/pkg/client"
+	"github.com/vctt94/pokerbisonrelay/pkg/poker"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
 // Message types
@@ -186,7 +186,7 @@ func (d *CommandDispatcher) callCmd() tea.Cmd {
 			return errorMsg(fmt.Errorf("not at any table"))
 		}
 
-		_, err := d.pc.PokerService.Call(d.ctx, &pokerrpc.CallRequest{
+		_, err := d.pc.PokerService.CallBet(d.ctx, &pokerrpc.CallBetRequest{
 			PlayerId: d.clientID,
 			TableId:  currentTableID,
 		})

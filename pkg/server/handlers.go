@@ -1,7 +1,7 @@
 package server
 
 import (
-	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
 // EventHandler defines the interface for handling events

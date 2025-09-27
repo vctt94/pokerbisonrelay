@@ -3,7 +3,7 @@ package server
 import (
 	"fmt"
 
-	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

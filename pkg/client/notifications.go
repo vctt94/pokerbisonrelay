@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/companyzero/bisonrelay/zkidentity"
-	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
 // Following are the notification types. Add new types at the bottom of this

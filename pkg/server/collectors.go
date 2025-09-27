@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/vctt94/poker-bisonrelay/pkg/poker"
+	"github.com/vctt94/pokerbisonrelay/pkg/poker"
 )
 
 // collectTableSnapshot collects a complete immutable snapshot of table state

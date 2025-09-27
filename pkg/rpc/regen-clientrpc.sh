@@ -11,6 +11,8 @@ build_protoc_gen_go() {
 
 generate() {
     protoc --go_out=. --go-grpc_out=. poker.proto
+    protoc --dart_out=grpc:../../pokerui/flutterui/plugin/lib/grpc/generated -I. poker.proto
+    
 }
 
 # Build the bins from the main module, so that clientrpc doesn't need to

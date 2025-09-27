@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/vctt94/poker-bisonrelay/pkg/client"
-	"github.com/vctt94/poker-bisonrelay/pkg/ui"
+	"github.com/vctt94/pokerbisonrelay/pkg/client"
+	"github.com/vctt94/pokerbisonrelay/pkg/ui"
 )
 
 var (
@@ -88,7 +88,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize notification manager
+	// Initialize notification manager BEFORE creating the client
 	cfg.Notifications = client.NewNotificationManager()
 
 	// Create context

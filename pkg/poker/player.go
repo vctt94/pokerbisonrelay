@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/vctt94/poker-bisonrelay/pkg/statemachine"
+	"github.com/vctt94/pokerbisonrelay/pkg/statemachine"
 )
 
 // PlayerStateFn represents a player state function following Rob Pike's pattern

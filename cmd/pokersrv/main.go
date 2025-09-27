@@ -10,8 +10,8 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/vctt94/bisonbotkit/logging"
-	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
-	"github.com/vctt94/poker-bisonrelay/pkg/server"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
+	"github.com/vctt94/pokerbisonrelay/pkg/server"
 	"google.golang.org/grpc"
 )
 

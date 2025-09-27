@@ -22,8 +22,8 @@ A poker bot implementation for the Bison Relay network that allows users to play
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/vctt94/poker-bisonrelay.git
-cd poker-bisonrelay
+git clone https://github.com/vctt94/pokerbisonrelay.git
+cd pokerbisonrelay
 ```
 
 2. Install dependencies:

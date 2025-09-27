@@ -20,9 +20,9 @@ import (
 	"github.com/companyzero/bisonrelay/clientrpc/types"
 	"github.com/vctt94/bisonbotkit/botclient"
 	"github.com/vctt94/bisonbotkit/logging"
-	"github.com/vctt94/poker-bisonrelay/pkg/poker"
-	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
-	pokerutils "github.com/vctt94/poker-bisonrelay/pkg/utils"
+	"github.com/vctt94/pokerbisonrelay/pkg/poker"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
+	pokerutils "github.com/vctt94/pokerbisonrelay/pkg/utils"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -770,7 +770,7 @@ func (pc *PokerClient) Fold(ctx context.Context) error {
 		return fmt.Errorf("not at any table")
 	}
 
-	_, err := pc.PokerService.Fold(ctx, &pokerrpc.FoldRequest{
+	_, err := pc.PokerService.FoldBet(ctx, &pokerrpc.FoldBetRequest{
 		PlayerId: pc.ID,
 		TableId:  currentTableID,
 	})
@@ -784,7 +784,7 @@ func (pc *PokerClient) Check(ctx context.Context) error {
 		return fmt.Errorf("not at any table")
 	}
 
-	_, err := pc.PokerService.Check(ctx, &pokerrpc.CheckRequest{
+	_, err := pc.PokerService.CheckBet(ctx, &pokerrpc.CheckBetRequest{
 		PlayerId: pc.ID,
 		TableId:  currentTableID,
 	})
@@ -799,7 +799,7 @@ func (pc *PokerClient) Call(ctx context.Context, currentBet int64) error {
 	}
 
 	// Use dedicated Call RPC to avoid race with fetching current bet separately
-	_, err := pc.PokerService.Call(ctx, &pokerrpc.CallRequest{
+	_, err := pc.PokerService.CallBet(ctx, &pokerrpc.CallBetRequest{
 		PlayerId: pc.ID,
 		TableId:  currentTableID,
 	})

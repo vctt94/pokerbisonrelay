@@ -12,8 +12,8 @@ import (
 	"github.com/decred/dcrd/dcrutil/v4"
 	_ "github.com/mattn/go-sqlite3" // SQLite3 driver
 	kit "github.com/vctt94/bisonbotkit"
-	"github.com/vctt94/poker-bisonrelay/pkg/bot"
-	"github.com/vctt94/poker-bisonrelay/pkg/server"
+	"github.com/vctt94/pokerbisonrelay/pkg/bot"
+	"github.com/vctt94/pokerbisonrelay/pkg/server"
 )
 
 var (

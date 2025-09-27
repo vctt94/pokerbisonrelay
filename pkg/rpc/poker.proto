@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package pokerrpc;
+package poker;
 
 option go_package = "grpc/pokerrpc";
 
@@ -11,9 +11,9 @@ service PokerService {
   
   // Player actions
   rpc MakeBet(MakeBetRequest) returns (MakeBetResponse) {}
-  rpc Call(CallRequest) returns (CallResponse) {}
-  rpc Fold(FoldRequest) returns (FoldResponse) {}
-  rpc Check(CheckRequest) returns (CheckResponse) {}
+  rpc CallBet(CallBetRequest) returns (CallBetResponse) {}
+  rpc FoldBet(FoldBetRequest) returns (FoldBetResponse) {}
+  rpc CheckBet(CheckBetRequest) returns (CheckBetResponse) {}
   
   // Game state
   rpc GetGameState(GetGameStateRequest) returns (GetGameStateResponse) {}
@@ -134,32 +134,32 @@ message MakeBetResponse {
   int64 new_balance = 3; // Player's new DCR account balance (in atoms)
 }
 
-message FoldRequest {
+message FoldBetRequest {
   string player_id = 1;
   string table_id = 2;
 }
 
-message FoldResponse {
+message FoldBetResponse {
   bool success = 1;
   string message = 2;
 }
 
-message CheckRequest {
+message CheckBetRequest {
   string player_id = 1;
   string table_id = 2;
 }
 
-message CheckResponse {
+message CheckBetResponse {
   bool success = 1;
   string message = 2;
 }
 
-message CallRequest {
+message CallBetRequest {
   string player_id = 1;
   string table_id = 2;
 }
 
-message CallResponse {
+message CallBetResponse {
   bool success = 1;
   string message = 2;
 }

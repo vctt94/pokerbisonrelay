@@ -8,8 +8,8 @@ import (
 
 	"github.com/decred/slog"
 
-	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
-	"github.com/vctt94/poker-bisonrelay/pkg/statemachine"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
+	"github.com/vctt94/pokerbisonrelay/pkg/statemachine"
 )
 
 // TableStateFn represents a table state function following Rob Pike's pattern

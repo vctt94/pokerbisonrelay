@@ -19,14 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PokerService_StartGameStream_FullMethodName = "/pokerrpc.PokerService/StartGameStream"
-	PokerService_MakeBet_FullMethodName         = "/pokerrpc.PokerService/MakeBet"
-	PokerService_Call_FullMethodName            = "/pokerrpc.PokerService/Call"
-	PokerService_Fold_FullMethodName            = "/pokerrpc.PokerService/Fold"
-	PokerService_Check_FullMethodName           = "/pokerrpc.PokerService/Check"
-	PokerService_GetGameState_FullMethodName    = "/pokerrpc.PokerService/GetGameState"
-	PokerService_EvaluateHand_FullMethodName    = "/pokerrpc.PokerService/EvaluateHand"
-	PokerService_GetLastWinners_FullMethodName  = "/pokerrpc.PokerService/GetLastWinners"
+	PokerService_StartGameStream_FullMethodName = "/poker.PokerService/StartGameStream"
+	PokerService_MakeBet_FullMethodName         = "/poker.PokerService/MakeBet"
+	PokerService_CallBet_FullMethodName         = "/poker.PokerService/CallBet"
+	PokerService_FoldBet_FullMethodName         = "/poker.PokerService/FoldBet"
+	PokerService_CheckBet_FullMethodName        = "/poker.PokerService/CheckBet"
+	PokerService_GetGameState_FullMethodName    = "/poker.PokerService/GetGameState"
+	PokerService_EvaluateHand_FullMethodName    = "/poker.PokerService/EvaluateHand"
+	PokerService_GetLastWinners_FullMethodName  = "/poker.PokerService/GetLastWinners"
 )
 
 // PokerServiceClient is the client API for PokerService service.
@@ -39,9 +39,9 @@ type PokerServiceClient interface {
 	StartGameStream(ctx context.Context, in *StartGameStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GameUpdate], error)
 	// Player actions
 	MakeBet(ctx context.Context, in *MakeBetRequest, opts ...grpc.CallOption) (*MakeBetResponse, error)
-	Call(ctx context.Context, in *CallRequest, opts ...grpc.CallOption) (*CallResponse, error)
-	Fold(ctx context.Context, in *FoldRequest, opts ...grpc.CallOption) (*FoldResponse, error)
-	Check(ctx context.Context, in *CheckRequest, opts ...grpc.CallOption) (*CheckResponse, error)
+	CallBet(ctx context.Context, in *CallBetRequest, opts ...grpc.CallOption) (*CallBetResponse, error)
+	FoldBet(ctx context.Context, in *FoldBetRequest, opts ...grpc.CallOption) (*FoldBetResponse, error)
+	CheckBet(ctx context.Context, in *CheckBetRequest, opts ...grpc.CallOption) (*CheckBetResponse, error)
 	// Game state
 	GetGameState(ctx context.Context, in *GetGameStateRequest, opts ...grpc.CallOption) (*GetGameStateResponse, error)
 	// Hand evaluation
@@ -87,30 +87,30 @@ func (c *pokerServiceClient) MakeBet(ctx context.Context, in *MakeBetRequest, op
 	return out, nil
 }
 
-func (c *pokerServiceClient) Call(ctx context.Context, in *CallRequest, opts ...grpc.CallOption) (*CallResponse, error) {
+func (c *pokerServiceClient) CallBet(ctx context.Context, in *CallBetRequest, opts ...grpc.CallOption) (*CallBetResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CallResponse)
-	err := c.cc.Invoke(ctx, PokerService_Call_FullMethodName, in, out, cOpts...)
+	out := new(CallBetResponse)
+	err := c.cc.Invoke(ctx, PokerService_CallBet_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *pokerServiceClient) Fold(ctx context.Context, in *FoldRequest, opts ...grpc.CallOption) (*FoldResponse, error) {
+func (c *pokerServiceClient) FoldBet(ctx context.Context, in *FoldBetRequest, opts ...grpc.CallOption) (*FoldBetResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(FoldResponse)
-	err := c.cc.Invoke(ctx, PokerService_Fold_FullMethodName, in, out, cOpts...)
+	out := new(FoldBetResponse)
+	err := c.cc.Invoke(ctx, PokerService_FoldBet_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *pokerServiceClient) Check(ctx context.Context, in *CheckRequest, opts ...grpc.CallOption) (*CheckResponse, error) {
+func (c *pokerServiceClient) CheckBet(ctx context.Context, in *CheckBetRequest, opts ...grpc.CallOption) (*CheckBetResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CheckResponse)
-	err := c.cc.Invoke(ctx, PokerService_Check_FullMethodName, in, out, cOpts...)
+	out := new(CheckBetResponse)
+	err := c.cc.Invoke(ctx, PokerService_CheckBet_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -157,9 +157,9 @@ type PokerServiceServer interface {
 	StartGameStream(*StartGameStreamRequest, grpc.ServerStreamingServer[GameUpdate]) error
 	// Player actions
 	MakeBet(context.Context, *MakeBetRequest) (*MakeBetResponse, error)
-	Call(context.Context, *CallRequest) (*CallResponse, error)
-	Fold(context.Context, *FoldRequest) (*FoldResponse, error)
-	Check(context.Context, *CheckRequest) (*CheckResponse, error)
+	CallBet(context.Context, *CallBetRequest) (*CallBetResponse, error)
+	FoldBet(context.Context, *FoldBetRequest) (*FoldBetResponse, error)
+	CheckBet(context.Context, *CheckBetRequest) (*CheckBetResponse, error)
 	// Game state
 	GetGameState(context.Context, *GetGameStateRequest) (*GetGameStateResponse, error)
 	// Hand evaluation
@@ -182,14 +182,14 @@ func (UnimplementedPokerServiceServer) StartGameStream(*StartGameStreamRequest, 
 func (UnimplementedPokerServiceServer) MakeBet(context.Context, *MakeBetRequest) (*MakeBetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method MakeBet not implemented")
 }
-func (UnimplementedPokerServiceServer) Call(context.Context, *CallRequest) (*CallResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Call not implemented")
+func (UnimplementedPokerServiceServer) CallBet(context.Context, *CallBetRequest) (*CallBetResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CallBet not implemented")
 }
-func (UnimplementedPokerServiceServer) Fold(context.Context, *FoldRequest) (*FoldResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Fold not implemented")
+func (UnimplementedPokerServiceServer) FoldBet(context.Context, *FoldBetRequest) (*FoldBetResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FoldBet not implemented")
 }
-func (UnimplementedPokerServiceServer) Check(context.Context, *CheckRequest) (*CheckResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Check not implemented")
+func (UnimplementedPokerServiceServer) CheckBet(context.Context, *CheckBetRequest) (*CheckBetResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CheckBet not implemented")
 }
 func (UnimplementedPokerServiceServer) GetGameState(context.Context, *GetGameStateRequest) (*GetGameStateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetGameState not implemented")
@@ -250,56 +250,56 @@ func _PokerService_MakeBet_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PokerService_Call_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CallRequest)
+func _PokerService_CallBet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CallBetRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PokerServiceServer).Call(ctx, in)
+		return srv.(PokerServiceServer).CallBet(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: PokerService_Call_FullMethodName,
+		FullMethod: PokerService_CallBet_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PokerServiceServer).Call(ctx, req.(*CallRequest))
+		return srv.(PokerServiceServer).CallBet(ctx, req.(*CallBetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PokerService_Fold_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(FoldRequest)
+func _PokerService_FoldBet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FoldBetRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PokerServiceServer).Fold(ctx, in)
+		return srv.(PokerServiceServer).FoldBet(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: PokerService_Fold_FullMethodName,
+		FullMethod: PokerService_FoldBet_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PokerServiceServer).Fold(ctx, req.(*FoldRequest))
+		return srv.(PokerServiceServer).FoldBet(ctx, req.(*FoldBetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PokerService_Check_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CheckRequest)
+func _PokerService_CheckBet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckBetRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PokerServiceServer).Check(ctx, in)
+		return srv.(PokerServiceServer).CheckBet(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: PokerService_Check_FullMethodName,
+		FullMethod: PokerService_CheckBet_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PokerServiceServer).Check(ctx, req.(*CheckRequest))
+		return srv.(PokerServiceServer).CheckBet(ctx, req.(*CheckBetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -362,7 +362,7 @@ func _PokerService_GetLastWinners_Handler(srv interface{}, ctx context.Context, 
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var PokerService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "pokerrpc.PokerService",
+	ServiceName: "poker.PokerService",
 	HandlerType: (*PokerServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -370,16 +370,16 @@ var PokerService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PokerService_MakeBet_Handler,
 		},
 		{
-			MethodName: "Call",
-			Handler:    _PokerService_Call_Handler,
+			MethodName: "CallBet",
+			Handler:    _PokerService_CallBet_Handler,
 		},
 		{
-			MethodName: "Fold",
-			Handler:    _PokerService_Fold_Handler,
+			MethodName: "FoldBet",
+			Handler:    _PokerService_FoldBet_Handler,
 		},
 		{
-			MethodName: "Check",
-			Handler:    _PokerService_Check_Handler,
+			MethodName: "CheckBet",
+			Handler:    _PokerService_CheckBet_Handler,
 		},
 		{
 			MethodName: "GetGameState",
@@ -405,19 +405,19 @@ var PokerService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	LobbyService_CreateTable_FullMethodName             = "/pokerrpc.LobbyService/CreateTable"
-	LobbyService_JoinTable_FullMethodName               = "/pokerrpc.LobbyService/JoinTable"
-	LobbyService_LeaveTable_FullMethodName              = "/pokerrpc.LobbyService/LeaveTable"
-	LobbyService_GetTables_FullMethodName               = "/pokerrpc.LobbyService/GetTables"
-	LobbyService_GetPlayerCurrentTable_FullMethodName   = "/pokerrpc.LobbyService/GetPlayerCurrentTable"
-	LobbyService_GetBalance_FullMethodName              = "/pokerrpc.LobbyService/GetBalance"
-	LobbyService_UpdateBalance_FullMethodName           = "/pokerrpc.LobbyService/UpdateBalance"
-	LobbyService_ProcessTip_FullMethodName              = "/pokerrpc.LobbyService/ProcessTip"
-	LobbyService_SetPlayerReady_FullMethodName          = "/pokerrpc.LobbyService/SetPlayerReady"
-	LobbyService_SetPlayerUnready_FullMethodName        = "/pokerrpc.LobbyService/SetPlayerUnready"
-	LobbyService_ShowCards_FullMethodName               = "/pokerrpc.LobbyService/ShowCards"
-	LobbyService_HideCards_FullMethodName               = "/pokerrpc.LobbyService/HideCards"
-	LobbyService_StartNotificationStream_FullMethodName = "/pokerrpc.LobbyService/StartNotificationStream"
+	LobbyService_CreateTable_FullMethodName             = "/poker.LobbyService/CreateTable"
+	LobbyService_JoinTable_FullMethodName               = "/poker.LobbyService/JoinTable"
+	LobbyService_LeaveTable_FullMethodName              = "/poker.LobbyService/LeaveTable"
+	LobbyService_GetTables_FullMethodName               = "/poker.LobbyService/GetTables"
+	LobbyService_GetPlayerCurrentTable_FullMethodName   = "/poker.LobbyService/GetPlayerCurrentTable"
+	LobbyService_GetBalance_FullMethodName              = "/poker.LobbyService/GetBalance"
+	LobbyService_UpdateBalance_FullMethodName           = "/poker.LobbyService/UpdateBalance"
+	LobbyService_ProcessTip_FullMethodName              = "/poker.LobbyService/ProcessTip"
+	LobbyService_SetPlayerReady_FullMethodName          = "/poker.LobbyService/SetPlayerReady"
+	LobbyService_SetPlayerUnready_FullMethodName        = "/poker.LobbyService/SetPlayerUnready"
+	LobbyService_ShowCards_FullMethodName               = "/poker.LobbyService/ShowCards"
+	LobbyService_HideCards_FullMethodName               = "/poker.LobbyService/HideCards"
+	LobbyService_StartNotificationStream_FullMethodName = "/poker.LobbyService/StartNotificationStream"
 )
 
 // LobbyServiceClient is the client API for LobbyService service.
@@ -918,7 +918,7 @@ type LobbyService_StartNotificationStreamServer = grpc.ServerStreamingServer[Not
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var LobbyService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "pokerrpc.LobbyService",
+	ServiceName: "poker.LobbyService",
 	HandlerType: (*LobbyServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{

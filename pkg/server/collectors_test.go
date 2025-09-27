@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/decred/slog"
-	"github.com/vctt94/poker-bisonrelay/pkg/poker"
-	"github.com/vctt94/poker-bisonrelay/pkg/server/internal/db"
+	"github.com/vctt94/pokerbisonrelay/pkg/poker"
+	"github.com/vctt94/pokerbisonrelay/pkg/server/internal/db"
 )
 
 // ---------- Test scaffolding ---------- //

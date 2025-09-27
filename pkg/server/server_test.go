@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/vctt94/bisonbotkit/logging"
-	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
-	"github.com/vctt94/poker-bisonrelay/pkg/server/internal/db"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
+	"github.com/vctt94/pokerbisonrelay/pkg/server/internal/db"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -1027,7 +1027,7 @@ func TestBlindPostingAndBalances(t *testing.T) {
 	require.Contains(t, []string{p1, p2}, currentPlayer)
 
 	// Current player calls to match big blind
-	_, err = srv.Call(ctx, &pokerrpc.CallRequest{PlayerId: currentPlayer, TableId: tableID})
+	_, err = srv.Call(ctx, &pokerrpc.CallBetRequest{PlayerId: currentPlayer, TableId: tableID})
 	require.NoError(t, err)
 
 	// Fetch updated state

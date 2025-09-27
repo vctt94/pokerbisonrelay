@@ -7,9 +7,9 @@ import (
 	"strconv"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/vctt94/poker-bisonrelay/pkg/client"
-	"github.com/vctt94/poker-bisonrelay/pkg/poker"
-	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
+	"github.com/vctt94/pokerbisonrelay/pkg/client"
+	"github.com/vctt94/pokerbisonrelay/pkg/poker"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
 // stateFn represents a state function that processes input and returns the next state

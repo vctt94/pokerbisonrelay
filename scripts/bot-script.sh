@@ -13,7 +13,7 @@ BRSERVER_PORT=12345
 BR_RPC_PORT=7676
 
 # bot
-BOT_DIR=$HOME/projects/BR/poker-bisonrelay/cmd/bot
+BOT_DIR=$HOME/projects/BR/pokerbisonrelay/cmd/bot
 
 ###############################################################################
 # (Re)start session

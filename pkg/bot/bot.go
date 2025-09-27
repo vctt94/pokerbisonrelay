@@ -16,9 +16,9 @@ import (
 	"github.com/decred/dcrd/dcrutil/v4"
 	kit "github.com/vctt94/bisonbotkit"
 	"github.com/vctt94/bisonbotkit/logging"
-	"github.com/vctt94/poker-bisonrelay/pkg/poker"
-	"github.com/vctt94/poker-bisonrelay/pkg/rpc/grpc/pokerrpc"
-	"github.com/vctt94/poker-bisonrelay/pkg/server"
+	"github.com/vctt94/pokerbisonrelay/pkg/poker"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
+	"github.com/vctt94/pokerbisonrelay/pkg/server"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
