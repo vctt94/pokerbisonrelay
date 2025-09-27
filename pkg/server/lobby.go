@@ -23,24 +23,20 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 	}
 
 	s.log.Debugf("Creating table with buy-in %d", req.BuyIn)
-	// Check if creator has enough DCR for the buy-in
 	if creatorBalance < req.BuyIn {
 		return nil, fmt.Errorf("insufficient DCR balance for buy-in: need %d, have %d", req.BuyIn, creatorBalance)
 	}
 
-	// Create table configuration
+	// Config
 	timeBank := time.Duration(req.TimeBankSeconds) * time.Second
 	if timeBank == 0 {
-		timeBank = 30 * time.Second // Default to 30 seconds if not specified
+		timeBank = 30 * time.Second
 	}
-
-	// Handle StartingChips default logic
 	startingChips := req.StartingChips
 	if startingChips == 0 {
-		startingChips = 1000 // Default to 1000 poker chips when not specified
+		startingChips = 1000
 	}
 
-	// Use dedicated loggers (levels controlled by backend debug level)
 	tblLog := s.logBackend.Logger("TABLE")
 	gameLog := s.logBackend.Logger("GAME")
 
@@ -55,7 +51,7 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 		SmallBlind:     req.SmallBlind,
 		BigBlind:       req.BigBlind,
 		MinBalance:     req.MinBalance,
-		StartingChips:  startingChips, // Chips amount for the game with default logic
+		StartingChips:  startingChips,
 		TimeBank:       timeBank,
 		AutoStartDelay: time.Duration(req.AutoStartMs) * time.Millisecond,
 	}
@@ -64,22 +60,31 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 	table := poker.NewTable(cfg)
 	table.SetStateSaver(s)
 
-	// Add creator as first user
-	_, err = table.AddNewUser(req.PlayerId, req.PlayerId, creatorBalance, 0)
-	if err != nil {
+	// NEW: typed event pipeline adapter (poker -> server)
+	table.SetEventPublisher(func(eventType string, tableID string, payload interface{}) {
+		typ := GameEventType(eventType) // map poker's string to server enum
+		s.log.Debugf("Publishing event to processor: %s for table %s", typ, tableID)
+
+		ev, err := s.buildGameEvent(typ, tableID, payload)
+		if err != nil {
+			s.log.Errorf("failed to build %s event: %v", typ, err)
+			return
+		}
+		s.eventProcessor.PublishEvent(ev)
+	})
+
+	// Seat creator
+	if _, err := table.AddNewUser(req.PlayerId, req.PlayerId, creatorBalance, 0); err != nil {
 		return nil, err
 	}
 
-	// Deduct buy-in from creator's DCR account balance
-	err = s.db.UpdatePlayerBalance(req.PlayerId, -req.BuyIn, "table buy-in", "created table")
-	if err != nil {
+	// Deduct buy-in
+	if err := s.db.UpdatePlayerBalance(req.PlayerId, -req.BuyIn, "table buy-in", "created table"); err != nil {
 		return nil, err
 	}
 
-	// Now that the table is fully initialized and the creator seated, register it.
+	// Register table
 	s.tables[cfg.ID] = table
-
-	// Table already added to map above; no further action needed here.
 
 	return &pokerrpc.CreateTableResponse{TableId: cfg.ID}, nil
 }
@@ -119,13 +124,15 @@ func (s *Server) JoinTable(ctx context.Context, req *pokerrpc.JoinTableRequest) 
 
 	// Reconnection path – player already seated.
 	if existingUser := table.GetUser(req.PlayerId); existingUser != nil {
-		evt, err := CollectGameEventSnapshot(GameEventTypePlayerJoined, s, req.TableId, req.PlayerId, 0, map[string]interface{}{
-			"message": fmt.Sprintf("Player %s rejoined the table", req.PlayerId),
-		})
-		if err != nil {
-			s.log.Errorf("Failed to collect event snapshot: %v", err)
-		} else {
+		// Publish typed PLAYER_JOINED event
+		if evt, err := s.buildGameEvent(
+			GameEventTypePlayerJoined,
+			req.TableId,
+			PlayerJoinedPayload{PlayerID: req.PlayerId},
+		); err == nil {
 			s.eventProcessor.PublishEvent(evt)
+		} else {
+			s.log.Errorf("Failed to build PLAYER_JOINED event: %v", err)
 		}
 
 		return &pokerrpc.JoinTableResponse{
@@ -176,13 +183,15 @@ func (s *Server) JoinTable(ctx context.Context, req *pokerrpc.JoinTableRequest) 
 		s.log.Errorf("Failed to save new player state: %v", err)
 	}
 
-	// Publish async event snapshot.
-	if evt, err := CollectGameEventSnapshot(GameEventTypePlayerJoined, s, req.TableId, req.PlayerId, 0, map[string]interface{}{
-		"message": fmt.Sprintf("Player %s joined the table", req.PlayerId),
-	}); err == nil {
+	// Publish typed PLAYER_JOINED event
+	if evt, err := s.buildGameEvent(
+		GameEventTypePlayerJoined,
+		req.TableId,
+		PlayerJoinedPayload{PlayerID: req.PlayerId},
+	); err == nil {
 		s.eventProcessor.PublishEvent(evt)
 	} else {
-		s.log.Errorf("Failed to collect event snapshot: %v", err)
+		s.log.Errorf("Failed to build PLAYER_JOINED event: %v", err)
 	}
 
 	return &pokerrpc.JoinTableResponse{
@@ -452,16 +461,15 @@ func (s *Server) SetPlayerReady(ctx context.Context, req *pokerrpc.SetPlayerRead
 	allReady := table.CheckAllPlayersReady()
 	gameStarted := table.IsGameStarted()
 
-	// Collect snapshot and publish event for async processing
-	event, err := CollectGameEventSnapshot(GameEventTypePlayerReady, s, req.TableId, req.PlayerId, 0, map[string]interface{}{
-		"message":     fmt.Sprintf("Player %s is ready", req.PlayerId),
-		"allReady":    allReady,
-		"gameStarted": gameStarted,
-	})
-	if err != nil {
-		s.log.Errorf("Failed to collect event snapshot: %v", err)
-	} else {
+	// Publish typed PLAYER_READY event
+	if event, err := s.buildGameEvent(
+		GameEventTypePlayerReady,
+		req.TableId,
+		PlayerReadyPayload{PlayerID: req.PlayerId},
+	); err == nil {
 		s.eventProcessor.PublishEvent(event)
+	} else {
+		s.log.Errorf("Failed to build PLAYER_READY event: %v", err)
 	}
 
 	// If all players are ready and the game hasn't started yet, start the game
@@ -470,31 +478,33 @@ func (s *Server) SetPlayerReady(ctx context.Context, req *pokerrpc.SetPlayerRead
 			return nil, status.Error(codes.Internal, fmt.Sprintf("failed to start game: %v", errStart))
 		}
 
-		// Collect and publish a dedicated GAME_STARTED event *after* the game has been
+		// Publish typed GAME_STARTED event *after* the game has been
 		// successfully created so that the emitted snapshot reflects the brand-new
 		// game state (dealer, blinds, current player, etc.). Without this, the first
 		// game update received by the clients would still be in the pre-start state
 		// which prevents the UI from progressing to the actual hand.
-		gameStartedEvent, errGS := CollectGameEventSnapshot(GameEventTypeGameStarted, s, req.TableId, req.PlayerId, 0, map[string]interface{}{
-			"message": fmt.Sprintf("Game started on table %s", req.TableId),
-		})
-		if errGS != nil {
-			s.log.Errorf("Failed to collect GAME_STARTED event snapshot: %v", errGS)
-		} else {
+		if gameStartedEvent, errGS := s.buildGameEvent(
+			GameEventTypeGameStarted,
+			req.TableId,
+			GameStartedPayload{PlayerIDs: []string{req.PlayerId}},
+		); errGS == nil {
 			s.eventProcessor.PublishEvent(gameStartedEvent)
+		} else {
+			s.log.Errorf("Failed to build GAME_STARTED event: %v", errGS)
 		}
 
 		// Attach callback to broadcast NEW_HAND_STARTED events triggered by auto-start logic
 		if g := table.GetGame(); g != nil {
 			g.SetOnNewHandStartedCallback(func() {
-				// Build and publish snapshot
-				evt, err := CollectGameEventSnapshot(GameEventTypeNewHandStarted, s, req.TableId, "", 0, map[string]interface{}{
-					"message": fmt.Sprintf("New hand started on table %s", req.TableId),
-				})
-				if err == nil {
+				// Publish typed NEW_HAND_STARTED event
+				if evt, err := s.buildGameEvent(
+					GameEventTypeNewHandStarted,
+					req.TableId,
+					NewHandStartedPayload{},
+				); err == nil {
 					s.eventProcessor.PublishEvent(evt)
 				} else {
-					s.log.Errorf("Failed to collect NEW_HAND_STARTED event snapshot: %v", err)
+					s.log.Errorf("Failed to build NEW_HAND_STARTED event: %v", err)
 				}
 			})
 		}
@@ -524,15 +534,15 @@ func (s *Server) SetPlayerUnready(ctx context.Context, req *pokerrpc.SetPlayerUn
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
 
-	// Collect snapshot and publish event for async processing
-	event, err := CollectGameEventSnapshot(GameEventTypePlayerReady, s, req.TableId, req.PlayerId, 0, map[string]interface{}{
-		"message": fmt.Sprintf("Player %s is unready", req.PlayerId),
-		"ready":   false,
-	})
-	if err != nil {
-		s.log.Errorf("Failed to collect event snapshot: %v", err)
-	} else {
+	// Publish typed PLAYER_READY event (with ready=false)
+	if event, err := s.buildGameEvent(
+		GameEventTypePlayerReady,
+		req.TableId,
+		PlayerMarkedReadyPayload{PlayerID: req.PlayerId, Ready: false},
+	); err == nil {
 		s.eventProcessor.PublishEvent(event)
+	} else {
+		s.log.Errorf("Failed to build PLAYER_READY event: %v", err)
 	}
 
 	return &pokerrpc.SetPlayerUnreadyResponse{

@@ -45,8 +45,11 @@ type PokerClient struct {
 	log          slog.Logger
 	logBackend   *logging.LogBackend
 	notifier     pokerrpc.LobbyService_StartNotificationStreamClient
-	UpdatesCh    chan tea.Msg
-	ErrorsCh     chan error
+
+	// helper channels for pokerctl
+	UpdatesCh       chan tea.Msg
+	ErrorsCh        chan error
+	NotificationsCh chan *pokerrpc.Notification
 
 	// Game streaming
 	gameStream   pokerrpc.PokerService_StartGameStreamClient
@@ -396,6 +399,7 @@ func (pc *PokerClient) handleGameStreamUpdates(ctx context.Context) {
 					return
 				}
 
+				pc.log.Errorf("Game stream error: %v", err)
 				pc.ErrorsCh <- fmt.Errorf("game stream error: %v", err)
 				return
 			}

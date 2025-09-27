@@ -27,6 +27,7 @@ type Player struct {
 	StartingBalance int64 // Chips balance at start of current hand (for calculations)
 	Hand            []Card
 	HasBet          int64 // Current bet amount in this betting round
+	CurrentBet      int64 // Current bet amount in this betting round
 
 	// State machine - Rob Pike's pattern
 	stateMachine *statemachine.StateMachine[Player]

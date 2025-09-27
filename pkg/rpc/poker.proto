@@ -309,6 +309,12 @@ message Notification {
   bool game_ready_to_play = 12;
   int32 countdown = 13;
   repeated Winner winners = 14;
+  Showdown showdown = 15;
+}
+
+message Showdown {
+  repeated Winner winners = 1;
+  int64 pot = 2;
 }
 
 // Common Messages

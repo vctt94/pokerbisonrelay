@@ -69,11 +69,8 @@ func (pc *PokerClient) CreateTable(ctx context.Context, config poker.TableConfig
 	pc.tableID = resp.TableId
 	pc.Unlock()
 
-	// Start game stream for real-time updates
-	if err := pc.StartGameStream(ctx); err != nil {
-		pc.log.Warnf("Failed to start game stream: %v", err)
-		// Don't return error here since table creation was successful
-	}
+	// Note: Game stream is not automatically started for table creation
+	// It should be started explicitly when needed for real-time updates
 
 	return resp.TableId, nil
 }
@@ -95,10 +92,10 @@ func (pc *PokerClient) JoinTable(ctx context.Context, tableID string) error {
 	pc.tableID = tableID
 
 	// Start game stream for real-time updates
-	if err := pc.StartGameStream(ctx); err != nil {
-		pc.log.Warnf("Failed to start game stream: %v", err)
-		// Don't return error here since joining was successful
-	}
+	// if err := pc.StartGameStream(ctx); err != nil {
+	// 	pc.log.Warnf("Failed to start game stream: %v", err)
+	// 	// Don't return error here since joining was successful
+	// }
 
 	return nil
 }

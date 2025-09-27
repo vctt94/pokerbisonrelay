@@ -64,6 +64,8 @@ func (sm *StateMachine[T]) GetCurrentState() StateFn[T] {
 // SetState sets the state function without triggering callbacks
 func (sm *StateMachine[T]) SetState(stateFn StateFn[T]) {
 	sm.mutex.Lock()
-	defer sm.mutex.Unlock()
 	sm.stateFn = stateFn
+	sm.mutex.Unlock()
+
+	sm.Dispatch(nil)
 }

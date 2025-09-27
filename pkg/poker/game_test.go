@@ -406,7 +406,7 @@ func TestSidePotShowdown(t *testing.T) {
 	game.players[2].HandValue = &hv3
 
 	// Create side pots based on current bets
-	game.potManager.CreateSidePots(game.players)
+	game.potManager.BuildPotsFromTotals(game.players)
 
 	// Distribute pots
 	game.potManager.DistributePots(game.players)

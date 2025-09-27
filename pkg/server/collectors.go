@@ -143,172 +143,64 @@ func (s *Server) collectGameSnapshot(game *poker.Game) *GameSnapshot {
 	return snapshot
 }
 
-// buildGameEvent constructs a GameEvent with a fresh table snapshot and the
-// list of current player IDs.
-func (s *Server) buildGameEvent(eventType GameEventType, tableID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
+func (s *Server) buildGameEvent(
+	eventType GameEventType,
+	tableID string,
+	payload interface{},
+) (*GameEvent, error) {
 	tableSnapshot, err := s.collectTableSnapshot(tableID)
 	if err != nil {
 		return nil, err
 	}
 
-	playerIDs := s.getTablePlayerIDsCol(tableID)
+	playerIDs := s.safeTablePlayerIDs(tableID)
+
+	// Convert poker package payloads to server payloads
+	var serverPayload EventPayload
+	if payload != nil {
+		switch p := payload.(type) {
+		case poker.ShowdownPayload:
+			serverPayload = ShowdownPayload{
+				Winners: p.Winners,
+				Pot:     p.Pot,
+			}
+		case EventPayload:
+			// Already a server payload
+			serverPayload = p
+		default:
+			s.log.Warnf("Unknown payload type %T for event %s on table %s", payload, eventType, tableID)
+			serverPayload = nil
+		}
+	}
 
 	return &GameEvent{
 		Type:          eventType,
 		TableID:       tableID,
 		PlayerIDs:     playerIDs,
-		Amount:        amount,
-		Metadata:      metadata,
 		Timestamp:     time.Now(),
 		TableSnapshot: tableSnapshot,
+		Payload:       serverPayload,
 	}, nil
 }
 
-// BetMadeCollector handles snapshot collection for bet made events
-type BetMadeCollector struct{}
-
-func (c *BetMadeCollector) EventType() GameEventType {
-	return GameEventTypeBetMade
-}
-
-func (c *BetMadeCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	return s.buildGameEvent(GameEventTypeBetMade, tableID, amount, metadata)
-}
-
-// PlayerFoldedCollector handles snapshot collection for player folded events
-type PlayerFoldedCollector struct{}
-
-func (c *PlayerFoldedCollector) EventType() GameEventType {
-	return GameEventTypePlayerFolded
-}
-
-func (c *PlayerFoldedCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	return s.buildGameEvent(GameEventTypePlayerFolded, tableID, amount, metadata)
-}
-
-// CallMadeCollector handles snapshot collection for call made events
-type CallMadeCollector struct{}
-
-func (c *CallMadeCollector) EventType() GameEventType {
-	return GameEventTypeCallMade
-}
-
-func (c *CallMadeCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	return s.buildGameEvent(GameEventTypeCallMade, tableID, amount, metadata)
-}
-
-// CheckMadeCollector handles snapshot collection for check made events
-type CheckMadeCollector struct{}
-
-func (c *CheckMadeCollector) EventType() GameEventType {
-	return GameEventTypeCheckMade
-}
-
-func (c *CheckMadeCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	return s.buildGameEvent(GameEventTypeCheckMade, tableID, amount, metadata)
-}
-
-// GameStartedCollector handles snapshot collection for game started events
-type GameStartedCollector struct{}
-
-func (c *GameStartedCollector) EventType() GameEventType {
-	return GameEventTypeGameStarted
-}
-
-func (c *GameStartedCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	return s.buildGameEvent(GameEventTypeGameStarted, tableID, amount, metadata)
-}
-
-// GameEndedCollector handles snapshot collection for game ended events
-type GameEndedCollector struct{}
-
-func (c *GameEndedCollector) EventType() GameEventType {
-	return GameEventTypeGameEnded
-}
-
-func (c *GameEndedCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	return s.buildGameEvent(GameEventTypeGameEnded, tableID, amount, metadata)
-}
-
-// PlayerReadyCollector handles snapshot collection for player ready events
-type PlayerReadyCollector struct{}
-
-func (c *PlayerReadyCollector) EventType() GameEventType {
-	return GameEventTypePlayerReady
-}
-
-func (c *PlayerReadyCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	return s.buildGameEvent(GameEventTypePlayerReady, tableID, amount, metadata)
-}
-
-// PlayerJoinedCollector handles snapshot collection for player joined events
-type PlayerJoinedCollector struct{}
-
-func (c *PlayerJoinedCollector) EventType() GameEventType {
-	return GameEventTypePlayerJoined
-}
-
-func (c *PlayerJoinedCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	// Attempt to collect a table snapshot. If the table doesn't exist yet (e.g. tests
-	// creating an event before the table is added to the server), continue without
-	// failing – a nil TableSnapshot is acceptable for join notifications.
-	tableSnapshot, _ := s.collectTableSnapshot(tableID)
-
-	// Determine which players should receive this event. If the table exists, use all
-	// seated player IDs; otherwise default to broadcasting only to the joining
-	// player so the metadata injection logic in tests still works.
-	var playerIDs []string
-	s.mu.RLock()
-	_, exists := s.tables[tableID]
-	s.mu.RUnlock()
-	if exists {
-		playerIDs = s.getTablePlayerIDsCol(tableID)
-	} else {
-		playerIDs = []string{playerID}
-	}
-
-	return &GameEvent{
-		Type:          GameEventTypePlayerJoined,
-		TableID:       tableID,
-		PlayerIDs:     playerIDs,
-		Amount:        amount,
-		Metadata:      metadata,
-		Timestamp:     time.Now(),
-		TableSnapshot: tableSnapshot,
-	}, nil
-}
-
-// PlayerLeftCollector handles snapshot collection for player left events
-type PlayerLeftCollector struct{}
-
-func (c *PlayerLeftCollector) EventType() GameEventType {
-	return GameEventTypePlayerLeft
-}
-
-func (c *PlayerLeftCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	return s.buildGameEvent(GameEventTypePlayerLeft, tableID, amount, metadata)
-}
-
-// NewHandStartedCollector handles snapshot collection for new hand started events
-type NewHandStartedCollector struct{}
-
-func (c *NewHandStartedCollector) EventType() GameEventType {
-	return GameEventTypeNewHandStarted
-}
-
-func (c *NewHandStartedCollector) CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	return s.buildGameEvent(GameEventTypeNewHandStarted, tableID, amount, metadata)
-}
-
-// getTablePlayerIDsCol gets player IDs from the table without assuming the
-// server mutex is held. It acquires a read lock only for the map access and
-// then relies on the table's own thread-safety primitives.
-func (s *Server) getTablePlayerIDsCol(tableID string) []string {
+// helpers
+func (s *Server) tableByID(tableID string) *poker.Table {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	playerIDs := make([]string, 0, len(s.tables[tableID].GetUsers()))
-	for _, user := range s.tables[tableID].GetUsers() {
-		playerIDs = append(playerIDs, user.ID)
+	return s.tables[tableID]
+}
+
+func (s *Server) safeTablePlayerIDs(tableID string) []string {
+	s.mu.RLock()
+	t := s.tables[tableID]
+	s.mu.RUnlock()
+	if t == nil {
+		return nil
 	}
-	return playerIDs
+	users := t.GetUsers()
+	ids := make([]string, 0, len(users))
+	for _, u := range users {
+		ids = append(ids, u.ID)
+	}
+	return ids
 }

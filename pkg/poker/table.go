@@ -8,9 +8,16 @@ import (
 
 	"github.com/decred/slog"
 
+	"github.com/vctt94/bisonbotkit/logging"
 	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
 	"github.com/vctt94/pokerbisonrelay/pkg/statemachine"
 )
+
+// ShowdownPayload represents a typed payload for showdown events
+type ShowdownPayload struct {
+	Winners []*pokerrpc.Winner
+	Pot     int64
+}
 
 // TableStateFn represents a table state function following Rob Pike's pattern
 type TableStateFn = statemachine.StateFn[Table]
@@ -62,7 +69,8 @@ type StateSaver interface {
 
 // TableEventManager handles notifications and state updates for table events
 type TableEventManager struct {
-	stateSaver StateSaver
+	stateSaver     StateSaver
+	eventPublisher func(eventType string, tableID string, payload interface{})
 }
 
 // SaveState triggers a state save for the table
@@ -77,9 +85,24 @@ func (tem *TableEventManager) SetStateSaver(stateSaver StateSaver) {
 	tem.stateSaver = stateSaver
 }
 
+// SetEventPublisher sets the event publisher for the event manager
+func (tem *TableEventManager) SetEventPublisher(
+	eventPublisher func(eventType string, tableID string, payload interface{}),
+) {
+	tem.eventPublisher = eventPublisher
+}
+
+// SetEventPublisher sets the event publisher for the table
+func (t *Table) SetEventPublisher(
+	eventPublisher func(eventType string, tableID string, payload interface{}),
+) {
+	t.eventManager.SetEventPublisher(eventPublisher)
+}
+
 // Table represents a poker table that manages users and delegates game logic to Game
 type Table struct {
 	log        slog.Logger
+	logBackend *logging.LogBackend
 	config     TableConfig
 	users      map[string]*User // Users seated at the table
 	game       *Game            // Game logic that handles all player management
@@ -307,7 +330,7 @@ func (t *Table) handleShowdown() {
 
 	currentRound := t.game.GetRound()
 	if t.lastShowdown != nil && t.resolvedRound == currentRound {
-		// Already resolved winners for this hand
+		// Already resolved winners for this hand - idempotency guard
 		return
 	}
 
@@ -317,11 +340,22 @@ func (t *Table) handleShowdown() {
 	t.lastShowdown = result
 	t.resolvedRound = currentRound
 
-	// Count players still at the table with sufficient balance for the next hand
-	playersReadyForNextHand := 0
+	tableID := t.config.ID
+	amount := t.lastShowdown.TotalPot
+	publisher := t.eventManager.eventPublisher
+
+	if publisher != nil {
+		go publisher("showdown_result", tableID, ShowdownPayload{
+			Winners: t.lastShowdown.WinnerInfo,
+			Pot:     amount,
+		})
+	}
+
+	// Remove busted players (0 chips) and count remaining players
+	playersToRemove := make([]string, 0)
+
 	for _, u := range t.users {
-		// Check if user has sufficient in-game poker chip balance for big blind
-		// Find the corresponding player to get their current poker chip balance
+		// Find player's current chip balance
 		var playerBalance int64 = 0
 		for _, player := range t.game.players {
 			if player.ID == u.ID {
@@ -330,9 +364,16 @@ func (t *Table) handleShowdown() {
 			}
 		}
 
-		if playerBalance >= t.config.BigBlind {
-			playersReadyForNextHand++
+		if playerBalance == 0 {
+			playersToRemove = append(playersToRemove, u.ID)
 		}
+	}
+
+	// Remove busted players
+	for _, userID := range playersToRemove {
+		t.log.Infof("Removing busted player %s (0 chips)", userID)
+		t.removeUserWithoutLock(userID)
+		t.log.Infof("removed busted player %s (0 chips)", userID)
 	}
 
 	// Reset round-local counters and update timestamp
@@ -345,7 +386,15 @@ func (t *Table) handleShowdown() {
 		if t.game.autoStartCallbacks == nil {
 			// This is safe because we hold the table lock and SetAutoStartCallbacks locks the game.
 			t.game.SetAutoStartCallbacks(&AutoStartCallbacks{
-				MinPlayers:       func() int { return t.config.MinPlayers },
+				MinPlayers: func() int {
+					// In tournament mode, allow continuation with fewer players if at least 2 remain
+					// Otherwise, use the configured minimum
+					remainingPlayers := len(t.users)
+					if remainingPlayers >= 2 {
+						return 2 // Allow heads-up play
+					}
+					return t.config.MinPlayers
+				},
 				StartNewHand:     func() error { return t.startNewHand() },
 				OnNewHandStarted: nil,
 			})
@@ -369,16 +418,24 @@ func (t *Table) startNewHand() error {
 	// Check if enough players still at table
 	playersAtTable := len(t.users)
 
-	if playersAtTable < t.config.MinPlayers {
-		return fmt.Errorf("not enough players to start new hand")
+	// Allow heads-up play (2 players) in tournament mode even if original MinPlayers was higher
+	minRequired := t.config.MinPlayers
+	if playersAtTable >= 2 && playersAtTable < t.config.MinPlayers {
+		minRequired = 2 // Allow heads-up play
 	}
 
-	// Get active users for the new hand - include all users who have sufficient balance
+	if playersAtTable < minRequired {
+		return fmt.Errorf("not enough players to start new hand: %d < %d", playersAtTable, minRequired)
+	}
+
+	// Get active users for the new hand - include all users (they will play all-in if needed)
 	// (folded players will be reset for the new hand)
 	activeUsers := make([]*User, 0, len(t.users))
 	for _, u := range t.users {
-		// Check if user has sufficient in-game poker chip balance for big blind
-		// Find the corresponding player to get their current poker chip balance
+		// Include all players - they will play all-in with their available chips if needed
+		activeUsers = append(activeUsers, u)
+
+		// Find the corresponding player to get their current poker chip balance for logging
 		var playerBalance int64 = 0
 		for _, player := range t.game.players {
 			if player.ID == u.ID {
@@ -387,12 +444,10 @@ func (t *Table) startNewHand() error {
 			}
 		}
 
-		// Include players who have sufficient balance (folded status will be reset)
 		if playerBalance >= t.config.BigBlind {
-			activeUsers = append(activeUsers, u)
 			t.log.Debugf("User %s eligible for new hand: pokerBalance=%d >= bigBlind=%d", u.ID, playerBalance, t.config.BigBlind)
 		} else {
-			t.log.Debugf("User %s not eligible for new hand: pokerBalance=%d < bigBlind=%d", u.ID, playerBalance, t.config.BigBlind)
+			t.log.Debugf("User %s will play all-in: pokerBalance=%d < bigBlind=%d", u.ID, playerBalance, t.config.BigBlind)
 		}
 	}
 
@@ -436,6 +491,10 @@ func (t *Table) startNewHand() error {
 		return fmt.Errorf("failed to setup new hand: %w", err)
 	}
 
+	// Reset showdown state for the new hand
+	t.lastShowdown = nil
+	t.resolvedRound = -1
+
 	// Transition to game active state
 	t.stateMachine.SetState(tableStateGameActive)
 
@@ -447,6 +506,10 @@ func (t *Table) startNewHand() error {
 func (t *Table) setupNewHand(activePlayers []*User) error {
 	if t.game == nil {
 		return fmt.Errorf("game not initialized")
+	}
+	if t.log == nil {
+		t.log = slog.NewBackend(nil).Logger("TESTING")
+		// return nil, fmt.Errorf("poker: log is required")
 	}
 
 	t.log.Debugf("setupNewHand: Starting hand setup for %d players", len(activePlayers))
@@ -620,7 +683,7 @@ func (t *Table) HandleTimeouts() {
 
 	// The current player is already in our unified player state
 	currentPlayer := t.game.players[t.game.currentPlayer]
-	if currentPlayer.HasFolded {
+	if currentPlayer.HasFolded || currentPlayer.IsAllIn {
 		return
 	}
 
@@ -865,11 +928,18 @@ func (t *Table) postBlindsFromGame() error {
 	// Post small blind
 	if t.game.players[smallBlindPos] != nil {
 		smallBlindAmount := t.game.config.SmallBlind
-		if smallBlindAmount > t.game.players[smallBlindPos].Balance {
-			return fmt.Errorf("insufficient balance for small blind")
+		player := t.game.players[smallBlindPos]
+
+		// Handle all-in logic for small blind
+		if smallBlindAmount > player.Balance {
+			// Player cannot cover small blind - treat as all-in of remaining balance
+			smallBlindAmount = player.Balance
+			player.IsAllIn = true
+			t.log.Debugf("Player %s all-in for small blind: posting %d (had %d)", player.ID, smallBlindAmount, player.Balance)
 		}
-		t.game.players[smallBlindPos].Balance -= smallBlindAmount
-		t.game.players[smallBlindPos].HasBet = smallBlindAmount
+
+		player.Balance -= smallBlindAmount
+		player.HasBet = smallBlindAmount
 		t.game.potManager.AddBet(smallBlindPos, smallBlindAmount)
 
 		// Send small blind notification
@@ -880,11 +950,18 @@ func (t *Table) postBlindsFromGame() error {
 	// Post big blind
 	if t.game.players[bigBlindPos] != nil {
 		bigBlindAmount := t.game.config.BigBlind
-		if bigBlindAmount > t.game.players[bigBlindPos].Balance {
-			return fmt.Errorf("insufficient balance for big blind")
+		player := t.game.players[bigBlindPos]
+
+		// Handle all-in logic for big blind
+		if bigBlindAmount > player.Balance {
+			// Player cannot cover big blind - treat as all-in of remaining balance
+			bigBlindAmount = player.Balance
+			player.IsAllIn = true
+			t.log.Debugf("Player %s all-in for big blind: posting %d (had %d)", player.ID, bigBlindAmount, player.Balance)
 		}
-		t.game.players[bigBlindPos].Balance -= bigBlindAmount
-		t.game.players[bigBlindPos].HasBet = bigBlindAmount
+
+		player.Balance -= bigBlindAmount
+		player.HasBet = bigBlindAmount
 		t.game.potManager.AddBet(bigBlindPos, bigBlindAmount)
 		t.game.currentBet = bigBlindAmount // Set current bet to big blind amount
 
@@ -970,6 +1047,18 @@ func (t *Table) RemoveUser(userID string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	if _, exists := t.users[userID]; !exists {
+		return fmt.Errorf("user not at table")
+	}
+
+	delete(t.users, userID)
+	t.lastAction = time.Now()
+	return nil
+}
+
+// removeUserWithoutLock removes a user from the table without acquiring the lock
+// This is used internally when the caller already holds the table lock
+func (t *Table) removeUserWithoutLock(userID string) error {
 	if _, exists := t.users[userID]; !exists {
 		return fmt.Errorf("user not at table")
 	}

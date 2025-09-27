@@ -69,17 +69,24 @@ func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*po
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
+	// Publish typed BET_MADE event
+	if evt, err := s.buildGameEvent(
+		GameEventTypeBetMade,
+		req.TableId,
+		BetMadePayload{
+			PlayerID: req.PlayerId,
+			Amount:   req.Amount,
+		},
+	); err == nil {
+		s.eventProcessor.PublishEvent(evt)
+	} else {
+		s.log.Errorf("Failed to build BET_MADE event: %v", err)
+	}
+
+	// DCR account balance is independent of chip bets; this just returns the wallet balance.
 	balance, err := s.db.GetPlayerBalance(req.PlayerId)
 	if err != nil {
 		return nil, err
-	}
-
-	if evt, err := CollectGameEventSnapshot(GameEventTypeBetMade, s, req.TableId, req.PlayerId, req.Amount, map[string]interface{}{
-		"message": fmt.Sprintf("Player %s bet %d chips", req.PlayerId, req.Amount),
-	}); err == nil {
-		s.eventProcessor.PublishEvent(evt)
-	} else {
-		s.log.Errorf("Failed to collect event snapshot: %v", err)
 	}
 
 	return &pokerrpc.MakeBetResponse{
@@ -102,19 +109,26 @@ func (s *Server) FoldBet(ctx context.Context, req *pokerrpc.FoldBetRequest) (*po
 	if table.GetCurrentPlayerID() != req.PlayerId {
 		return nil, status.Error(codes.FailedPrecondition, "not your turn")
 	}
+
 	if err := table.HandleFold(req.PlayerId); err != nil {
 		return nil, status.Error(codes.Internal, "failed to process fold: "+err.Error())
 	}
 
-	if evt, err := CollectGameEventSnapshot(GameEventTypePlayerFolded, s, req.TableId, req.PlayerId, 0, map[string]interface{}{
-		"message": fmt.Sprintf("Player %s folded", req.PlayerId),
-	}); err == nil {
+	// Publish typed PLAYER_FOLDED event
+	if evt, err := s.buildGameEvent(
+		GameEventTypePlayerFolded,
+		req.TableId,
+		PlayerFoldedPayload{PlayerID: req.PlayerId},
+	); err == nil {
 		s.eventProcessor.PublishEvent(evt)
 	} else {
-		s.log.Errorf("Failed to collect event snapshot: %v", err)
+		s.log.Errorf("Failed to build PLAYER_FOLDED event: %v", err)
 	}
 
-	return &pokerrpc.FoldBetResponse{Success: true, Message: "Folded successfully"}, nil
+	return &pokerrpc.FoldBetResponse{
+		Success: true,
+		Message: "Folded successfully",
+	}, nil
 }
 
 // Call implements the Call RPC method
@@ -133,7 +147,7 @@ func (s *Server) CallBet(ctx context.Context, req *pokerrpc.CallBetRequest) (*po
 	}
 
 	// Determine how many chips the player actually needs to add (delta) to call.
-	var prevBet int64 = 0
+	var prevBet int64
 	if game := table.GetGame(); game != nil {
 		for _, p := range game.GetPlayers() {
 			if p.ID == req.PlayerId {
@@ -142,25 +156,29 @@ func (s *Server) CallBet(ctx context.Context, req *pokerrpc.CallBetRequest) (*po
 			}
 		}
 	}
-	// Capture current bet before performing the call so we know the target amount.
 	currentBet := table.GetCurrentBet()
 
 	if err := table.HandleCall(req.PlayerId); err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
 
-	// Calculate delta based on player's previous bet.
 	delta := currentBet - prevBet
 	if delta < 0 {
-		delta = 0 // safety — shouldn't happen
+		delta = 0 // safety
 	}
 
-	if evt, err := CollectGameEventSnapshot(GameEventTypeCallMade, s, req.TableId, req.PlayerId, delta, map[string]interface{}{
-		"message": fmt.Sprintf("Player %s called %d chips", req.PlayerId, delta),
-	}); err == nil {
+	// Publish typed CALL_MADE event
+	if evt, err := s.buildGameEvent(
+		GameEventTypeCallMade,
+		req.TableId,
+		CallMadePayload{
+			PlayerID: req.PlayerId,
+			Amount:   delta,
+		},
+	); err == nil {
 		s.eventProcessor.PublishEvent(evt)
 	} else {
-		s.log.Errorf("Failed to collect event snapshot: %v", err)
+		s.log.Errorf("Failed to build CALL_MADE event: %v", err)
 	}
 
 	return &pokerrpc.CallBetResponse{Success: true, Message: "Call successful"}, nil
@@ -185,12 +203,15 @@ func (s *Server) CheckBet(ctx context.Context, req *pokerrpc.CheckBetRequest) (*
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
 
-	if evt, err := CollectGameEventSnapshot(GameEventTypeCheckMade, s, req.TableId, req.PlayerId, 0, map[string]interface{}{
-		"message": fmt.Sprintf("Player %s checked", req.PlayerId),
-	}); err == nil {
+	// Publish typed CHECK_MADE event
+	if evt, err := s.buildGameEvent(
+		GameEventTypeCheckMade,
+		req.TableId,
+		CheckMadePayload{PlayerID: req.PlayerId},
+	); err == nil {
 		s.eventProcessor.PublishEvent(evt)
 	} else {
-		s.log.Errorf("Failed to collect event snapshot: %v", err)
+		s.log.Errorf("Failed to build CHECK_MADE event: %v", err)
 	}
 
 	return &pokerrpc.CheckBetResponse{Success: true, Message: "Check successful"}, nil

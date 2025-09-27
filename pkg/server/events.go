@@ -1,7 +1,6 @@
 package server
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -24,6 +23,7 @@ const (
 	GameEventTypePlayerJoined   GameEventType = "player_joined"
 	GameEventTypePlayerLeft     GameEventType = "player_left"
 	GameEventTypeNewHandStarted GameEventType = "new_hand_started"
+	GameEventTypeShowdownResult GameEventType = "showdown_result"
 )
 
 // GameEvent represents an immutable snapshot of a game event
@@ -32,7 +32,7 @@ type GameEvent struct {
 	TableID       string
 	PlayerIDs     []string // All players who should receive updates
 	Amount        int64
-	Metadata      map[string]interface{}
+	Payload       EventPayload
 	Timestamp     time.Time
 	TableSnapshot *TableSnapshot
 }
@@ -241,74 +241,4 @@ func (w *eventWorker) processGameStateUpdates(event *GameEvent) {
 func (w *eventWorker) processPersistence(event *GameEvent) {
 	handler := NewPersistenceHandler(w.processor.server)
 	handler.HandleEvent(event)
-}
-
-// SnapshotCollector defines the interface for collecting event snapshots
-type SnapshotCollector interface {
-	CollectSnapshot(s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error)
-	EventType() GameEventType
-}
-
-// SnapshotRegistry manages snapshot collectors
-type SnapshotRegistry struct {
-	collectors map[GameEventType]SnapshotCollector
-	mu         sync.RWMutex
-}
-
-// NewSnapshotRegistry creates a new snapshot registry
-func NewSnapshotRegistry() *SnapshotRegistry {
-	registry := &SnapshotRegistry{
-		collectors: make(map[GameEventType]SnapshotCollector),
-	}
-
-	// Register all collectors
-	registry.Register(&BetMadeCollector{})
-	registry.Register(&PlayerFoldedCollector{})
-	registry.Register(&CallMadeCollector{})
-	registry.Register(&CheckMadeCollector{})
-	registry.Register(&GameStartedCollector{})
-	registry.Register(&GameEndedCollector{})
-	registry.Register(&PlayerReadyCollector{})
-	registry.Register(&PlayerJoinedCollector{})
-	registry.Register(&PlayerLeftCollector{})
-	registry.Register(&NewHandStartedCollector{})
-
-	return registry
-}
-
-// Register registers a snapshot collector
-func (sr *SnapshotRegistry) Register(collector SnapshotCollector) {
-	sr.mu.Lock()
-	defer sr.mu.Unlock()
-	sr.collectors[collector.EventType()] = collector
-}
-
-// CollectSnapshot collects a snapshot for the given event type
-func (sr *SnapshotRegistry) CollectSnapshot(eventType GameEventType, s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	sr.mu.RLock()
-	collector, exists := sr.collectors[eventType]
-	sr.mu.RUnlock()
-
-	if !exists {
-		return nil, fmt.Errorf("no collector registered for event type: %s", eventType)
-	}
-
-	return collector.CollectSnapshot(s, tableID, playerID, amount, metadata)
-}
-
-// Global snapshot registry
-var defaultSnapshotRegistry = NewSnapshotRegistry()
-
-// CollectGameEventSnapshot is a convenience function to collect snapshots
-func CollectGameEventSnapshot(eventType GameEventType, s *Server, tableID, playerID string, amount int64, metadata map[string]interface{}) (*GameEvent, error) {
-	// Ensure metadata map is initialized and contains the acting player ID. This avoids nil-interface panics
-	// when notification handlers perform type assertions.
-	if metadata == nil {
-		metadata = make(map[string]interface{})
-	}
-	// Inject only if not already set to avoid overwriting provided override values.
-	if _, has := metadata["playerID"]; !has {
-		metadata["playerID"] = playerID
-	}
-	return defaultSnapshotRegistry.CollectSnapshot(eventType, s, tableID, playerID, amount, metadata)
 }
