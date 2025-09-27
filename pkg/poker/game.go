@@ -650,7 +650,17 @@ func (g *Game) handlePlayerCall(playerID string) error {
 
 	delta := g.currentBet - player.HasBet
 	if delta > player.Balance {
-		return fmt.Errorf("insufficient balance to call")
+		// Player cannot afford to call - automatically fold them
+		g.log.Debugf("Player %s cannot afford to call %d (has %d), auto-folding", player.ID, delta, player.Balance)
+		player.HasFolded = true
+		player.LastAction = time.Now()
+
+		// Update player state using state machine dispatch
+		g.updatePlayerState(player)
+
+		g.actionsInRound++
+		g.advanceToNextPlayer()
+		return nil
 	}
 
 	player.Balance -= delta
@@ -728,7 +738,17 @@ func (g *Game) handlePlayerBet(playerID string, amount int64) error {
 
 	delta := amount - player.HasBet
 	if delta > 0 && delta > player.Balance {
-		return fmt.Errorf("insufficient balance")
+		// Player cannot afford the bet - automatically fold them
+		g.log.Debugf("Player %s cannot afford to bet %d (has %d), auto-folding", player.ID, delta, player.Balance)
+		player.HasFolded = true
+		player.LastAction = time.Now()
+
+		// Update player state using state machine dispatch
+		g.updatePlayerState(player)
+
+		g.actionsInRound++
+		g.advanceToNextPlayer()
+		return nil
 	}
 
 	if delta > 0 {
@@ -1228,12 +1248,17 @@ func (g *Game) scheduleAutoStart() {
 
 		readyCount := 0
 		for _, player := range g.players {
+			// Count players who have sufficient balance (folded status will be reset for new hand)
 			if player.Balance >= g.config.BigBlind {
 				readyCount++
+				log.Debugf("Player %s ready for auto-start: balance=%d >= bigBlind=%d", player.ID, player.Balance, g.config.BigBlind)
+			} else {
+				log.Debugf("Player %s not ready for auto-start: balance=%d < bigBlind=%d", player.ID, player.Balance, g.config.BigBlind)
 			}
 		}
 
 		minRequired := callbacks.MinPlayers()
+		log.Debugf("Auto-start check: readyCount=%d, minRequired=%d", readyCount, minRequired)
 		if readyCount >= minRequired {
 			log.Debugf("Auto-starting new hand with %d players after showdown", readyCount)
 			err := callbacks.StartNewHand()

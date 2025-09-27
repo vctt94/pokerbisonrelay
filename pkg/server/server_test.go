@@ -1027,7 +1027,7 @@ func TestBlindPostingAndBalances(t *testing.T) {
 	require.Contains(t, []string{p1, p2}, currentPlayer)
 
 	// Current player calls to match big blind
-	_, err = srv.Call(ctx, &pokerrpc.CallBetRequest{PlayerId: currentPlayer, TableId: tableID})
+	_, err = srv.CallBet(ctx, &pokerrpc.CallBetRequest{PlayerId: currentPlayer, TableId: tableID})
 	require.NoError(t, err)
 
 	// Fetch updated state

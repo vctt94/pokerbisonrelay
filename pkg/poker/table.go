@@ -320,7 +320,17 @@ func (t *Table) handleShowdown() {
 	// Count players still at the table with sufficient balance for the next hand
 	playersReadyForNextHand := 0
 	for _, u := range t.users {
-		if u.DCRAccountBalance >= t.config.BigBlind {
+		// Check if user has sufficient in-game poker chip balance for big blind
+		// Find the corresponding player to get their current poker chip balance
+		var playerBalance int64 = 0
+		for _, player := range t.game.players {
+			if player.ID == u.ID {
+				playerBalance = player.Balance
+				break
+			}
+		}
+
+		if playerBalance >= t.config.BigBlind {
 			playersReadyForNextHand++
 		}
 	}
@@ -363,11 +373,26 @@ func (t *Table) startNewHand() error {
 		return fmt.Errorf("not enough players to start new hand")
 	}
 
-	// Get active users for the new hand
+	// Get active users for the new hand - include all users who have sufficient balance
+	// (folded players will be reset for the new hand)
 	activeUsers := make([]*User, 0, len(t.users))
 	for _, u := range t.users {
-		if u.DCRAccountBalance >= t.config.BigBlind {
+		// Check if user has sufficient in-game poker chip balance for big blind
+		// Find the corresponding player to get their current poker chip balance
+		var playerBalance int64 = 0
+		for _, player := range t.game.players {
+			if player.ID == u.ID {
+				playerBalance = player.Balance
+				break
+			}
+		}
+
+		// Include players who have sufficient balance (folded status will be reset)
+		if playerBalance >= t.config.BigBlind {
 			activeUsers = append(activeUsers, u)
+			t.log.Debugf("User %s eligible for new hand: pokerBalance=%d >= bigBlind=%d", u.ID, playerBalance, t.config.BigBlind)
+		} else {
+			t.log.Debugf("User %s not eligible for new hand: pokerBalance=%d < bigBlind=%d", u.ID, playerBalance, t.config.BigBlind)
 		}
 	}
 

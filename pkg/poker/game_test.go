@@ -229,7 +229,7 @@ func TestShowdown(t *testing.T) {
 	game.potManager.AddBet(1, 50) // Player 2 bet 50
 
 	// Run the showdown
-	stateShowdown(game, nil)
+	game.HandleShowdown()
 
 	// Player 1 should win with pair of Aces
 	if player1.Balance != 100 {
@@ -310,7 +310,7 @@ func TestTieBreakerShowdown(t *testing.T) {
 	// Player 3 folded, no bet
 
 	// Run the showdown
-	stateShowdown(game, nil)
+	game.HandleShowdown()
 
 	// Players 1 and 2 should tie and split the pot (50 each)
 	if player1.Balance != 50 {

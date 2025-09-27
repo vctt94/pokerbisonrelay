@@ -4,52 +4,7 @@ import (
 	"fmt"
 
 	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
-
-// StartNotificationStream handles notification streaming
-func (s *Server) StartNotificationStream(req *pokerrpc.StartNotificationStreamRequest, stream pokerrpc.LobbyService_StartNotificationStreamServer) error {
-	playerID := req.PlayerId
-	if playerID == "" {
-		return status.Error(codes.InvalidArgument, "player ID is required")
-	}
-
-	// Create notification stream
-	notifStream := &NotificationStream{
-		playerID: playerID,
-		stream:   stream,
-		done:     make(chan struct{}),
-	}
-
-	// Register the stream
-	s.notificationMu.Lock()
-	s.notificationStreams[playerID] = notifStream
-	s.notificationMu.Unlock()
-
-	// Remove stream when done
-	defer func() {
-		s.notificationMu.Lock()
-		delete(s.notificationStreams, playerID)
-		s.notificationMu.Unlock()
-		close(notifStream.done)
-	}()
-
-	// Send an initial notification to ensure the stream is established
-	initialNotification := &pokerrpc.Notification{
-		Type:     pokerrpc.NotificationType_UNKNOWN,
-		Message:  "Connected to notification stream",
-		PlayerId: playerID,
-	}
-	if err := stream.Send(initialNotification); err != nil {
-		return err
-	}
-
-	// Keep the stream open and wait for context cancellation
-	ctx := stream.Context()
-	<-ctx.Done()
-	return nil
-}
 
 // broadcastNotification sends a notification to a specific player
 func (s *Server) sendNotificationToPlayer(playerID string, notification *pokerrpc.Notification) {

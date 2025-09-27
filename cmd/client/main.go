@@ -105,7 +105,7 @@ func main() {
 	log := pokerClient.BRClient.LogBackend.Logger("pokerclient")
 
 	// Start the notification stream
-	if err := pokerClient.StartNotifier(ctx); err != nil {
+	if err := pokerClient.StartNotificationStream(ctx); err != nil {
 		log.Infof("Failed to start notifications: %v\n", err)
 		os.Exit(1)
 	}
