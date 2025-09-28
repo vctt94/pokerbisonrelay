@@ -93,32 +93,56 @@ func TestPlayerStateMachine_UnfoldTransition(t *testing.T) {
 }
 
 func TestPlayerStateMachine_FoldFromDifferentStates(t *testing.T) {
-	// Test that folding works correctly from all relevant states
-
-	testCases := []struct {
-		name         string
-		initialState string
-	}{
-		{"Fold from AT_TABLE", "AT_TABLE"},
-		{"Fold from IN_GAME", "IN_GAME"},
-		{"Fold from ALL_IN", "ALL_IN"},
+	type tc struct {
+		name                 string
+		setup                func(p *Player)
+		expectStateAfterFold string
+		expectHasFolded      bool
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
+	tests := []tc{
+		{
+			name: "Fold from AT_TABLE",
+			setup: func(p *Player) {
+				p.SetGameState("AT_TABLE")
+			},
+			expectStateAfterFold: "FOLDED",
+			expectHasFolded:      true,
+		},
+		{
+			name: "Fold from IN_GAME",
+			setup: func(p *Player) {
+				p.SetGameState("IN_GAME")
+			},
+			expectStateAfterFold: "FOLDED",
+			expectHasFolded:      true,
+		},
+		{
+			name: "Fold from ALL_IN (ignored)",
+			setup: func(p *Player) {
+				// ALL_IN is a condition inside IN_GAME, not a state.
+				p.SetGameState("IN_GAME")
+				p.IsAllIn = true // or p.SetAllIn(true) if you have a helper
+			},
+			// Folding while all-in should be ignored; remain in IN_GAME.
+			expectStateAfterFold: "IN_GAME",
+			expectHasFolded:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			player := NewPlayer("test-player", "Test Player", 1000)
 
-			// Set initial state
-			player.SetGameState(tc.initialState)
-			assert.Equal(t, tc.initialState, player.GetGameState())
+			tt.setup(player)
 
-			// Fold
+			// Act: attempt to fold
 			player.HasFolded = true
 			player.stateMachine.Dispatch(nil)
 
-			// Should transition to FOLDED
-			assert.True(t, player.HasFolded, "Player should be folded")
-			assert.Equal(t, "FOLDED", player.GetGameState(), "Player should be in FOLDED state")
+			// Assert
+			assert.Equal(t, tt.expectStateAfterFold, player.GetGameState())
+			assert.Equal(t, tt.expectHasFolded, player.HasFolded)
 		})
 	}
 }
@@ -159,4 +183,32 @@ func TestResetForNewHand_ClearsFoldState(t *testing.T) {
 	// Fold state should be cleared
 	assert.False(t, player.HasFolded, "Player should not be folded after new hand reset")
 	assert.Equal(t, "IN_GAME", player.GetGameState(), "Player should be in IN_GAME state after reset")
+}
+
+func TestTryFold_AllowsFoldWhenNotAllIn(t *testing.T) {
+	// Test that TryFold allows folding when player is not all-in
+
+	player := NewPlayer("test-player", "Test Player", 1000)
+	player.SetGameState("IN_GAME")
+	player.IsAllIn = false
+
+	// TryFold should succeed
+	success := player.TryFold()
+	assert.True(t, success, "TryFold should succeed when not all-in")
+	assert.True(t, player.HasFolded, "Player should be folded")
+	assert.Equal(t, "FOLDED", player.GetGameState(), "Player should be in FOLDED state")
+}
+
+func TestTryFold_PreventsFoldWhenAllIn(t *testing.T) {
+	// Test that TryFold prevents folding when player is all-in
+
+	player := NewPlayer("test-player", "Test Player", 1000)
+	player.SetGameState("IN_GAME")
+	player.IsAllIn = true
+
+	// TryFold should fail
+	success := player.TryFold()
+	assert.False(t, success, "TryFold should fail when all-in")
+	assert.False(t, player.HasFolded, "Player should not be folded")
+	assert.Equal(t, "IN_GAME", player.GetGameState(), "Player should remain in IN_GAME state")
 }

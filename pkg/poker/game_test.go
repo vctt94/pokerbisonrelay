@@ -224,9 +224,9 @@ func TestShowdown(t *testing.T) {
 	}
 
 	// Set up pot
-	game.potManager = NewPotManager()
-	game.potManager.AddBet(0, 50) // Player 1 bet 50
-	game.potManager.AddBet(1, 50) // Player 2 bet 50
+	game.potManager = NewPotManager(2)
+	game.potManager.AddBet(0, 50, game.players) // Player 1 bet 50
+	game.potManager.AddBet(1, 50, game.players) // Player 2 bet 50
 
 	// Run the showdown
 	game.HandleShowdown()
@@ -304,9 +304,9 @@ func TestTieBreakerShowdown(t *testing.T) {
 	player3.HasFolded = true
 
 	// Set up pot
-	game.potManager = NewPotManager()
-	game.potManager.AddBet(0, 50) // Player 1 bet 50
-	game.potManager.AddBet(1, 50) // Player 2 bet 50
+	game.potManager = NewPotManager(3)
+	game.potManager.AddBet(0, 50, game.players) // Player 1 bet 50
+	game.potManager.AddBet(1, 50, game.players) // Player 2 bet 50
 	// Player 3 folded, no bet
 
 	// Run the showdown
@@ -352,12 +352,13 @@ func TestSplitPotShowdown(t *testing.T) {
 		{suit: Hearts, value: Ace},
 	}
 
-	game.potManager = NewPotManager()
-	game.potManager.AddBet(0, 50)
-	game.potManager.AddBet(1, 50)
+	game.potManager = NewPotManager(2)
+	game.potManager.AddBet(0, 50, game.players)
+	game.potManager.AddBet(1, 50, game.players)
 
 	// Resolve showdown
-	res := game.handleShowdown()
+	res, err := game.handleShowdown()
+	require.NoError(t, err)
 	require.NotNil(t, res)
 
 	// Both players should split 100 → 50 each
@@ -384,12 +385,12 @@ func TestSidePotShowdown(t *testing.T) {
 
 	// Set balances to simulate all-in thresholds via bets recorded in pot manager
 	// We control through PotManager directly for test.
-	game.potManager = NewPotManager()
+	game.potManager = NewPotManager(3)
 
 	// Bets: p3 short 30, p1 50, p2 50 → main 90 (all eligible), side 40 (p1,p2)
-	game.potManager.AddBet(0, 50)
-	game.potManager.AddBet(1, 50)
-	game.potManager.AddBet(2, 30)
+	game.potManager.AddBet(0, 50, game.players)
+	game.potManager.AddBet(1, 50, game.players)
+	game.potManager.AddBet(2, 30, game.players)
 
 	// Hand strengths: p3 wins main, p1 wins side
 	game.players[0].HasFolded = false
@@ -405,8 +406,7 @@ func TestSidePotShowdown(t *testing.T) {
 	game.players[1].HandValue = &hv2
 	game.players[2].HandValue = &hv3
 
-	// Create side pots based on current bets
-	game.potManager.BuildPotsFromTotals(game.players)
+	// Pots are automatically built on each bet, no need to call BuildPotsFromTotals
 
 	// Distribute pots
 	game.potManager.DistributePots(game.players)

@@ -145,7 +145,6 @@ func statePreDeal(entity *Game, callback func(stateName string, event statemachi
 	// Reset the deck, community cards, pot, etc.
 	entity.deck.Shuffle()
 	entity.communityCards = []Card{}
-	entity.potManager = NewPotManager(len(entity.players))
 	entity.currentBet = 0
 	entity.betRound = 0
 
@@ -214,7 +213,7 @@ func stateBlinds(entity *Game, callback func(stateName string, event statemachin
 		}
 		p.Balance -= amount
 		p.HasBet += amount
-		entity.potManager.AddBet(pos, amount)
+		entity.potManager.AddBet(pos, amount, entity.players)
 	}
 
 	// Post blinds, guarding against duplicates.
@@ -455,7 +454,7 @@ func (g *Game) AddToPotForPlayer(playerIndex int, amount int64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	g.potManager.AddBet(playerIndex, amount)
+	g.potManager.AddBet(playerIndex, amount, g.players)
 }
 
 // GetCommunityCards returns a copy of the community cards slice.
@@ -849,14 +848,14 @@ type ShowdownResult struct {
 }
 
 // HandleShowdown processes the showdown logic and returns results (external API)
-func (g *Game) HandleShowdown() *ShowdownResult {
+func (g *Game) HandleShowdown() (*ShowdownResult, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.handleShowdown()
 }
 
 // handleShowdown is the core logic without locking (for internal use)
-func (g *Game) handleShowdown() *ShowdownResult {
+func (g *Game) handleShowdown() (*ShowdownResult, error) {
 	g.log.Debugf("handleShowdown: entered showdown processing")
 
 	// Gather active (non-folded) players
@@ -874,55 +873,65 @@ func (g *Game) handleShowdown() *ShowdownResult {
 		TotalPot:   0, // Will be set after pot rebuilding
 	}
 
-	// --- Uncontested (fold-win): refund uncalled, rebuild pots, award total, reset state
+	// --- Uncontested (fold-win): build pots, award total, reset state
 	if len(activePlayers) == 1 {
-
 		winner := activePlayers[0]
 		g.log.Infof("HERE ON ONE ACTIVE PLAYER: %s", winner.ID)
 
-		// Refund any uncalled amount then rebuild pots deterministically from totals
-		g.potManager.ReturnUncalledBet(g.players)
-		g.potManager.BuildPotsFromTotals(g.players)
-
-		// Calculate winnings and set TotalPot AFTER rebuilding pots
-		winnings := g.getPot()
-		result.TotalPot = winnings
-		winner.Balance += winnings
-
-		// Evaluate the winner's hand even for uncontested pots
-		var bestHand []Card
-		if len(winner.Hand)+len(g.communityCards) >= 5 {
-			// We have enough cards for a proper hand evaluation
-			hv := EvaluateHand(winner.Hand, g.communityCards)
-			winner.HandValue = &hv
-			winner.HandDescription = GetHandDescription(hv)
-			bestHand = hv.BestHand
-		} else {
-			// Not enough cards yet, just show hole cards
-			bestHand = winner.Hand
+		sum := int64(0)
+		for _, p := range g.potManager.Pots {
+			sum += p.Amount
 		}
 
-		result.Winners = append(result.Winners, winner.ID)
-		result.WinnerInfo = append(result.WinnerInfo, &pokerrpc.Winner{
-			PlayerId: winner.ID,
-			Winnings: winnings,
-			BestHand: CreateHandFromCards(bestHand),
-		})
+		// Total pot for the event
+		result.TotalPot = g.potManager.GetTotalPot()
 
-		// Reset pot/bet state for next hand AFTER calculating winnings
-		g.potManager.CurrentBets = make(map[int]int64)
-		g.potManager.TotalBets = make(map[int]int64)
-		g.potManager.Pots = []*Pot{NewPot(len(g.players))}
+		// --- Use delta accounting to populate result (avoids “empty winners”)
+		prev := make(map[string]int64, len(g.players))
 		for _, p := range g.players {
 			if p != nil {
-				p.CurrentBet = 0
+				prev[p.ID] = p.Balance
 			}
 		}
+
+		g.potManager.DistributePots(g.players)
+
+		// Fill result from actual balance deltas (handles any future edge cases too)
+		totalWinnings := int64(0)
+		for _, p := range g.players {
+			if p == nil {
+				continue
+			}
+			delta := p.Balance - prev[p.ID]
+			if delta > 0 {
+				result.Winners = append(result.Winners, p.ID)
+
+				// Best hand (use hole cards if board < 5)
+				var best []Card
+				if len(p.Hand)+len(g.communityCards) >= 5 {
+					hv := EvaluateHand(p.Hand, g.communityCards)
+					p.HandValue = &hv
+					p.HandDescription = GetHandDescription(hv)
+					best = hv.BestHand
+				} else {
+					best = p.Hand
+				}
+
+				result.WinnerInfo = append(result.WinnerInfo, &pokerrpc.Winner{
+					PlayerId: p.ID,
+					BestHand: CreateHandFromCards(best),
+					Winnings: delta,
+				})
+				totalWinnings += delta
+			}
+		}
+
+		// Now reset for next hand (and clear unswept for clean logs)
 
 		g.phase = pokerrpc.GamePhase_SHOWDOWN
 		g.winners = result.Winners
 		g.log.Infof("result: %+v", result)
-		return result
+		return result, nil
 	}
 
 	// --- True showdown: require enough cards to evaluate
@@ -943,12 +952,8 @@ func (g *Game) handleShowdown() *ShowdownResult {
 		g.log.Debugf("handleShowdown: player %s hand=%v description=%s", p.ID, p.Hand, p.HandDescription)
 	}
 
-	// Refund uncalled, rebuild pots deterministically, then distribute
-	g.potManager.ReturnUncalledBet(g.players)
-	g.potManager.BuildPotsFromTotals(g.players)
-
 	// Set TotalPot after rebuilding pots
-	result.TotalPot = g.getPot()
+	result.TotalPot = g.potManager.GetTotalPot()
 
 	g.log.Debugf("handleShowdown: total pots=%d", len(g.potManager.Pots))
 	for i, pot := range g.potManager.Pots {
@@ -965,7 +970,10 @@ func (g *Game) handleShowdown() *ShowdownResult {
 	}
 
 	// Distribute pots
-	g.potManager.DistributePots(g.players)
+	if err := g.potManager.DistributePots(g.players); err != nil {
+		g.log.Errorf("Failed to distribute pots: %v", err)
+		return nil, err
+	}
 
 	// Collect winners by positive delta
 	for _, p := range g.players {
@@ -993,16 +1001,17 @@ func (g *Game) handleShowdown() *ShowdownResult {
 		}
 	}
 
+	// Assertion helper: log pot sums to catch regressions
+	totalWinnings := int64(0)
+	for _, winner := range result.WinnerInfo {
+		totalWinnings += winner.Winnings
+	}
+
 	// Mark phase and cache winners
 	g.phase = pokerrpc.GamePhase_SHOWDOWN
 	g.winners = result.Winners
 
-	return result
-}
-
-// getPot is the core logic without locking (for internal use)
-func (g *Game) getPot() int64 {
-	return g.potManager.GetTotalPot()
+	return result, nil
 }
 
 // MaybeAdvancePhase checks if betting round is finished and progresses the game phase (external API)
@@ -1376,11 +1385,16 @@ func (g *Game) GetStateSnapshot() GameStateSnapshot {
 	communityCardsCopy := make([]Card, len(g.communityCards))
 	copy(communityCardsCopy, g.communityCards)
 
+	// Calculate pot amount based on game phase
+	var potAmount int64
+	// During showdown, use GetTotalPot() after pots have been built
+	potAmount = g.potManager.GetTotalPot()
+
 	return GameStateSnapshot{
 		Dealer:         g.dealer,
 		CurrentPlayer:  g.currentPlayer,
 		CurrentBet:     g.currentBet,
-		Pot:            g.potManager.GetTotalPot(),
+		Pot:            potAmount,
 		Round:          g.round,
 		BetRound:       g.betRound,
 		CommunityCards: communityCardsCopy,

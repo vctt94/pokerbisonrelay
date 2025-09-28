@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 	"time"
 
+	"github.com/decred/slog"
 	"github.com/vctt94/pokerbisonrelay/pkg/poker"
 )
 
@@ -12,11 +14,16 @@ func main() {
 	// Create a simple test to verify showdown event publishing
 	fmt.Println("Testing showdown event implementation...")
 
+	// Create a test logger
+	backend := slog.NewBackend(os.Stderr)
+	logger := backend.Logger("test")
+	logger.SetLevel(slog.LevelError) // Reduce noise in tests
+
 	// Create a test table
 	cfg := poker.TableConfig{
 		ID:             "test_table",
-		Log:            nil, // Will use default logger
-		GameLog:        nil,
+		Log:            logger,
+		GameLog:        logger,
 		HostID:         "test_host",
 		BuyIn:          1000,
 		MinPlayers:     2,
@@ -33,11 +40,18 @@ func main() {
 
 	// Set up event publisher callback
 	eventPublished := false
-	table.SetEventPublisher(func(eventType string, tableID string, amount int64, metadata map[string]interface{}) {
-		fmt.Printf("Event published: type=%s, tableID=%s, amount=%d\n", eventType, tableID, amount)
+	table.SetEventPublisher(func(eventType string, tableID string, payload interface{}) {
+		fmt.Printf("Event published: type=%s, tableID=%s\n", eventType, tableID)
 		if eventType == "showdown_result" {
 			eventPublished = true
-			fmt.Printf("Showdown event metadata: %+v\n", metadata)
+			if showdownPayload, ok := payload.(poker.ShowdownPayload); ok {
+				fmt.Printf("Showdown event payload: Winners=%d, Pot=%d\n", len(showdownPayload.Winners), showdownPayload.Pot)
+				for i, winner := range showdownPayload.Winners {
+					fmt.Printf("  Winner %d: PlayerID=%s, Winnings=%d\n", i+1, winner.PlayerId, winner.Winnings)
+				}
+			} else {
+				fmt.Printf("Showdown event payload (unexpected type): %+v\n", payload)
+			}
 		}
 	})
 

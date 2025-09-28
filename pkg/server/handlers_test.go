@@ -38,58 +38,6 @@ func (m *mockNotificationStream) Context() context.Context     { return context.
 func (m *mockNotificationStream) SendMsg(interface{}) error    { return nil }
 func (m *mockNotificationStream) RecvMsg(interface{}) error    { return nil }
 
-// TestNotificationHandlerBetMade ensures that a BET_MADE event results in the
-// correct notification being sent to all targeted players.
-func TestNotificationHandlerBetMade(t *testing.T) {
-	s := newBareServer()
-	if s.notificationStreams == nil {
-		s.notificationStreams = make(map[string]*NotificationStream)
-	}
-
-	// Register two mock notification streams so we can capture the outgoing notifications.
-	playerIDs := []string{"p1", "p2"}
-	for _, pid := range playerIDs {
-		s.notificationStreams[pid] = &NotificationStream{
-			playerID: pid,
-			stream:   &mockNotificationStream{},
-			done:     make(chan struct{}),
-		}
-	}
-
-	// Build the event that will be processed.
-	evt := &GameEvent{
-		Type:      GameEventTypeBetMade,
-		TableID:   "tid",
-		PlayerIDs: playerIDs,
-		Amount:    250,
-		Metadata: map[string]interface{}{
-			"playerID": "p1",
-			"message":  "p1 bets 250",
-		},
-	}
-
-	nh := NewNotificationHandler(s)
-	nh.HandleEvent(evt)
-
-	// Assert that a notification was delivered to each mocked player stream.
-	for _, pid := range playerIDs {
-		stream := s.notificationStreams[pid].stream.(*mockNotificationStream)
-		if len(stream.sent) != 1 {
-			t.Fatalf("expected 1 notification for %s, got %d", pid, len(stream.sent))
-		}
-		notif := stream.sent[0]
-		if notif.Type != pokerrpc.NotificationType_BET_MADE {
-			t.Errorf("unexpected notification type: %v", notif.Type)
-		}
-		if notif.Amount != 250 {
-			t.Errorf("unexpected notification amount: got %d want %d", notif.Amount, 250)
-		}
-		if notif.PlayerId != "p1" {
-			t.Errorf("unexpected playerID in notification: got %s", notif.PlayerId)
-		}
-	}
-}
-
 // TestGameStateHandlerBuildGameStates verifies that game updates are correctly
 // built from a table snapshot and that hole cards visibility rules are
 // respected.

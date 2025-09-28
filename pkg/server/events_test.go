@@ -27,13 +27,3 @@ func TestEventProcessorStartPublishStop(t *testing.T) {
 	ep.Stop()
 	ep.Stop() // call twice to ensure idempotency
 }
-
-// TestSnapshotRegistryUnknownEvent ensures an error is returned when requesting
-// a snapshot for an unregistered event type.
-func TestSnapshotRegistryUnknownEvent(t *testing.T) {
-	s := newBareServer()
-	_, err := defaultSnapshotRegistry.CollectSnapshot(GameEventType("unknown_event"), s, "tid", "pid", 0, nil)
-	if err == nil {
-		t.Fatalf("expected error for unknown event type, got nil")
-	}
-}

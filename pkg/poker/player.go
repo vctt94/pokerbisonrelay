@@ -92,15 +92,7 @@ func playerStateAtTable(entity *Player, callback func(stateName string, event st
 
 // playerStateInGame represents the player actively in a game
 func playerStateInGame(entity *Player, callback func(stateName string, event statemachine.StateEvent)) PlayerStateFn {
-	// Check current conditions and transition if necessary BEFORE setting flags
-	if entity.HasFolded {
-		// Player has folded, transition to folded state
-		if callback != nil {
-			callback("IN_GAME", statemachine.StateExited)
-		}
-		return playerStateFolded
-	}
-
+	// Update all-in status based on balance and bet
 	if entity.Balance == 0 && entity.HasBet > 0 {
 		// Player is all-in, transition to all-in state
 		if callback != nil {
@@ -109,9 +101,22 @@ func playerStateInGame(entity *Player, callback func(stateName string, event sta
 		return playerStateAllIn
 	}
 
-	// Ensure flags are correct for this state
-	entity.HasFolded = false
-	entity.IsAllIn = false
+	// If player is all-in, ignore any fold attempts and stay in IN_GAME
+	if entity.IsAllIn {
+		entity.HasFolded = false
+		if callback != nil {
+			callback("IN_GAME", statemachine.StateEntered)
+		}
+		return playerStateInGame
+	}
+
+	if entity.HasFolded {
+		// Player has folded and is not all-in, transition to folded state
+		if callback != nil {
+			callback("IN_GAME", statemachine.StateExited)
+		}
+		return playerStateFolded
+	}
 
 	if callback != nil {
 		callback("IN_GAME", statemachine.StateEntered)
@@ -201,11 +206,13 @@ func (p *Player) ResetForNewHand(startingChips int64) {
 	p.HandDescription = ""
 	p.LastAction = time.Now()
 
+	// Reset game state flags
+	p.HasFolded = false
+	p.IsAllIn = false
+
 	// Transition to IN_GAME state
 	p.ensureStateMachine()
 	p.stateMachine.SetState(playerStateInGame)
-	p.HasFolded = false
-	p.IsAllIn = false
 }
 
 // SetGameState updates the player's game state using the new state machine
@@ -267,11 +274,25 @@ func (p *Player) GetGameState() string {
 		return "IN_GAME"
 	case fmt.Sprintf("%p", playerStateFolded):
 		return "FOLDED"
-	case fmt.Sprintf("%p", playerStateAllIn):
-		return "ALL_IN"
 	case fmt.Sprintf("%p", playerStateLeft):
 		return "LEFT"
 	default:
 		return "UNKNOWN"
 	}
+}
+
+// TryFold attempts to fold the player, returning true if successful, false if not allowed
+// This method enforces the rule that players cannot fold while all-in
+func (p *Player) TryFold() bool {
+	// Check if player is all-in - if so, fold is not allowed
+	if p.IsAllIn {
+		return false
+	}
+
+	// Set the fold flag and let the state machine handle the transition
+	p.HasFolded = true
+	p.ensureStateMachine()
+	p.stateMachine.Dispatch(nil)
+
+	return true
 }

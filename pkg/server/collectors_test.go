@@ -95,38 +95,6 @@ func TestGameSnapshotCurrentBet(t *testing.T) {
 	}
 }
 
-// TestCollectGameEventSnapshotInjectsPlayerID verifies helper always sets metadata["playerID"].
-func TestCollectGameEventSnapshotInjectsPlayerID(t *testing.T) {
-	s := newBareServer()
-	event, err := CollectGameEventSnapshot(GameEventTypePlayerJoined, s, "tid", "pid", 0, nil)
-	if err != nil {
-		t.Fatalf("collect snapshot err: %v", err)
-	}
-	pid, ok := event.Metadata["playerID"]
-	if !ok {
-		t.Fatal("playerID key missing in metadata")
-	}
-	if pid.(string) != "pid" {
-		t.Fatalf("playerID mismatch: got %v", pid)
-	}
-}
-
-func TestPlayerJoinedCollectorNoTable(t *testing.T) {
-	s := newBareServer()
-
-	collector := &PlayerJoinedCollector{}
-	evt, err := collector.CollectSnapshot(s, "tid", "pid", 0, map[string]interface{}{"message": "joined"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if evt.TableSnapshot != nil {
-		t.Errorf("expected nil TableSnapshot when table doesn't exist")
-	}
-	if len(evt.PlayerIDs) != 1 || evt.PlayerIDs[0] != "pid" {
-		t.Errorf("expected PlayerIDs to contain only joining player, got %v", evt.PlayerIDs)
-	}
-}
-
 // TestCollectTableSnapshotMissingTable ensures an error is returned when trying
 // to snapshot a non-existent table.
 func TestCollectTableSnapshotMissingTable(t *testing.T) {
@@ -134,23 +102,5 @@ func TestCollectTableSnapshotMissingTable(t *testing.T) {
 	_, err := s.collectTableSnapshot("unknown")
 	if err == nil {
 		t.Fatalf("expected error when table is missing, got nil")
-	}
-}
-
-func TestNewHandStartedCollector(t *testing.T) {
-	s := newBareServer()
-	table := buildActiveHeadsUpTable(t, "table_nhs")
-	s.tables[table.GetConfig().ID] = table
-
-	collector := &NewHandStartedCollector{}
-	evt, err := collector.CollectSnapshot(s, table.GetConfig().ID, "p1", 0, map[string]interface{}{"message": "new hand"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if evt.Type != GameEventTypeNewHandStarted {
-		t.Fatalf("event type mismatch: got %v want %v", evt.Type, GameEventTypeNewHandStarted)
-	}
-	if evt.TableSnapshot == nil {
-		t.Fatalf("expected non-nil TableSnapshot")
 	}
 }

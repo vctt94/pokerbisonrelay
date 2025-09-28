@@ -323,19 +323,23 @@ func (t *Table) isGameActive() bool {
 }
 
 // handleShowdown delegates showdown logic to the game and handles notifications
-func (t *Table) handleShowdown() {
+func (t *Table) handleShowdown() error {
 	if t.game == nil {
-		return
+		return fmt.Errorf("game is nil")
 	}
 
 	currentRound := t.game.GetRound()
 	if t.lastShowdown != nil && t.resolvedRound == currentRound {
 		// Already resolved winners for this hand - idempotency guard
-		return
+		return nil
 	}
 
 	// Delegate showdown logic to the game and cache authoritative result
-	result := t.game.handleShowdown()
+	result, err := t.game.handleShowdown()
+	if err != nil {
+		t.log.Errorf("failed to handle showdown: %v", err)
+		return err
+	}
 	// Persist result for retrieval after phase advances
 	t.lastShowdown = result
 	t.resolvedRound = currentRound
@@ -402,6 +406,7 @@ func (t *Table) handleShowdown() {
 		// Call internal scheduler without holding the game lock to avoid deadlocks
 		t.game.ScheduleAutoStart()
 	}
+	return nil
 }
 
 // startNewHand starts a fresh hand atomically (acquires the table lock internally)
@@ -940,7 +945,7 @@ func (t *Table) postBlindsFromGame() error {
 
 		player.Balance -= smallBlindAmount
 		player.HasBet = smallBlindAmount
-		t.game.potManager.AddBet(smallBlindPos, smallBlindAmount)
+		t.game.potManager.AddBet(smallBlindPos, smallBlindAmount, t.game.players)
 
 		// Send small blind notification
 		// DISABLED: Notification callbacks cause deadlocks - server handles notifications directly
@@ -962,7 +967,7 @@ func (t *Table) postBlindsFromGame() error {
 
 		player.Balance -= bigBlindAmount
 		player.HasBet = bigBlindAmount
-		t.game.potManager.AddBet(bigBlindPos, bigBlindAmount)
+		t.game.potManager.AddBet(bigBlindPos, bigBlindAmount, t.game.players)
 		t.game.currentBet = bigBlindAmount // Set current bet to big blind amount
 
 		// Send big blind notification

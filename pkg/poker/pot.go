@@ -1,7 +1,8 @@
 package poker
 
 import (
-	"github.com/decred/slog"
+	"fmt"
+	"sort"
 )
 
 // Pot represents a pot of chips in the game
@@ -30,7 +31,6 @@ func (p *Pot) IsEligible(playerIndex int) bool {
 
 // PotManager manages multiple pots, including the main pot and side pots
 type PotManager struct {
-	log         slog.Logger
 	Pots        []*Pot        // Main pot followed by side pots
 	CurrentBets map[int]int64 // Current bet for each player in this round
 	TotalBets   map[int]int64 // Total bet for each player across all rounds
@@ -44,10 +44,11 @@ func NewPotManager(nPlayers int) *PotManager {
 	}
 }
 
-// Track bets only; DO NOT touch pm.Pots here.
-func (pm *PotManager) AddBet(playerIndex int, amount int64) {
+// AddBet adds a bet and immediately rebuilds pots to handle side pot creation
+func (pm *PotManager) AddBet(playerIndex int, amount int64, players []*Player) {
 	pm.CurrentBets[playerIndex] += amount
 	pm.TotalBets[playerIndex] += amount
+	pm.RebuildPotsIncremental(players)
 }
 
 // ResetCurrentBets resets the current bets for a new betting round
@@ -79,75 +80,76 @@ func (pm *PotManager) GetTotalBet(playerIndex int) int64 {
 	return pm.TotalBets[playerIndex]
 }
 
-// BuildPotsFromTotals rebuilds main/side pots from TotalBets and fold status.
-// Call after ReturnUncalledBet (if any) and before distribution.
-func (pm *PotManager) BuildPotsFromTotals(players []*Player) {
+// RebuildPotsIncremental rebuilds pots based on current TotalBets and player status.
+// Called after each bet to maintain proper side-pot structure.
+func (pm *PotManager) RebuildPotsIncremental(players []*Player) {
 	n := len(players)
+	if n == 0 {
+		pm.Pots = []*Pot{NewPot(0)}
+		return
+	}
 
-	// Collect unique bet thresholds (excluding zero unless all zero)
-	seen := map[int64]bool{}
+	// Collect unique positive bet thresholds.
+	seen := make(map[int64]struct{}, n)
 	for i := 0; i < n; i++ {
-		b := pm.TotalBets[i]
-		if b > 0 {
-			seen[b] = true
+		if b := pm.TotalBets[i]; b > 0 {
+			seen[b] = struct{}{}
 		}
 	}
+
+	// If everyone is at 0, a single empty pot is enough.
 	if len(seen) == 0 {
 		pm.Pots = []*Pot{NewPot(n)}
 		return
 	}
 
+	// Sort thresholds ascending.
 	levels := make([]int64, 0, len(seen))
 	for b := range seen {
 		levels = append(levels, b)
 	}
-	// sort ascending (tiny in-place sort)
-	for i := 0; i < len(levels); i++ {
-		for j := i + 1; j < len(levels); j++ {
-			if levels[i] > levels[j] {
-				levels[i], levels[j] = levels[j], levels[i]
-			}
-		}
-	}
+	sort.Slice(levels, func(i, j int) bool { return levels[i] < levels[j] })
 
 	pots := make([]*Pot, 0, len(levels)+1)
 	prev := int64(0)
 
+	// Build capped pots for each threshold.
 	for _, lvl := range levels {
 		p := NewPot(n)
-		// eligibility: any non-folded player who contributed at least lvl
-		for i := 0; i < n; i++ {
-			if players[i] != nil && !players[i].HasFolded && pm.TotalBets[i] >= lvl {
-				p.Eligibility[i] = true
-			}
-		}
-		// contributions: each player pays min(TotalBets[i], lvl) - prev
+		amt := int64(0)
+
 		for i := 0; i < n; i++ {
 			tb := pm.TotalBets[i]
+			// Eligible if not folded and contributed at least to this level.
+			if players[i] != nil && !players[i].HasFolded && tb >= lvl {
+				p.Eligibility[i] = true
+			}
+			// Contribution into this layer is clamp(tb, prev..lvl) - prev.
 			if tb > prev {
-				c := tb
-				if c > lvl {
-					c = lvl
+				upTo := tb
+				if upTo > lvl {
+					upTo = lvl
 				}
-				c -= prev
-				if c > 0 {
-					p.Amount += c
+				if upTo > prev {
+					amt += (upTo - prev)
 				}
 			}
 		}
+
+		p.Amount = amt
 		pots = append(pots, p)
 		prev = lvl
 	}
 
-	// Final pot above highest all-in (uncapped overage)
-	// Eligible = players with TotalBets > highest lvl (still not folded)
+	// Final uncapped overage pot above the highest level (e.g., raises not all-in capped).
+	top := levels[len(levels)-1]
 	over := NewPot(n)
 	hasOver := false
-	top := levels[len(levels)-1]
+
 	for i := 0; i < n; i++ {
 		tb := pm.TotalBets[i]
 		if tb > top {
-			over.Amount += (tb - top)
+			over.Amount += tb - top
 			if players[i] != nil && !players[i].HasFolded {
 				over.Eligibility[i] = true
 			}
@@ -157,80 +159,75 @@ func (pm *PotManager) BuildPotsFromTotals(players []*Player) {
 	if hasOver {
 		pots = append(pots, over)
 	}
-
 	pm.Pots = pots
 }
 
-// DistributePots distributes all pots to the winners
 // DistributePots distributes all pots to showdown winners.
-// Robust to accidental calls on uncontested pots.
-func (pm *PotManager) DistributePots(players []*Player) {
-	if pm.log == nil {
-		pm.log = slog.NewBackend(nil).Logger("TESTING")
-	}
+// Robust to accidental calls on uncontested pots and idempotent:
+// pots are zeroed after payout so re-entry is a no-op.
+// DistributePots pays out all pots. Safe to call multiple times (pots are zeroed after payout).
+func (pm *PotManager) DistributePots(players []*Player) error {
 	for pi, pot := range pm.Pots {
-		// collect eligible + not-folded
-		var alive []int
+		// Idempotent: skip empty/already-settled pots.
+		if pot.Amount <= 0 {
+			continue
+		}
+
+		// Collect eligible & not-folded players.
 		if len(pot.Eligibility) != len(players) {
-			pm.log.Errorf("[pot %d] eligibility len %d != players len %d (index drift?)",
+			return fmt.Errorf("[pot %d] eligibility len %d != players len %d",
 				pi, len(pot.Eligibility), len(players))
 		}
+		var alive []int
 		for idx, elig := range pot.Eligibility {
 			if idx < 0 || idx >= len(players) {
-				pm.log.Errorf("[pot %d] eligibility idx %d out of range (players=%d)", pi, idx, len(players))
-				continue
+				return fmt.Errorf("[pot %d] eligibility idx %d out of range (players=%d)", pi, idx, len(players))
 			}
 			if elig && players[idx] != nil && !players[idx].HasFolded {
 				alive = append(alive, idx)
 			}
 		}
 
-		// Defensive: if exactly one alive, pay them (uncontested pot leaked here)
+		// Uncontested pot path.
 		if len(alive) == 1 {
 			w := alive[0]
-			before := players[w].Balance
 			players[w].Balance += pot.Amount
-			pm.log.Infof("[pot %d] fold-win fallback -> P%d gets %d (bal %d -> %d)",
-				pi, w, pot.Amount, before, players[w].Balance)
+			pm.Pots[pi].Amount = 0
+			for j := range pm.Pots[pi].Eligibility {
+				pm.Pots[pi].Eligibility[j] = false
+			}
 			continue
 		}
-
 		if len(alive) == 0 {
-			pm.log.Errorf("[pot %d] no eligible alive players; pot=%d (this should never happen)", pi, pot.Amount)
-			continue
+			return fmt.Errorf("[pot %d] no eligible alive players; pot=%d", pi, pot.Amount)
 		}
 
-		// Showdown path: everyone alive must have HandValue.
+		// Showdown: find best hand(s) safely.
 		var winners []int
 		var best *HandValue
-		missing := 0
-
 		for _, idx := range alive {
 			hv := players[idx].HandValue
 			if hv == nil {
-				missing++
-				pm.log.Errorf("[pot %d] player %d eligible at showdown but HandValue == nil", pi, idx)
-				continue
+				return fmt.Errorf("[pot %d] player %d eligible at showdown but HandValue == nil", pi, idx)
 			}
-			if best == nil || CompareHands(*hv, *best) > 0 {
+			if best == nil {
 				best = hv
 				winners = []int{idx}
-			} else if CompareHands(*hv, *best) == 0 {
+				continue
+			}
+			cmp := CompareHands(*hv, *best)
+			if cmp > 0 {
+				best = hv
+				winners = []int{idx}
+			} else if cmp == 0 {
 				winners = append(winners, idx)
 			}
 		}
-
-		if missing > 0 && len(winners) == 0 {
-			pm.log.Errorf("[pot %d] %d/%d alive players missing HandValue; cannot settle. Upstream must compute before distribution.",
-				pi, missing, len(alive))
-			continue
-		}
-
 		if len(winners) == 0 {
-			pm.log.Errorf("[pot %d] showdown produced no winners (logic bug).", pi)
-			continue
+			return fmt.Errorf("[pot %d] showdown produced no winners", pi)
 		}
 
+		// Split pot; first winner gets remainder.
 		share := pot.Amount / int64(len(winners))
 		rem := pot.Amount % int64(len(winners))
 		for i, idx := range winners {
@@ -238,11 +235,16 @@ func (pm *PotManager) DistributePots(players []*Player) {
 			if i == 0 && rem > 0 {
 				add += rem
 			}
-			// before := players[idx].Balance
 			players[idx].Balance += add
-			// pm.log.Infof("[pot %d] winner P%d gets %d (bal %d -> %d)", pi, idx, add, before, players[idx].Balance)
+		}
+
+		// Mark pot as settled.
+		pm.Pots[pi].Amount = 0
+		for j := range pm.Pots[pi].Eligibility {
+			pm.Pots[pi].Eligibility[j] = false
 		}
 	}
+	return nil
 }
 
 // ReturnUncalledBet returns any uncalled portion of a bet to the player who made it
@@ -265,5 +267,8 @@ func (pm *PotManager) ReturnUncalledBet(players []*Player) {
 		players[hiPlayer].Balance += uncalled
 		pm.CurrentBets[hiPlayer] -= uncalled
 		pm.TotalBets[hiPlayer] -= uncalled
+
+		// Rebuild pots after refund to reflect the new totals
+		pm.RebuildPotsIncremental(players)
 	}
 }
