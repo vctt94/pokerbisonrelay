@@ -863,7 +863,10 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 				// Best hand (use hole cards if board < 5)
 				var best []Card
 				if len(p.Hand)+len(g.communityCards) >= 5 {
-					hv := EvaluateHand(p.Hand, g.communityCards)
+					hv, err := EvaluateHand(p.Hand, g.communityCards)
+					if err != nil {
+						return nil, fmt.Errorf("failed to evaluate hand for player %s: %w", p.ID, err)
+					}
 					p.HandValue = &hv
 					p.HandDescription = GetHandDescription(hv)
 					best = hv.BestHand
@@ -900,7 +903,10 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 
 	// Evaluate each active player's hand
 	for _, p := range activePlayers {
-		hv := EvaluateHand(p.Hand, g.communityCards)
+		hv, err := EvaluateHand(p.Hand, g.communityCards)
+		if err != nil {
+			return nil, fmt.Errorf("failed to evaluate hand for player %s: %w", p.ID, err)
+		}
 		p.HandValue = &hv
 		p.HandDescription = GetHandDescription(hv)
 		g.log.Debugf("handleShowdown: player %s hand=%v description=%s", p.ID, p.Hand, p.HandDescription)

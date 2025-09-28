@@ -177,7 +177,10 @@ func TestEvaluateHand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handValue := EvaluateHand(tt.holeCards, tt.community)
+			handValue, err := EvaluateHand(tt.holeCards, tt.community)
+			if err != nil {
+				t.Fatalf("EvaluateHand() error = %v", err)
+			}
 
 			if handValue.Rank != tt.wantRank {
 				t.Errorf("EvaluateHand() rank = %v, want %v", handValue.Rank, tt.wantRank)
@@ -320,7 +323,10 @@ func TestHandDescriptions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handValue := EvaluateHand(tt.holeCards, tt.community)
+			handValue, err := EvaluateHand(tt.holeCards, tt.community)
+			if err != nil {
+				t.Fatalf("EvaluateHand() error = %v", err)
+			}
 			description := GetHandDescription(handValue)
 
 			if description == "" {

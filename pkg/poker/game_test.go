@@ -229,7 +229,10 @@ func TestShowdown(t *testing.T) {
 	game.potManager.AddBet(1, 50, game.players) // Player 2 bet 50
 
 	// Run the showdown
-	game.HandleShowdown()
+	_, err = game.HandleShowdown()
+	if err != nil {
+		t.Fatalf("HandleShowdown() error = %v", err)
+	}
 
 	// Player 1 should win with pair of Aces
 	if player1.Balance != 100 {
@@ -310,7 +313,10 @@ func TestTieBreakerShowdown(t *testing.T) {
 	// Player 3 folded, no bet
 
 	// Run the showdown
-	game.HandleShowdown()
+	_, err = game.HandleShowdown()
+	if err != nil {
+		t.Fatalf("HandleShowdown() error = %v", err)
+	}
 
 	// Players 1 and 2 should tie and split the pot (50 each)
 	if player1.Balance != 50 {
@@ -398,9 +404,18 @@ func TestSidePotShowdown(t *testing.T) {
 	game.players[2].stateMachine.Dispatch(playerStateInGame)
 
 	// Give explicit evaluated values via EvaluateHand semantics
-	hv3 := EvaluateHand([]Card{{suit: Hearts, value: Five}, {suit: Clubs, value: Five}}, []Card{{suit: Diamonds, value: Five}, {suit: Spades, value: Two}, {suit: Hearts, value: Three}, {suit: Clubs, value: Nine}, {suit: Diamonds, value: Queen}}) // trips
-	hv1 := EvaluateHand([]Card{{suit: Hearts, value: Ace}, {suit: Clubs, value: Ace}}, []Card{{suit: Diamonds, value: King}, {suit: Spades, value: Two}, {suit: Hearts, value: Three}, {suit: Clubs, value: Nine}, {suit: Diamonds, value: Queen}})   // pair aces
-	hv2 := EvaluateHand([]Card{{suit: Hearts, value: Ten}, {suit: Clubs, value: Nine}}, []Card{{suit: Diamonds, value: King}, {suit: Spades, value: Two}, {suit: Hearts, value: Three}, {suit: Clubs, value: Nine}, {suit: Diamonds, value: Queen}})  // pair nines
+	hv3, err := EvaluateHand([]Card{{suit: Hearts, value: Five}, {suit: Clubs, value: Five}}, []Card{{suit: Diamonds, value: Five}, {suit: Spades, value: Two}, {suit: Hearts, value: Three}, {suit: Clubs, value: Nine}, {suit: Diamonds, value: Queen}}) // trips
+	if err != nil {
+		t.Fatalf("EvaluateHand() error = %v", err)
+	}
+	hv1, err := EvaluateHand([]Card{{suit: Hearts, value: Ace}, {suit: Clubs, value: Ace}}, []Card{{suit: Diamonds, value: King}, {suit: Spades, value: Two}, {suit: Hearts, value: Three}, {suit: Clubs, value: Nine}, {suit: Diamonds, value: Queen}}) // pair aces
+	if err != nil {
+		t.Fatalf("EvaluateHand() error = %v", err)
+	}
+	hv2, err := EvaluateHand([]Card{{suit: Hearts, value: Ten}, {suit: Clubs, value: Nine}}, []Card{{suit: Diamonds, value: King}, {suit: Spades, value: Two}, {suit: Hearts, value: Three}, {suit: Clubs, value: Nine}, {suit: Diamonds, value: Queen}}) // pair nines
+	if err != nil {
+		t.Fatalf("EvaluateHand() error = %v", err)
+	}
 
 	game.players[0].HandValue = &hv1
 	game.players[1].HandValue = &hv2

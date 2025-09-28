@@ -455,7 +455,10 @@ func (s *Server) EvaluateHand(ctx context.Context, req *pokerrpc.EvaluateHandReq
 	}
 
 	// Evaluate the hand
-	handValue := poker.EvaluateHand(holeCards, communityCards)
+	handValue, err := poker.EvaluateHand(holeCards, communityCards)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "failed to evaluate hand: %v", err)
+	}
 
 	// Convert best hand back to gRPC format
 	bestHandGRPC := make([]*pokerrpc.Card, len(handValue.BestHand))
