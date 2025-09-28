@@ -156,8 +156,6 @@ func (s *Server) saveTableStateAsync(tableID string, reason string) {
 		err := s.saveTableState(tableID)
 		if err != nil {
 			s.log.Errorf("Failed to save table state for %s (%s): %v", tableID, reason, err)
-		} else {
-			s.log.Debugf("Saved table state for %s (trigger: %s)", tableID, reason)
 		}
 	}()
 }

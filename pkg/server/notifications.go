@@ -221,33 +221,3 @@ func (s *Server) tablePlayerIDs(tableID string) []string {
 	}
 	return ids
 }
-
-// getTablePlayerIDs is kept for backward-compatibility with existing callers.
-// It simply delegates to tablePlayerIDs.
-func (s *Server) getTablePlayerIDs(tableID string) []string { return s.tablePlayerIDs(tableID) }
-
-// Helper method to build game states for all players while holding lock
-func (s *Server) buildGameStatesForAllPlayers(tableID string) map[string]*pokerrpc.GameUpdate {
-	// Get game stream player IDs (players who need game state updates)
-	s.gameStreamsMu.RLock()
-	playerStreams, exists := s.gameStreams[tableID]
-	s.gameStreamsMu.RUnlock()
-
-	if !exists || len(playerStreams) == 0 {
-		return nil
-	}
-
-	// Build game states for all players at once to minimize lock contention
-	gameStates := make(map[string]*pokerrpc.GameUpdate)
-	for playerID := range playerStreams {
-		// Use buildGameState which handles its own locking
-		gameState, err := s.buildGameState(tableID, playerID)
-		if err != nil {
-			s.log.Debugf("Failed to build game state for player %s: %v", playerID, err)
-			continue
-		}
-		gameStates[playerID] = gameState
-	}
-
-	return gameStates
-}

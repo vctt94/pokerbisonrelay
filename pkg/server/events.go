@@ -9,22 +9,8 @@ import (
 	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
-// GameEventType represents the type of game event
-type GameEventType string
-
-const (
-	GameEventTypeBetMade        GameEventType = "bet_made"
-	GameEventTypePlayerFolded   GameEventType = "player_folded"
-	GameEventTypeCallMade       GameEventType = "call_made"
-	GameEventTypeCheckMade      GameEventType = "check_made"
-	GameEventTypeGameStarted    GameEventType = "game_started"
-	GameEventTypeGameEnded      GameEventType = "game_ended"
-	GameEventTypePlayerReady    GameEventType = "player_ready"
-	GameEventTypePlayerJoined   GameEventType = "player_joined"
-	GameEventTypePlayerLeft     GameEventType = "player_left"
-	GameEventTypeNewHandStarted GameEventType = "new_hand_started"
-	GameEventTypeShowdownResult GameEventType = "showdown_result"
-)
+// GameEventType is an alias for the RPC NotificationType to maintain compatibility
+type GameEventType = pokerrpc.NotificationType
 
 // GameEvent represents an immutable snapshot of a game event
 type GameEvent struct {

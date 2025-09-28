@@ -925,9 +925,6 @@ func TestSnapshotRestoresCurrentPlayer(t *testing.T) {
 	}
 	require.NotEmpty(t, currentPlayer, "failed to retrieve current player")
 
-	// Simulate the current player disconnecting.
-	require.NoError(t, srv1.markPlayerDisconnected(tableID, currentPlayer))
-
 	// Give the async persistence some time to complete safely.
 	time.Sleep(50 * time.Millisecond)
 

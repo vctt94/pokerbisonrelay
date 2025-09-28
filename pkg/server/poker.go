@@ -71,7 +71,7 @@ func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*po
 
 	// Publish typed BET_MADE event
 	if evt, err := s.buildGameEvent(
-		GameEventTypeBetMade,
+		pokerrpc.NotificationType_BET_MADE,
 		req.TableId,
 		BetMadePayload{
 			PlayerID: req.PlayerId,
@@ -116,7 +116,7 @@ func (s *Server) FoldBet(ctx context.Context, req *pokerrpc.FoldBetRequest) (*po
 
 	// Publish typed PLAYER_FOLDED event
 	if evt, err := s.buildGameEvent(
-		GameEventTypePlayerFolded,
+		pokerrpc.NotificationType_PLAYER_FOLDED,
 		req.TableId,
 		PlayerFoldedPayload{PlayerID: req.PlayerId},
 	); err == nil {
@@ -169,7 +169,7 @@ func (s *Server) CallBet(ctx context.Context, req *pokerrpc.CallBetRequest) (*po
 
 	// Publish typed CALL_MADE event
 	if evt, err := s.buildGameEvent(
-		GameEventTypeCallMade,
+		pokerrpc.NotificationType_CALL_MADE,
 		req.TableId,
 		CallMadePayload{
 			PlayerID: req.PlayerId,
@@ -205,7 +205,7 @@ func (s *Server) CheckBet(ctx context.Context, req *pokerrpc.CheckBetRequest) (*
 
 	// Publish typed CHECK_MADE event
 	if evt, err := s.buildGameEvent(
-		GameEventTypeCheckMade,
+		pokerrpc.NotificationType_CHECK_MADE,
 		req.TableId,
 		CheckMadePayload{PlayerID: req.PlayerId},
 	); err == nil {

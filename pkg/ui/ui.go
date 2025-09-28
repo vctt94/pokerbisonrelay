@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/vctt94/pokerbisonrelay/pkg/client"
@@ -262,13 +263,14 @@ func (m *PokerUI) stateCreateTable(ui *PokerUI, msg tea.Msg) (stateFn, tea.Cmd) 
 			startingChips, _ := strconv.ParseInt(m.startingChips, 10, 64)
 
 			config := poker.TableConfig{
-				SmallBlind:    smallBlind,
-				BigBlind:      bigBlind,
-				MinPlayers:    int(requiredPlayers),
-				MaxPlayers:    int(requiredPlayers), // Using same value for min and max for now
-				BuyIn:         buyIn,
-				MinBalance:    minBalance,
-				StartingChips: startingChips,
+				SmallBlind:     smallBlind,
+				BigBlind:       bigBlind,
+				MinPlayers:     int(requiredPlayers),
+				MaxPlayers:     int(requiredPlayers), // Using same value for min and max for now
+				BuyIn:          buyIn,
+				MinBalance:     minBalance,
+				StartingChips:  startingChips,
+				AutoStartDelay: 3 * time.Second, // Auto-start new hands after 3 seconds
 			}
 			return m.stateCreateTable, m.dispatcher.createTableCmd(config)
 		case "q":

@@ -8,6 +8,7 @@ import (
 
 	"github.com/decred/slog"
 	"github.com/vctt94/pokerbisonrelay/pkg/poker"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
 func main() {
@@ -38,22 +39,29 @@ func main() {
 
 	table := poker.NewTable(cfg)
 
-	// Set up event publisher callback
+	// Set up event channel
 	eventPublished := false
-	table.SetEventPublisher(func(eventType string, tableID string, payload interface{}) {
-		fmt.Printf("Event published: type=%s, tableID=%s\n", eventType, tableID)
-		if eventType == "showdown_result" {
-			eventPublished = true
-			if showdownPayload, ok := payload.(poker.ShowdownPayload); ok {
-				fmt.Printf("Showdown event payload: Winners=%d, Pot=%d\n", len(showdownPayload.Winners), showdownPayload.Pot)
-				for i, winner := range showdownPayload.Winners {
-					fmt.Printf("  Winner %d: PlayerID=%s, Winnings=%d\n", i+1, winner.PlayerId, winner.Winnings)
+	eventChan := make(chan poker.TableEvent, 10)
+	table.SetEventChannel(eventChan)
+
+	// Start goroutine to process events
+	go func() {
+		for event := range eventChan {
+			fmt.Printf("Event published: type=%s, tableID=%s\n", event.Type, event.TableID)
+			if event.Type == pokerrpc.NotificationType_SHOWDOWN_RESULT {
+				eventPublished = true
+				if showdownPayload, ok := event.Payload.(*pokerrpc.Showdown); ok {
+					fmt.Printf("Showdown event payload: Winners=%d, Pot=%d\n", len(showdownPayload.Winners), showdownPayload.Pot)
+					for i, winner := range showdownPayload.Winners {
+						fmt.Printf("  Winner %d: PlayerID=%s, Winnings=%d\n", i+1, winner.PlayerId, winner.Winnings)
+					}
+				} else {
+					fmt.Printf("Showdown event payload (unexpected type): %+v\n", event.Payload)
 				}
-			} else {
-				fmt.Printf("Showdown event payload (unexpected type): %+v\n", payload)
 			}
 		}
-	})
+		fmt.Println("Event channel closed")
+	}()
 
 	// Add test users
 	table.AddNewUser("player1", "Player 1", 10000, 0)
@@ -143,6 +151,13 @@ func main() {
 	if err != nil {
 		fmt.Printf("Player2 check failed: %v\n", err)
 	}
+
+	// Trigger phase advancement to reach showdown
+	fmt.Println("Advancing phase to trigger showdown...")
+	table.MaybeAdvancePhase()
+
+	// Give the event processing goroutine time to process
+	time.Sleep(100 * time.Millisecond)
 
 	// Debug: Check final state
 	if game != nil {

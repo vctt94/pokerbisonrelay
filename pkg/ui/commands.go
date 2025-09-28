@@ -59,6 +59,11 @@ func (d *CommandDispatcher) joinTableCmd(tableID string) tea.Cmd {
 			return errorMsg(err)
 		}
 
+		// Start game stream to receive real-time updates
+		if err := d.pc.StartGameStream(d.ctx); err != nil {
+			return errorMsg(fmt.Errorf("failed to start game stream: %w", err))
+		}
+
 		// Return as player joined notification
 		return notificationMsg(&pokerrpc.Notification{
 			Type:     pokerrpc.NotificationType_PLAYER_JOINED,
@@ -92,6 +97,11 @@ func (d *CommandDispatcher) createTableCmd(config poker.TableConfig) tea.Cmd {
 		tableID, err := d.pc.CreateTable(d.ctx, config)
 		if err != nil {
 			return errorMsg(err)
+		}
+
+		// Start game stream to receive real-time updates
+		if err := d.pc.StartGameStream(d.ctx); err != nil {
+			return errorMsg(fmt.Errorf("failed to start game stream: %w", err))
 		}
 
 		// Return as table created notification

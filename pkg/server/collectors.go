@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/vctt94/pokerbisonrelay/pkg/poker"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
 // collectTableSnapshot collects a complete immutable snapshot of table state
@@ -144,7 +145,7 @@ func (s *Server) collectGameSnapshot(game *poker.Game) *GameSnapshot {
 }
 
 func (s *Server) buildGameEvent(
-	eventType GameEventType,
+	eventType pokerrpc.NotificationType,
 	tableID string,
 	payload interface{},
 ) (*GameEvent, error) {
@@ -153,17 +154,25 @@ func (s *Server) buildGameEvent(
 		return nil, err
 	}
 
-	playerIDs := s.safeTablePlayerIDs(tableID)
+	s.mu.RLock()
+	t := s.tables[tableID]
+	s.mu.RUnlock()
+	if t == nil {
+		return nil, fmt.Errorf("table not found: %s", tableID)
+	}
+
+	users := t.GetUsers()
+	playerIDs := make([]string, 0, len(users))
+	for _, u := range users {
+		playerIDs = append(playerIDs, u.ID)
+	}
 
 	// Convert poker package payloads to server payloads
 	var serverPayload EventPayload
 	if payload != nil {
 		switch p := payload.(type) {
-		case poker.ShowdownPayload:
-			serverPayload = ShowdownPayload{
-				Winners: p.Winners,
-				Pot:     p.Pot,
-			}
+		case *pokerrpc.Showdown:
+			serverPayload = ShowdownPayload{Showdown: p}
 		case EventPayload:
 			// Already a server payload
 			serverPayload = p
@@ -181,26 +190,4 @@ func (s *Server) buildGameEvent(
 		TableSnapshot: tableSnapshot,
 		Payload:       serverPayload,
 	}, nil
-}
-
-// helpers
-func (s *Server) tableByID(tableID string) *poker.Table {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.tables[tableID]
-}
-
-func (s *Server) safeTablePlayerIDs(tableID string) []string {
-	s.mu.RLock()
-	t := s.tables[tableID]
-	s.mu.RUnlock()
-	if t == nil {
-		return nil
-	}
-	users := t.GetUsers()
-	ids := make([]string, 0, len(users))
-	for _, u := range users {
-		ids = append(ids, u.ID)
-	}
-	return ids
 }

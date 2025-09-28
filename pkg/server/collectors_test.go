@@ -50,7 +50,6 @@ func buildActiveHeadsUpTable(t *testing.T, id string) *poker.Table {
 	}
 
 	table := poker.NewTable(cfg)
-	table.SetStateSaver(nil)
 
 	if _, err := table.AddNewUser("p1", "p1", 1000, 0); err != nil {
 		t.Fatalf("add user p1: %v", err)

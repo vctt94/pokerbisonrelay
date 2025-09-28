@@ -22,27 +22,27 @@ func NewNotificationHandler(server *Server) *NotificationHandler {
 // HandleEvent processes an event and broadcasts appropriate notifications
 func (nh *NotificationHandler) HandleEvent(event *GameEvent) {
 	switch event.Type {
-	case GameEventTypeBetMade:
+	case pokerrpc.NotificationType_BET_MADE:
 		nh.handleBetMade(event)
-	case GameEventTypePlayerFolded:
+	case pokerrpc.NotificationType_PLAYER_FOLDED:
 		nh.handlePlayerFolded(event)
-	case GameEventTypeCallMade:
+	case pokerrpc.NotificationType_CALL_MADE:
 		nh.handleCallMade(event)
-	case GameEventTypeCheckMade:
+	case pokerrpc.NotificationType_CHECK_MADE:
 		nh.handleCheckMade(event)
-	case GameEventTypeGameStarted:
+	case pokerrpc.NotificationType_GAME_STARTED:
 		nh.handleGameStarted(event)
-	case GameEventTypeGameEnded:
+	case pokerrpc.NotificationType_GAME_ENDED:
 		nh.handleGameEnded(event)
-	case GameEventTypePlayerReady:
+	case pokerrpc.NotificationType_PLAYER_READY:
 		nh.handlePlayerReady(event)
-	case GameEventTypePlayerJoined:
+	case pokerrpc.NotificationType_PLAYER_JOINED:
 		nh.handlePlayerJoined(event)
-	case GameEventTypePlayerLeft:
+	case pokerrpc.NotificationType_PLAYER_LEFT:
 		nh.handlePlayerLeft(event)
-	case GameEventTypeNewHandStarted:
+	case pokerrpc.NotificationType_NEW_HAND_STARTED:
 		nh.handleNewHandStarted(event)
-	case GameEventTypeShowdownResult:
+	case pokerrpc.NotificationType_SHOWDOWN_RESULT:
 		nh.handleShowdownResult(event)
 	}
 }
@@ -183,12 +183,9 @@ func (nh *NotificationHandler) handleShowdownResult(event *GameEvent) {
 		return
 	}
 	notification := &pokerrpc.Notification{
-		Type:    pokerrpc.NotificationType_SHOWDOWN_RESULT,
-		TableId: event.TableID,
-		Showdown: &pokerrpc.Showdown{
-			Winners: sp.Winners,
-			Pot:     sp.Pot,
-		},
+		Type:     pokerrpc.NotificationType_SHOWDOWN_RESULT,
+		TableId:  event.TableID,
+		Showdown: sp.Showdown,
 	}
 	nh.server.notifyPlayers(event.PlayerIDs, notification)
 }
@@ -231,6 +228,28 @@ func (gsh *GameStateHandler) buildGameUpdateFromSnapshot(tableSnapshot *TableSna
 		return nil
 	}
 
+	// Early return if no game snapshot - return basic table info without game data
+	if tableSnapshot.GameSnapshot == nil {
+		// Build players list from snapshot data
+		var players []*pokerrpc.Player
+		for _, ps := range tableSnapshot.Players {
+			player := &pokerrpc.Player{
+				Id:      ps.ID,
+				IsReady: ps.IsReady,
+			}
+			players = append(players, player)
+		}
+
+		return &pokerrpc.GameUpdate{
+			TableId:         tableSnapshot.ID,
+			Phase:           pokerrpc.GamePhase_WAITING,
+			PhaseName:       pokerrpc.GamePhase_WAITING.String(),
+			Players:         players,
+			PlayersRequired: int32(tableSnapshot.Config.MinPlayers),
+			PlayersJoined:   int32(tableSnapshot.State.PlayerCount),
+		}
+	}
+
 	// Build players list from snapshot data
 	var players []*pokerrpc.Player
 	for _, ps := range tableSnapshot.Players {
@@ -242,10 +261,27 @@ func (gsh *GameStateHandler) buildGameUpdateFromSnapshot(tableSnapshot *TableSna
 			CurrentBet: ps.HasBet,
 		}
 
-		// Show cards if it's the requesting player's own data or during showdown
-		if ps.ID == requestingPlayerID ||
-			(tableSnapshot.GameSnapshot != nil && tableSnapshot.GameSnapshot.Phase == pokerrpc.GamePhase_SHOWDOWN) {
+		if ps.ID == requestingPlayerID {
+			// Show own cards during all active game phases
+			gamePhase := tableSnapshot.GameSnapshot.Phase
+
+			if tableSnapshot.GameSnapshot.Phase != pokerrpc.GamePhase_NEW_HAND_DEALING && len(ps.Hand) > 0 {
+				player.Hand = make([]*pokerrpc.Card, len(ps.Hand))
+				for i, card := range ps.Hand {
+					player.Hand[i] = &pokerrpc.Card{
+						Suit:  card.GetSuit(),
+						Value: card.GetValue(),
+					}
+				}
+				gsh.server.log.Debugf("GameStateHandler: showing %d cards to player %s", len(player.Hand), ps.ID)
+			} else {
+				gsh.server.log.Debugf("GameStateHandler: NOT showing cards to player %s (phase=%v, handSize=%d)",
+					ps.ID, gamePhase, len(ps.Hand))
+			}
+		} else if tableSnapshot.GameSnapshot.Phase == pokerrpc.GamePhase_SHOWDOWN {
+			// Show other players' cards only during showdown
 			player.Hand = make([]*pokerrpc.Card, len(ps.Hand))
+			player.HandDescription = ps.HandDescription
 			for i, card := range ps.Hand {
 				player.Hand[i] = &pokerrpc.Card{
 					Suit:  card.GetSuit(),
@@ -254,44 +290,27 @@ func (gsh *GameStateHandler) buildGameUpdateFromSnapshot(tableSnapshot *TableSna
 			}
 		}
 
-		// Include hand description during showdown
-		if tableSnapshot.GameSnapshot != nil && tableSnapshot.GameSnapshot.Phase == pokerrpc.GamePhase_SHOWDOWN {
-			player.HandDescription = ps.HandDescription
-		}
-
 		players = append(players, player)
 	}
 
 	// Build community cards slice
 	var communityCards []*pokerrpc.Card
-	var pot int64
-	var currentBet int64
-	var gamePhase pokerrpc.GamePhase = pokerrpc.GamePhase_WAITING
-	var currentPlayerID string
-
-	if tableSnapshot.GameSnapshot != nil {
-		pot = tableSnapshot.GameSnapshot.Pot
-		currentBet = tableSnapshot.GameSnapshot.CurrentBet
-		gamePhase = tableSnapshot.GameSnapshot.Phase
-		currentPlayerID = tableSnapshot.GameSnapshot.CurrentPlayer
-
-		for _, card := range tableSnapshot.GameSnapshot.CommunityCards {
-			communityCards = append(communityCards, &pokerrpc.Card{
-				Suit:  card.GetSuit(),
-				Value: card.GetValue(),
-			})
-		}
+	for _, card := range tableSnapshot.GameSnapshot.CommunityCards {
+		communityCards = append(communityCards, &pokerrpc.Card{
+			Suit:  card.GetSuit(),
+			Value: card.GetValue(),
+		})
 	}
 
 	return &pokerrpc.GameUpdate{
 		TableId:         tableSnapshot.ID,
-		Phase:           gamePhase,
-		PhaseName:       gamePhase.String(),
+		Phase:           tableSnapshot.GameSnapshot.Phase,
+		PhaseName:       tableSnapshot.GameSnapshot.Phase.String(),
 		Players:         players,
 		CommunityCards:  communityCards,
-		Pot:             pot,
-		CurrentBet:      currentBet,
-		CurrentPlayer:   currentPlayerID,
+		Pot:             tableSnapshot.GameSnapshot.Pot,
+		CurrentBet:      tableSnapshot.GameSnapshot.CurrentBet,
+		CurrentPlayer:   tableSnapshot.GameSnapshot.CurrentPlayer,
 		GameStarted:     tableSnapshot.State.GameStarted,
 		PlayersRequired: int32(tableSnapshot.Config.MinPlayers),
 		PlayersJoined:   int32(tableSnapshot.State.PlayerCount),

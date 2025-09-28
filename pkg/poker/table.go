@@ -13,10 +13,11 @@ import (
 	"github.com/vctt94/pokerbisonrelay/pkg/statemachine"
 )
 
-// ShowdownPayload represents a typed payload for showdown events
-type ShowdownPayload struct {
-	Winners []*pokerrpc.Winner
-	Pot     int64
+// TableEvent represents a table event with type and payload
+type TableEvent struct {
+	Type    pokerrpc.NotificationType
+	TableID string
+	Payload interface{}
 }
 
 // TableStateFn represents a table state function following Rob Pike's pattern
@@ -62,41 +63,40 @@ type TableConfig struct {
 	AutoStartDelay time.Duration // Delay before automatically starting next hand after showdown
 }
 
-// StateSaver is an interface for saving table state
-type StateSaver interface {
-	SaveTableStateAsync(tableID string, reason string)
-}
-
 // TableEventManager handles notifications and state updates for table events
 type TableEventManager struct {
-	stateSaver     StateSaver
-	eventPublisher func(eventType string, tableID string, payload interface{})
+	eventChannel chan<- TableEvent
 }
 
-// SaveState triggers a state save for the table
-func (tem *TableEventManager) SaveState(tableID string, reason string) {
-	if tem.stateSaver != nil {
-		tem.stateSaver.SaveTableStateAsync(tableID, reason)
+// SetEventChannel sets the event channel for the event manager
+func (tem *TableEventManager) SetEventChannel(eventChannel chan<- TableEvent) {
+	tem.eventChannel = eventChannel
+}
+
+// PublishEvent publishes an event to the channel (non-blocking)
+func (tem *TableEventManager) PublishEvent(eventType pokerrpc.NotificationType, tableID string, payload interface{}) {
+	if tem.eventChannel != nil {
+		select {
+		case tem.eventChannel <- TableEvent{
+			Type:    eventType,
+			TableID: tableID,
+			Payload: payload,
+		}:
+		default:
+			// Channel is full or closed, event is dropped
+			// In production, you might want to log this
+		}
 	}
 }
 
-// SetStateSaver sets the state saver for the event manager
-func (tem *TableEventManager) SetStateSaver(stateSaver StateSaver) {
-	tem.stateSaver = stateSaver
+// SetEventChannel sets the event channel for the table
+func (t *Table) SetEventChannel(eventChannel chan<- TableEvent) {
+	t.eventManager.SetEventChannel(eventChannel)
 }
 
-// SetEventPublisher sets the event publisher for the event manager
-func (tem *TableEventManager) SetEventPublisher(
-	eventPublisher func(eventType string, tableID string, payload interface{}),
-) {
-	tem.eventPublisher = eventPublisher
-}
-
-// SetEventPublisher sets the event publisher for the table
-func (t *Table) SetEventPublisher(
-	eventPublisher func(eventType string, tableID string, payload interface{}),
-) {
-	t.eventManager.SetEventPublisher(eventPublisher)
+// PublishEvent publishes an event from the table (non-blocking)
+func (t *Table) PublishEvent(eventType pokerrpc.NotificationType, tableID string, payload interface{}) {
+	t.eventManager.PublishEvent(eventType, tableID, payload)
 }
 
 // Table represents a poker table that manages users and delegates game logic to Game
@@ -158,7 +158,6 @@ func tableStateWaitingForPlayers(entity *Table, callback func(stateName string, 
 				callback("PLAYERS_READY", statemachine.StateEntered)
 			}
 			// Save state when players become ready
-			entity.eventManager.SaveState(entity.config.ID, "players ready")
 			return tableStatePlayersReady
 		}
 	}
@@ -175,7 +174,6 @@ func tableStatePlayersReady(entity *Table, callback func(stateName string, event
 		callback("PLAYERS_READY", statemachine.StateEntered)
 	}
 	// Save state when entering players ready
-	entity.eventManager.SaveState(entity.config.ID, "players ready state")
 	// This state waits for external trigger (StartGame)
 	return tableStatePlayersReady
 }
@@ -186,7 +184,6 @@ func tableStateGameActive(entity *Table, callback func(stateName string, event s
 		callback("GAME_ACTIVE", statemachine.StateEntered)
 	}
 	// Save state when game is active
-	entity.eventManager.SaveState(entity.config.ID, "game active")
 	return tableStateGameActive // Stay in this state during normal gameplay
 }
 
@@ -346,14 +343,11 @@ func (t *Table) handleShowdown() error {
 
 	tableID := t.config.ID
 	amount := t.lastShowdown.TotalPot
-	publisher := t.eventManager.eventPublisher
 
-	if publisher != nil {
-		go publisher("showdown_result", tableID, ShowdownPayload{
-			Winners: t.lastShowdown.WinnerInfo,
-			Pot:     amount,
-		})
-	}
+	t.PublishEvent(pokerrpc.NotificationType_SHOWDOWN_RESULT, tableID, &pokerrpc.Showdown{
+		Winners: t.lastShowdown.WinnerInfo,
+		Pot:     amount,
+	})
 
 	// Remove busted players (0 chips) and count remaining players
 	playersToRemove := make([]string, 0)
@@ -373,7 +367,15 @@ func (t *Table) handleShowdown() error {
 		}
 	}
 
-	// Remove busted players
+	// Check if the game should end BEFORE removing players
+	// This ensures all players (including losing ones) get notified
+	if t.shouldGameEnd() {
+		t.log.Infof("Game should end, calling endGame()")
+		t.endGame()
+		return nil
+	}
+
+	// Remove busted players AFTER game ended notification
 	for _, userID := range playersToRemove {
 		t.log.Infof("Removing busted player %s (0 chips)", userID)
 		t.removeUserWithoutLock(userID)
@@ -384,8 +386,13 @@ func (t *Table) handleShowdown() error {
 	t.game.ResetActionsInRound()
 	t.lastAction = time.Now()
 
+	if t.config.AutoStartDelay == 0 {
+		t.log.Debugf("Auto-start delay is 0, skipping auto-start")
+	}
+
 	// Schedule auto-start of the next hand strictly after showdown resolution
-	if t.config.AutoStartDelay > 0 && t.game != nil {
+	if t.config.AutoStartDelay > 0 {
+		t.log.Debugf("Scheduling auto-start for new hand with delay %v", t.config.AutoStartDelay)
 		// Provide callbacks if not already set
 		if t.game.autoStartCallbacks == nil {
 			// This is safe because we hold the table lock and SetAutoStartCallbacks locks the game.
@@ -409,8 +416,78 @@ func (t *Table) handleShowdown() error {
 	return nil
 }
 
+// shouldGameEnd checks various conditions to determine if the game should end
+func (t *Table) shouldGameEnd() bool {
+	// Check if we have enough players to continue
+	remainingPlayers := len(t.users)
+	minRequired := t.config.MinPlayers
+	if remainingPlayers >= 2 && remainingPlayers < t.config.MinPlayers {
+		minRequired = 2 // Allow heads-up play
+	}
+
+	if remainingPlayers < minRequired {
+		t.log.Infof("shouldGameEnd: Not enough players remaining (%d < %d)", remainingPlayers, minRequired)
+		return true
+	}
+
+	// Check if any remaining players have sufficient chips to play
+	playersWithChips := 0
+	for _, u := range t.users {
+		// Find player's current chip balance
+		var playerBalance int64 = 0
+		for _, player := range t.game.players {
+			if player.ID == u.ID {
+				playerBalance = player.Balance
+				break
+			}
+		}
+
+		if playerBalance > 0 {
+			playersWithChips++
+		}
+	}
+
+	if playersWithChips < 2 {
+		t.log.Infof("shouldGameEnd: Not enough players with sufficient chips (%d < 2)", playersWithChips)
+		return true
+	}
+
+	// Add more game ending conditions here as needed
+	// For example:
+	// - Tournament time limit reached
+	// - Maximum hands played
+	// - All players but one eliminated
+	// - etc.
+
+	return false
+}
+
+// endGame ends the current game and transitions to WAITING_FOR_PLAYERS state
+func (t *Table) endGame() {
+	t.log.Infof("Ending game - not enough players remaining")
+
+	// Clear the game
+	t.game = nil
+
+	// Reset all players to not ready
+	for _, u := range t.users {
+		u.IsReady = false
+	}
+
+	// Transition back to WAITING_FOR_PLAYERS state
+	t.stateMachine.SetState(tableStateWaitingForPlayers)
+
+	// Publish game ended event
+	t.PublishEvent(pokerrpc.NotificationType_GAME_ENDED, t.config.ID, map[string]interface{}{
+		"reason": "Not enough players remaining",
+	})
+
+	t.log.Infof("Game ended, table back to WAITING_FOR_PLAYERS state")
+}
+
 // startNewHand starts a fresh hand atomically (acquires the table lock internally)
 func (t *Table) startNewHand() error {
+	t.log.Debugf("startNewHand: Starting new hand")
 	// Ensure hand setup is atomic for readers of table/game state
 	// This prevents clients from observing partially-initialized new-hand state.
 	t.mu.Lock()
@@ -625,7 +702,7 @@ func (t *Table) MakeBet(userID string, amount int64) error {
 		}
 
 		// Check if this action completes the betting round
-		t.maybeAdvancePhase()
+		t.MaybeAdvancePhase()
 	}
 
 	t.lastAction = time.Now()
@@ -720,12 +797,12 @@ func (t *Table) HandleTimeouts() {
 		}
 
 		// Check if this action completes the betting round
-		t.maybeAdvancePhase()
+		t.MaybeAdvancePhase()
 	}
 }
 
-// maybeAdvancePhase delegates to Game layer for phase advancement logic
-func (t *Table) maybeAdvancePhase() {
+// MaybeAdvancePhase delegates to Game layer for phase advancement logic
+func (t *Table) MaybeAdvancePhase() {
 	if !t.isGameActive() || t.game == nil {
 		return
 	}
@@ -829,7 +906,7 @@ func (t *Table) HandleFold(userID string) error {
 		}
 
 		// Check if this action completes the betting round
-		t.maybeAdvancePhase()
+		t.MaybeAdvancePhase()
 	}
 
 	t.lastAction = time.Now()
@@ -864,7 +941,7 @@ func (t *Table) HandleCall(userID string) error {
 		t.log.Debugf("HandleCall: user %s called; actionsInRound=%d currentBet=%d", userID, t.game.GetActionsInRound(), t.game.GetCurrentBet())
 
 		// Check if this action completes the betting round
-		t.maybeAdvancePhase()
+		t.MaybeAdvancePhase()
 	}
 
 	t.lastAction = time.Now()
@@ -899,7 +976,7 @@ func (t *Table) HandleCheck(userID string) error {
 		t.log.Debugf("HandleCheck: user %s checked; actionsInRound=%d currentBet=%d", userID, t.game.GetActionsInRound(), t.game.GetCurrentBet())
 
 		// Check if this action completes the betting round
-		t.maybeAdvancePhase()
+		t.MaybeAdvancePhase()
 	}
 
 	t.lastAction = time.Now()
@@ -1008,13 +1085,6 @@ func (t *Table) dealCardsToPlayers(activePlayers []*User) error {
 		}
 	}
 	return nil
-}
-
-// SetStateSaver sets the state saver for the table
-func (t *Table) SetStateSaver(saver StateSaver) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.eventManager.SetStateSaver(saver)
 }
 
 // AddUser adds a user to the table

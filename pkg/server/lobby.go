@@ -58,20 +58,13 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 
 	// Create table
 	table := poker.NewTable(cfg)
-	table.SetStateSaver(s)
 
-	// NEW: typed event pipeline adapter (poker -> server)
-	table.SetEventPublisher(func(eventType string, tableID string, payload interface{}) {
-		typ := GameEventType(eventType) // map poker's string to server enum
-		s.log.Debugf("Publishing event to processor: %s for table %s", typ, tableID)
+	// Create a channel for table events and start a goroutine to process them
+	tableEventChan := make(chan poker.TableEvent, 100) // Buffered channel
+	table.SetEventChannel(tableEventChan)
 
-		ev, err := s.buildGameEvent(typ, tableID, payload)
-		if err != nil {
-			s.log.Errorf("failed to build %s event: %v", typ, err)
-			return
-		}
-		s.eventProcessor.PublishEvent(ev)
-	})
+	// Start a goroutine to process table events
+	go s.processTableEvents(tableEventChan)
 
 	// Seat creator
 	if _, err := table.AddNewUser(req.PlayerId, req.PlayerId, creatorBalance, 0); err != nil {
@@ -126,7 +119,7 @@ func (s *Server) JoinTable(ctx context.Context, req *pokerrpc.JoinTableRequest) 
 	if existingUser := table.GetUser(req.PlayerId); existingUser != nil {
 		// Publish typed PLAYER_JOINED event
 		if evt, err := s.buildGameEvent(
-			GameEventTypePlayerJoined,
+			pokerrpc.NotificationType_PLAYER_JOINED,
 			req.TableId,
 			PlayerJoinedPayload{PlayerID: req.PlayerId},
 		); err == nil {
@@ -185,7 +178,7 @@ func (s *Server) JoinTable(ctx context.Context, req *pokerrpc.JoinTableRequest) 
 
 	// Publish typed PLAYER_JOINED event
 	if evt, err := s.buildGameEvent(
-		GameEventTypePlayerJoined,
+		pokerrpc.NotificationType_PLAYER_JOINED,
 		req.TableId,
 		PlayerJoinedPayload{PlayerID: req.PlayerId},
 	); err == nil {
@@ -331,6 +324,24 @@ func (s *Server) LeaveTable(ctx context.Context, req *pokerrpc.LeaveTableRequest
 	}, nil
 }
 
+// transferTableHost transfers host ownership to a new user
+func (s *Server) transferTableHost(tableID, newHostID string) error {
+	table, ok := s.tables[tableID]
+	if !ok {
+		return fmt.Errorf("table not found")
+	}
+
+	// Use the table's SetHost method to transfer ownership
+	err := table.SetHost(newHostID)
+	if err != nil {
+		return fmt.Errorf("failed to transfer host: %v", err)
+	}
+
+	s.log.Infof("Host transferred to %s for table %s", newHostID, tableID)
+
+	return nil
+}
+
 func (s *Server) GetTables(ctx context.Context, req *pokerrpc.GetTablesRequest) (*pokerrpc.GetTablesResponse, error) {
 	// Get table references with server lock
 	s.mu.RLock()
@@ -462,16 +473,15 @@ func (s *Server) SetPlayerReady(ctx context.Context, req *pokerrpc.SetPlayerRead
 	gameStarted := table.IsGameStarted()
 
 	// Publish typed PLAYER_READY event
-	if event, err := s.buildGameEvent(
-		GameEventTypePlayerReady,
+	event, err := s.buildGameEvent(
+		pokerrpc.NotificationType_PLAYER_READY,
 		req.TableId,
 		PlayerReadyPayload{PlayerID: req.PlayerId},
-	); err == nil {
-		s.eventProcessor.PublishEvent(event)
-	} else {
-		s.log.Errorf("Failed to build PLAYER_READY event: %v", err)
+	)
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to build PLAYER_READY event: %v", err))
 	}
-
+	s.eventProcessor.PublishEvent(event)
 	// If all players are ready and the game hasn't started yet, start the game
 	if allReady && !gameStarted {
 		if errStart := table.StartGame(); errStart != nil {
@@ -484,7 +494,7 @@ func (s *Server) SetPlayerReady(ctx context.Context, req *pokerrpc.SetPlayerRead
 		// game update received by the clients would still be in the pre-start state
 		// which prevents the UI from progressing to the actual hand.
 		if gameStartedEvent, errGS := s.buildGameEvent(
-			GameEventTypeGameStarted,
+			pokerrpc.NotificationType_GAME_STARTED,
 			req.TableId,
 			GameStartedPayload{PlayerIDs: []string{req.PlayerId}},
 		); errGS == nil {
@@ -498,7 +508,7 @@ func (s *Server) SetPlayerReady(ctx context.Context, req *pokerrpc.SetPlayerRead
 			g.SetOnNewHandStartedCallback(func() {
 				// Publish typed NEW_HAND_STARTED event
 				if evt, err := s.buildGameEvent(
-					GameEventTypeNewHandStarted,
+					pokerrpc.NotificationType_NEW_HAND_STARTED,
 					req.TableId,
 					NewHandStartedPayload{},
 				); err == nil {
@@ -536,7 +546,7 @@ func (s *Server) SetPlayerUnready(ctx context.Context, req *pokerrpc.SetPlayerUn
 
 	// Publish typed PLAYER_READY event (with ready=false)
 	if event, err := s.buildGameEvent(
-		GameEventTypePlayerReady,
+		pokerrpc.NotificationType_PLAYER_READY,
 		req.TableId,
 		PlayerMarkedReadyPayload{PlayerID: req.PlayerId, Ready: false},
 	); err == nil {
@@ -592,4 +602,19 @@ func (s *Server) StartNotificationStream(req *pokerrpc.StartNotificationStreamRe
 	ctx := stream.Context()
 	<-ctx.Done()
 	return nil
+}
+
+// processTableEvents processes events from poker tables and forwards them to the event processor
+func (s *Server) processTableEvents(eventChan <-chan poker.TableEvent) {
+	for event := range eventChan {
+		s.log.Debugf("Processing table event: %s for table %s", event.Type, event.TableID)
+
+		// Convert poker table event to server game event
+		ev, err := s.buildGameEvent(GameEventType(event.Type), event.TableID, event.Payload)
+		if err != nil {
+			s.log.Errorf("failed to build %s event: %v", event.Type, err)
+			continue
+		}
+		s.eventProcessor.PublishEvent(ev)
+	}
 }
