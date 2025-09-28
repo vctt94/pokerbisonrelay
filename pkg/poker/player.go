@@ -28,15 +28,11 @@ type Player struct {
 	Hand            []Card
 	HasBet          int64 // Current bet amount in this betting round
 	CurrentBet      int64 // Current bet amount in this betting round
+	IsDealer        bool
+	IsTurn          bool
 
 	// State machine - Rob Pike's pattern
 	stateMachine *statemachine.StateMachine[Player]
-
-	// Game state flags
-	HasFolded bool
-	IsAllIn   bool
-	IsDealer  bool
-	IsTurn    bool
 
 	// Hand evaluation (populated during showdown)
 	HandValue       *HandValue
@@ -63,10 +59,6 @@ func NewPlayer(id, name string, balance int64) *Player {
 	// Initialize the state machine with first state function
 	p.stateMachine = statemachine.NewStateMachine(p, playerStateAtTable)
 
-	// Set initial flags for AT_TABLE state
-	p.HasFolded = false
-	p.IsAllIn = false
-
 	return p
 }
 
@@ -74,114 +66,69 @@ func NewPlayer(id, name string, balance int64) *Player {
 // Each state function performs its work and returns the next state function (or nil to terminate)
 
 // playerStateAtTable represents the player being at the table but not in game
-func playerStateAtTable(entity *Player, callback func(stateName string, event statemachine.StateEvent)) PlayerStateFn {
+func playerStateAtTable(entity *Player) PlayerStateFn {
 	// Check if player should transition to folded state during a game
-	if entity.HasFolded {
+	if entity.GetCurrentStateString() == "FOLDED" {
 		// Player has folded during a game, transition to folded state
-		if callback != nil {
-			callback("AT_TABLE", statemachine.StateExited)
-		}
 		return playerStateFolded
 	}
 
-	if callback != nil {
-		callback("AT_TABLE", statemachine.StateEntered)
-	}
 	return playerStateAtTable // Stay in this state until external transition
 }
 
 // playerStateInGame represents the player actively in a game
-func playerStateInGame(entity *Player, callback func(stateName string, event statemachine.StateEvent)) PlayerStateFn {
+func playerStateInGame(entity *Player) PlayerStateFn {
 	// Update all-in status based on balance and bet
 	if entity.Balance == 0 && entity.HasBet > 0 {
 		// Player is all-in, transition to all-in state
-		if callback != nil {
-			callback("IN_GAME", statemachine.StateExited)
-		}
 		return playerStateAllIn
 	}
 
 	// If player is all-in, ignore any fold attempts and stay in IN_GAME
-	if entity.IsAllIn {
-		entity.HasFolded = false
-		if callback != nil {
-			callback("IN_GAME", statemachine.StateEntered)
-		}
+	if entity.GetCurrentStateString() == "ALL_IN" {
 		return playerStateInGame
 	}
 
-	if entity.HasFolded {
+	if entity.GetCurrentStateString() == "FOLDED" {
 		// Player has folded and is not all-in, transition to folded state
-		if callback != nil {
-			callback("IN_GAME", statemachine.StateExited)
-		}
 		return playerStateFolded
 	}
 
-	if callback != nil {
-		callback("IN_GAME", statemachine.StateEntered)
-	}
 	return playerStateInGame // Stay in this state
 }
 
 // playerStateFolded represents the player having folded
-func playerStateFolded(entity *Player, callback func(stateName string, event statemachine.StateEvent)) PlayerStateFn {
+func playerStateFolded(entity *Player) PlayerStateFn {
+	// Check if player is all-in - if so, ignore the fold attempt
+	if entity.Balance == 0 && entity.HasBet > 0 {
+		// Player is all-in, cannot fold, return to all-in state
+		return playerStateAllIn
+	}
+
 	// Check if player should transition out of folded state (e.g., new hand started)
-	if !entity.HasFolded {
+	if entity.GetCurrentStateString() != "FOLDED" {
 		// Player is no longer folded, transition back to in-game
-		if callback != nil {
-			callback("FOLDED", statemachine.StateExited)
-		}
 		return playerStateInGame
 	}
 
-	// Ensure flags are correct for this state
-	entity.HasFolded = true
-	entity.IsAllIn = false
-
-	if callback != nil {
-		callback("FOLDED", statemachine.StateEntered)
-	}
 	return playerStateFolded // Stay folded
 }
 
 // playerStateAllIn represents the player being all-in
-func playerStateAllIn(entity *Player, callback func(stateName string, event statemachine.StateEvent)) PlayerStateFn {
-	// Check if player should transition out of all-in state
-	if entity.HasFolded {
-		// Player has folded, transition to folded state
-		if callback != nil {
-			callback("ALL_IN", statemachine.StateExited)
-		}
-		return playerStateFolded
-	}
+func playerStateAllIn(entity *Player) PlayerStateFn {
+	// All-in players cannot fold - ignore any fold attempts
+	// This prevents the state machine from transitioning to folded when all-in
 
 	if entity.Balance > 0 {
 		// Player is no longer all-in (e.g., won chips or new hand), transition back to in-game
-		if callback != nil {
-			callback("ALL_IN", statemachine.StateExited)
-		}
 		return playerStateInGame
 	}
 
-	// Ensure flags are correct for this state
-	entity.HasFolded = false
-	entity.IsAllIn = true
-
-	if callback != nil {
-		callback("ALL_IN", statemachine.StateEntered)
-	}
 	return playerStateAllIn // Stay all-in
 }
 
 // playerStateLeft represents the player having left the table
-func playerStateLeft(entity *Player, callback func(stateName string, event statemachine.StateEvent)) PlayerStateFn {
-	entity.HasFolded = false
-	entity.IsAllIn = false
-
-	if callback != nil {
-		callback("LEFT", statemachine.StateEntered)
-	}
+func playerStateLeft(entity *Player) PlayerStateFn {
 	return nil // Terminal state - return nil to end state machine
 }
 
@@ -206,13 +153,9 @@ func (p *Player) ResetForNewHand(startingChips int64) {
 	p.HandDescription = ""
 	p.LastAction = time.Now()
 
-	// Reset game state flags
-	p.HasFolded = false
-	p.IsAllIn = false
-
 	// Transition to IN_GAME state
 	p.ensureStateMachine()
-	p.stateMachine.SetState(playerStateInGame)
+	p.stateMachine.Dispatch(playerStateInGame)
 }
 
 // SetGameState updates the player's game state using the new state machine
@@ -236,27 +179,12 @@ func (p *Player) SetGameState(stateName string) {
 		return // Unknown state, don't transition
 	}
 
-	p.stateMachine.SetState(newState)
+	p.stateMachine.Dispatch(newState)
 
-	// Update flags based on new state - this will also be handled by the state functions
-	switch stateName {
-	case "AT_TABLE", "IN_GAME":
-		p.HasFolded = false
-		p.IsAllIn = false
-	case "FOLDED":
-		p.HasFolded = true
-		p.IsAllIn = false
-	case "ALL_IN":
-		p.HasFolded = false
-		p.IsAllIn = true
-	case "LEFT":
-		p.HasFolded = false
-		p.IsAllIn = false
-	}
 }
 
 // GetGameState returns a string representation of the current state
-func (p *Player) GetGameState() string {
+func (p *Player) GetCurrentStateString() string {
 	if p.stateMachine == nil {
 		return "UNINITIALIZED"
 	}
@@ -272,6 +200,8 @@ func (p *Player) GetGameState() string {
 		return "AT_TABLE"
 	case fmt.Sprintf("%p", playerStateInGame):
 		return "IN_GAME"
+	case fmt.Sprintf("%p", playerStateAllIn):
+		return "ALL_IN"
 	case fmt.Sprintf("%p", playerStateFolded):
 		return "FOLDED"
 	case fmt.Sprintf("%p", playerStateLeft):
@@ -285,14 +215,13 @@ func (p *Player) GetGameState() string {
 // This method enforces the rule that players cannot fold while all-in
 func (p *Player) TryFold() bool {
 	// Check if player is all-in - if so, fold is not allowed
-	if p.IsAllIn {
+	if p.Balance == 0 && p.HasBet > 0 {
 		return false
 	}
 
 	// Set the fold flag and let the state machine handle the transition
-	p.HasFolded = true
 	p.ensureStateMachine()
-	p.stateMachine.Dispatch(nil)
+	p.stateMachine.Dispatch(playerStateFolded)
 
 	return true
 }

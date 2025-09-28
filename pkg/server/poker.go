@@ -223,7 +223,7 @@ func (s *Server) buildPlayerForUpdate(p *poker.Player, requestingPlayerID string
 		Id:         p.ID,
 		Balance:    p.Balance,
 		IsReady:    p.IsReady,
-		Folded:     p.HasFolded,
+		Folded:     p.GetCurrentStateString() == "FOLDED",
 		CurrentBet: p.HasBet,
 	}
 

@@ -121,7 +121,7 @@ func (pm *PotManager) RebuildPotsIncremental(players []*Player) {
 		for i := 0; i < n; i++ {
 			tb := pm.TotalBets[i]
 			// Eligible if not folded and contributed at least to this level.
-			if players[i] != nil && !players[i].HasFolded && tb >= lvl {
+			if players[i] != nil && !(players[i].GetCurrentStateString() == "FOLDED") && tb >= lvl {
 				p.Eligibility[i] = true
 			}
 			// Contribution into this layer is clamp(tb, prev..lvl) - prev.
@@ -150,7 +150,7 @@ func (pm *PotManager) RebuildPotsIncremental(players []*Player) {
 		tb := pm.TotalBets[i]
 		if tb > top {
 			over.Amount += tb - top
-			if players[i] != nil && !players[i].HasFolded {
+			if players[i] != nil && !(players[i].GetCurrentStateString() == "FOLDED") {
 				over.Eligibility[i] = true
 			}
 			hasOver = true
@@ -183,7 +183,7 @@ func (pm *PotManager) DistributePots(players []*Player) error {
 			if idx < 0 || idx >= len(players) {
 				return fmt.Errorf("[pot %d] eligibility idx %d out of range (players=%d)", pi, idx, len(players))
 			}
-			if elig && players[idx] != nil && !players[idx].HasFolded {
+			if elig && players[idx] != nil && !(players[idx].GetCurrentStateString() == "FOLDED") {
 				alive = append(alive, idx)
 			}
 		}

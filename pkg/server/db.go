@@ -248,8 +248,6 @@ func (s *Server) restoreGameState(table *poker.Table, dbTableState *db.TableStat
 				player.Balance = dbPlayerState.Balance
 				player.StartingBalance = dbPlayerState.StartingBalance
 				player.HasBet = dbPlayerState.HasBet
-				player.HasFolded = dbPlayerState.HasFolded
-				player.IsAllIn = dbPlayerState.IsAllIn
 				player.IsDealer = dbPlayerState.IsDealer
 				player.IsTurn = dbPlayerState.IsTurn
 				player.HandDescription = dbPlayerState.HandDescription
@@ -272,8 +270,8 @@ func (s *Server) restoreGameState(table *poker.Table, dbTableState *db.TableStat
 				player.TableSeat = dbPlayerState.TableSeat
 				player.IsReady = dbPlayerState.IsReady
 
-				s.log.Debugf("Restored player %s: balance=%d, hasbet=%d, folded=%v, disconnected=%v",
-					player.ID, player.Balance, player.HasBet, player.HasFolded, player.IsDisconnected)
+				s.log.Debugf("Restored player %s: balance=%d, hasbet=%d,  disconnected=%v",
+					player.ID, player.Balance, player.HasBet, player.IsDisconnected)
 
 				break
 			}

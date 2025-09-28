@@ -127,8 +127,8 @@ func TestSidePots(t *testing.T) {
 	}
 
 	// Set all-in status manually for test
-	players[0].IsAllIn = true
-	players[2].IsAllIn = true
+	players[0].stateMachine.Dispatch(playerStateAllIn)
+	players[2].stateMachine.Dispatch(playerStateAllIn)
 
 	// Player 0 goes all-in for 50
 	pm.AddBet(0, 50, players)
@@ -215,16 +215,16 @@ func TestPotDistribution(t *testing.T) {
 	}
 
 	// Set up hand values and states manually for test
-	players[0].IsAllIn = true
+	players[0].stateMachine.Dispatch(playerStateAllIn)
 	players[0].HandValue = &HandValue{Rank: TwoPair, RankValue: 3500} // Two Pair, Aces (lower rank value = better)
-	players[0].HasFolded = false
+	players[0].stateMachine.Dispatch(playerStateInGame)
 
 	players[1].HandValue = &HandValue{Rank: Pair, RankValue: 4000} // Pair of 10s (higher rank value = worse)
-	players[1].HasFolded = false
+	players[1].stateMachine.Dispatch(playerStateInGame)
 
-	players[2].IsAllIn = true
+	players[2].stateMachine.Dispatch(playerStateAllIn)
 	players[2].HandValue = &HandValue{Rank: ThreeOfAKind, RankValue: 500} // Three of a kind, 5s (lowest rank value = best overall)
-	players[2].HasFolded = false
+	players[2].stateMachine.Dispatch(playerStateInGame)
 
 	// Player 0 bets 50
 	pm.AddBet(0, 50, players)
@@ -293,12 +293,10 @@ func TestTiePotDistribution(t *testing.T) {
 		{
 			Balance:   0,
 			HandValue: &HandValue{Rank: Pair, RankValue: 10}, // Player 0: Pair of 10s
-			HasFolded: false,
 		},
 		{
 			Balance:   0,
 			HandValue: &HandValue{Rank: Pair, RankValue: 10}, // Player 1: Pair of 10s
-			HasFolded: false,
 		},
 	}
 
@@ -330,17 +328,14 @@ func TestOddChipDistribution(t *testing.T) {
 		{
 			Balance:   0,
 			HandValue: &HandValue{Rank: Pair, RankValue: 10}, // Player 0: Pair of 10s
-			HasFolded: false,
 		},
 		{
 			Balance:   0,
 			HandValue: &HandValue{Rank: Pair, RankValue: 10}, // Player 1: Pair of 10s
-			HasFolded: false,
 		},
 		{
 			Balance:   0,
 			HandValue: &HandValue{Rank: Pair, RankValue: 10}, // Player 2: Pair of 10s
-			HasFolded: false,
 		},
 	}
 
@@ -430,12 +425,12 @@ func TestBuildPotsFromTotals(t *testing.T) {
 	}
 
 	// Set up state manually for test
-	players[0].IsAllIn = true
-	players[0].HasFolded = false
-	players[1].IsAllIn = true
-	players[1].HasFolded = false
-	players[2].HasFolded = false
-	players[3].HasFolded = true
+	players[0].stateMachine.Dispatch(playerStateAllIn)
+	players[0].stateMachine.Dispatch(playerStateInGame)
+	players[1].stateMachine.Dispatch(playerStateAllIn)
+	players[1].stateMachine.Dispatch(playerStateInGame)
+	players[2].stateMachine.Dispatch(playerStateInGame)
+	players[3].stateMachine.Dispatch(playerStateFolded)
 
 	// Set up bets
 	pm.AddBet(0, 30, players)  // Player 0: All-in with 30
@@ -544,9 +539,9 @@ func TestHeadsUpPotDistributionAfterCall(t *testing.T) {
 	players[1].Balance = 0 // Player 1 loses
 
 	// Set up hand values and states manually for test
-	players[0].HasFolded = false
+	players[0].stateMachine.Dispatch(playerStateInGame)
 	players[0].HandValue = &HandValue{Rank: Pair, RankValue: 100}
-	players[1].HasFolded = false
+	players[1].stateMachine.Dispatch(playerStateInGame)
 	players[1].HandValue = &HandValue{Rank: HighCard, RankValue: 1000}
 
 	// Pots are automatically built on each bet, no need to call BuildPotsFromTotals
@@ -674,7 +669,7 @@ func TestBetTrackingRegression(t *testing.T) {
 			players := make([]*Player, scenario.numPlayers)
 			for i := 0; i < scenario.numPlayers; i++ {
 				players[i] = NewPlayer(fmt.Sprintf("player_%d", i), fmt.Sprintf("Player %d", i), 0)
-				players[i].HasFolded = false
+				players[i].stateMachine.Dispatch(playerStateInGame)
 			}
 
 			// Set hand values (first winner wins, others lose)
@@ -755,7 +750,7 @@ func TestSidePotCornerCases(t *testing.T) {
 		players := make([]*Player, 4)
 		for i := 0; i < 4; i++ {
 			players[i] = NewPlayer(fmt.Sprintf("player_%d", i), fmt.Sprintf("Player %d", i), 0)
-			players[i].IsAllIn = true
+			players[i].stateMachine.Dispatch(playerStateAllIn)
 		}
 
 		// All players go all-in with different amounts
@@ -802,7 +797,7 @@ func TestSidePotCornerCases(t *testing.T) {
 		}
 
 		// Player 0 folds early
-		players[0].HasFolded = true
+		players[0].stateMachine.Dispatch(playerStateFolded)
 		pm.AddBet(0, 10, players)  // Player 0: 10 (but folded)
 		pm.AddBet(1, 50, players)  // Player 1: 50 (all-in)
 		pm.AddBet(2, 100, players) // Player 2: 100
@@ -832,7 +827,7 @@ func TestSidePotCornerCases(t *testing.T) {
 		players := make([]*Player, 3)
 		for i := 0; i < 3; i++ {
 			players[i] = NewPlayer(fmt.Sprintf("player_%d", i), fmt.Sprintf("Player %d", i), 0)
-			players[i].IsAllIn = true
+			players[i].stateMachine.Dispatch(playerStateAllIn)
 		}
 
 		// All players go all-in with the same amount
@@ -913,7 +908,7 @@ func TestSidePotCornerCases(t *testing.T) {
 		}
 
 		// Player 0 folds, others bet different amounts
-		players[0].HasFolded = true
+		players[0].stateMachine.Dispatch(playerStateFolded)
 		pm.AddBet(0, 10, players)  // Player 0: 10 (folded)
 		pm.AddBet(1, 30, players)  // Player 1: 30 (all-in)
 		pm.AddBet(2, 60, players)  // Player 2: 60
@@ -944,7 +939,7 @@ func TestSidePotCornerCases(t *testing.T) {
 		players := make([]*Player, 3)
 		for i := 0; i < 3; i++ {
 			players[i] = NewPlayer(fmt.Sprintf("player_%d", i), fmt.Sprintf("Player %d", i), 0)
-			players[i].IsAllIn = true
+			players[i].stateMachine.Dispatch(playerStateAllIn)
 		}
 
 		// Test with very large numbers
@@ -991,7 +986,7 @@ func TestSidePotCornerCases(t *testing.T) {
 		}
 
 		// Round 3: Player 0 goes all-in
-		players[0].IsAllIn = true
+		players[0].stateMachine.Dispatch(playerStateAllIn)
 		pm.AddBet(0, 40, players) // All-in for 50 total
 
 		// Check after all-in - should have 2 pots: 50*3, 30*2
@@ -1073,14 +1068,12 @@ func TestShowdownWinningsNotification_PotZeroedAfterDistribution(t *testing.T) {
 		{
 			ID:              "player1",
 			Balance:         0,
-			HasFolded:       false,
 			HandValue:       &HandValue{Rank: Pair, RankValue: 100}, // Winner
 			HandDescription: "Pair of Tens",
 		},
 		{
 			ID:              "player2",
 			Balance:         0,
-			HasFolded:       false,
 			HandValue:       &HandValue{Rank: HighCard, RankValue: 1000}, // Loser
 			HandDescription: "High Card",
 		},
@@ -1132,7 +1125,7 @@ func TestShowdownWinningsNotification_PotZeroedAfterDistribution(t *testing.T) {
 func mkPlayers(n int) []*Player {
 	ps := make([]*Player, n)
 	for i := range ps {
-		ps[i] = &Player{ID: string(rune('A' + i))}
+		ps[i] = NewPlayer(string(rune('A'+i)), "", 1000) // Use NewPlayer to properly initialize stateMachine
 	}
 	return ps
 }
@@ -1242,8 +1235,8 @@ func TestContested_UncalledRaiseRefund(t *testing.T) {
 
 	// Everyone except BTN folded -> only player 2 alive, but because there WAS voluntary action,
 	// the uncalled portion (40) must be refunded before building pots.
-	players[0].HasFolded = true
-	players[1].HasFolded = true
+	players[0].stateMachine.Dispatch(playerStateFolded)
+	players[1].stateMachine.Dispatch(playerStateFolded)
 
 	pm.ReturnUncalledBet(players) // should refund 40 to player 2 and reduce totals
 	if pm.TotalBets[2] != 20 {
@@ -1253,9 +1246,9 @@ func TestContested_UncalledRaiseRefund(t *testing.T) {
 	// Debug: check what happens after pot building
 	t.Logf("Before pot building:")
 	t.Logf("TotalBets: %v", pm.TotalBets)
-	t.Logf("Player 0 folded: %v", players[0].HasFolded)
-	t.Logf("Player 1 folded: %v", players[1].HasFolded)
-	t.Logf("Player 2 folded: %v", players[2].HasFolded)
+	t.Logf("Player 0 folded: %v", players[0].GetCurrentStateString() == "FOLDED")
+	t.Logf("Player 1 folded: %v", players[1].GetCurrentStateString() == "FOLDED")
+	t.Logf("Player 2 folded: %v", players[2].GetCurrentStateString() == "FOLDED")
 
 	// Pots are automatically built on each bet, no need to call BuildPotsFromTotals
 	t.Logf("After pot building:")

@@ -9,9 +9,7 @@ import (
 
 // ShowCards notifies other players that this player is showing their cards
 func (pc *PokerClient) ShowCards(ctx context.Context) error {
-	pc.RLock()
-	tableID := pc.tableID
-	pc.RUnlock()
+	tableID := pc.GetCurrentTableID()
 
 	if tableID == "" {
 		return fmt.Errorf("not currently in a table")
@@ -34,9 +32,7 @@ func (pc *PokerClient) ShowCards(ctx context.Context) error {
 
 // HideCards notifies other players that this player is hiding their cards
 func (pc *PokerClient) HideCards(ctx context.Context) error {
-	pc.RLock()
-	tableID := pc.tableID
-	pc.RUnlock()
+	tableID := pc.GetCurrentTableID()
 
 	if tableID == "" {
 		return fmt.Errorf("not currently in a table")

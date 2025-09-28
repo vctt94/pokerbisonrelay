@@ -88,11 +88,11 @@ func (s *Server) collectPlayerSnapshot(user *poker.User, game *poker.Game) *Play
 		for _, player := range game.GetPlayers() {
 			if player.ID == user.ID {
 				snapshot.Balance = player.Balance
-				snapshot.HasFolded = player.HasFolded
-				snapshot.IsAllIn = player.IsAllIn
+				snapshot.HasFolded = player.GetCurrentStateString() == "FOLDED"
+				snapshot.IsAllIn = player.GetCurrentStateString() == "ALL_IN"
 				snapshot.IsDealer = player.IsDealer
 				snapshot.IsTurn = player.IsTurn
-				snapshot.GameState = player.GetGameState()
+				snapshot.GameState = player.GetCurrentStateString()
 				snapshot.HandDescription = player.HandDescription
 				snapshot.HasBet = player.HasBet
 				snapshot.StartingBalance = player.StartingBalance

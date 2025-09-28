@@ -143,7 +143,7 @@ func NewTable(cfg TableConfig) *Table {
 // Each state function performs its work and returns the next state function (or nil to terminate)
 
 // tableStateWaitingForPlayers handles the WAITING_FOR_PLAYERS state logic
-func tableStateWaitingForPlayers(entity *Table, callback func(stateName string, event statemachine.StateEvent)) TableStateFn {
+func tableStateWaitingForPlayers(entity *Table) TableStateFn {
 	// Check if we have enough players and they're all ready
 	if len(entity.users) >= entity.config.MinPlayers {
 		allReady := true
@@ -154,35 +154,23 @@ func tableStateWaitingForPlayers(entity *Table, callback func(stateName string, 
 			}
 		}
 		if allReady {
-			if callback != nil {
-				callback("PLAYERS_READY", statemachine.StateEntered)
-			}
 			// Save state when players become ready
 			return tableStatePlayersReady
 		}
 	}
 
-	if callback != nil {
-		callback("WAITING_FOR_PLAYERS", statemachine.StateEntered)
-	}
 	return tableStateWaitingForPlayers // Stay in this state
 }
 
 // tableStatePlayersReady handles the PLAYERS_READY state logic
-func tableStatePlayersReady(entity *Table, callback func(stateName string, event statemachine.StateEvent)) TableStateFn {
-	if callback != nil {
-		callback("PLAYERS_READY", statemachine.StateEntered)
-	}
+func tableStatePlayersReady(entity *Table) TableStateFn {
 	// Save state when entering players ready
 	// This state waits for external trigger (StartGame)
 	return tableStatePlayersReady
 }
 
 // tableStateGameActive handles the GAME_ACTIVE state logic
-func tableStateGameActive(entity *Table, callback func(stateName string, event statemachine.StateEvent)) TableStateFn {
-	if callback != nil {
-		callback("GAME_ACTIVE", statemachine.StateEntered)
-	}
+func tableStateGameActive(entity *Table) TableStateFn {
 	// Save state when game is active
 	return tableStateGameActive // Stay in this state during normal gameplay
 }
@@ -213,7 +201,7 @@ func (t *Table) CheckAllPlayersReady() bool {
 	defer t.mu.Unlock()
 
 	// Let the state machine handle the logic
-	t.stateMachine.Dispatch(nil)
+	t.stateMachine.Dispatch(t.stateMachine.GetCurrentState())
 
 	// Check the resulting state
 	state := t.GetTableStateString()
@@ -292,7 +280,7 @@ func (t *Table) StartGame() error {
 	}
 
 	// Transition to game active state with broadcast callback
-	t.stateMachine.SetState(tableStateGameActive)
+	t.stateMachine.Dispatch(tableStateGameActive)
 	t.lastAction = time.Now()
 	return nil
 }
@@ -475,7 +463,7 @@ func (t *Table) endGame() {
 	}
 
 	// Transition back to WAITING_FOR_PLAYERS state
-	t.stateMachine.SetState(tableStateWaitingForPlayers)
+	t.stateMachine.Dispatch(tableStateWaitingForPlayers)
 
 	// Publish game ended event
 	t.PublishEvent(pokerrpc.NotificationType_GAME_ENDED, t.config.ID, map[string]interface{}{
@@ -578,7 +566,7 @@ func (t *Table) startNewHand() error {
 	t.resolvedRound = -1
 
 	// Transition to game active state
-	t.stateMachine.SetState(tableStateGameActive)
+	t.stateMachine.Dispatch(tableStateGameActive)
 
 	t.lastAction = time.Now()
 	return nil
@@ -622,7 +610,7 @@ func (t *Table) setupNewHand(activePlayers []*User) error {
 
 	// Start the timeout clock for the first current player
 	if t.game.currentPlayer >= 0 && t.game.currentPlayer < len(t.game.players) {
-		if !t.game.players[t.game.currentPlayer].HasFolded {
+		if t.game.players[t.game.currentPlayer].GetCurrentStateString() != "FOLDED" {
 			t.game.players[t.game.currentPlayer].LastAction = time.Now()
 		}
 	}
@@ -765,7 +753,7 @@ func (t *Table) HandleTimeouts() {
 
 	// The current player is already in our unified player state
 	currentPlayer := t.game.players[t.game.currentPlayer]
-	if currentPlayer.HasFolded || currentPlayer.IsAllIn {
+	if currentPlayer.GetCurrentStateString() == "FOLDED" || currentPlayer.GetCurrentStateString() == "ALL_IN" {
 		return
 	}
 
@@ -789,7 +777,7 @@ func (t *Table) HandleTimeouts() {
 		} else {
 			// Auto-fold the current player - they cannot check because they need to call/raise
 			// This covers the case where currentPlayer.HasBet < currentBet (player needs to call)
-			currentPlayer.HasFolded = true
+			currentPlayer.stateMachine.Dispatch(playerStateFolded)
 			currentPlayer.LastAction = now
 
 			// Advance to next player
@@ -1016,7 +1004,7 @@ func (t *Table) postBlindsFromGame() error {
 		if smallBlindAmount > player.Balance {
 			// Player cannot cover small blind - treat as all-in of remaining balance
 			smallBlindAmount = player.Balance
-			player.IsAllIn = true
+			player.stateMachine.Dispatch(playerStateAllIn)
 			t.log.Debugf("Player %s all-in for small blind: posting %d (had %d)", player.ID, smallBlindAmount, player.Balance)
 		}
 
@@ -1038,7 +1026,7 @@ func (t *Table) postBlindsFromGame() error {
 		if bigBlindAmount > player.Balance {
 			// Player cannot cover big blind - treat as all-in of remaining balance
 			bigBlindAmount = player.Balance
-			player.IsAllIn = true
+			player.stateMachine.Dispatch(playerStateAllIn)
 			t.log.Debugf("Player %s all-in for big blind: posting %d (had %d)", player.ID, bigBlindAmount, player.Balance)
 		}
 
@@ -1268,5 +1256,5 @@ func (t *Table) RestoreGame(g *Game) {
 
 	// Ensure the table state reflects that an active game is in progress so
 	// that other table methods (IsGameStarted, etc.) behave correctly.
-	t.stateMachine.SetState(tableStateGameActive)
+	t.stateMachine.Dispatch(tableStateGameActive)
 }

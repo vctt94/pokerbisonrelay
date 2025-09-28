@@ -53,7 +53,7 @@ func TestNewGame(t *testing.T) {
 		if player.Balance != 1000 {
 			t.Errorf("Player %d: Expected 1000 balance, got %d", i, player.Balance)
 		}
-		if player.HasFolded {
+		if player.GetCurrentStateString() == "FOLDED" {
 			t.Errorf("Player %d: Expected not folded", i)
 		}
 		if player.HasBet != 0 {
@@ -301,7 +301,7 @@ func TestTieBreakerShowdown(t *testing.T) {
 	}
 
 	// Mark player 3 as folded
-	player3.HasFolded = true
+	player3.stateMachine.Dispatch(playerStateFolded)
 
 	// Set up pot
 	game.potManager = NewPotManager(3)
@@ -393,9 +393,9 @@ func TestSidePotShowdown(t *testing.T) {
 	game.potManager.AddBet(2, 30, game.players)
 
 	// Hand strengths: p3 wins main, p1 wins side
-	game.players[0].HasFolded = false
-	game.players[1].HasFolded = false
-	game.players[2].HasFolded = false
+	game.players[0].stateMachine.Dispatch(playerStateInGame)
+	game.players[1].stateMachine.Dispatch(playerStateInGame)
+	game.players[2].stateMachine.Dispatch(playerStateInGame)
 
 	// Give explicit evaluated values via EvaluateHand semantics
 	hv3 := EvaluateHand([]Card{{suit: Hearts, value: Five}, {suit: Clubs, value: Five}}, []Card{{suit: Diamonds, value: Five}, {suit: Spades, value: Two}, {suit: Hearts, value: Three}, {suit: Clubs, value: Nine}, {suit: Diamonds, value: Queen}}) // trips

@@ -65,9 +65,7 @@ func (pc *PokerClient) CreateTable(ctx context.Context, config poker.TableConfig
 		return "", err
 	}
 
-	pc.Lock()
-	pc.tableID = resp.TableId
-	pc.Unlock()
+	pc.SetCurrentTableID(resp.TableId)
 
 	// Note: Game stream is not automatically started for table creation
 	// It should be started explicitly when needed for real-time updates
@@ -89,7 +87,7 @@ func (pc *PokerClient) JoinTable(ctx context.Context, tableID string) error {
 		return fmt.Errorf("failed to join table: %s", resp.Message)
 	}
 
-	pc.tableID = tableID
+	pc.SetCurrentTableID(tableID)
 
 	// Start game stream for real-time updates
 	// if err := pc.StartGameStream(ctx); err != nil {
@@ -102,9 +100,7 @@ func (pc *PokerClient) JoinTable(ctx context.Context, tableID string) error {
 
 // LeaveTable leaves the current table and clears the table ID
 func (pc *PokerClient) LeaveTable(ctx context.Context) error {
-	pc.RLock()
-	tableID := pc.tableID
-	pc.RUnlock()
+	tableID := pc.GetCurrentTableID()
 
 	if tableID == "" {
 		return fmt.Errorf("not currently in a table")
@@ -125,9 +121,7 @@ func (pc *PokerClient) LeaveTable(ctx context.Context) error {
 		return fmt.Errorf("failed to leave table: %s", resp.Message)
 	}
 
-	pc.Lock()
-	pc.tableID = ""
-	pc.Unlock()
+	pc.SetCurrentTableID("")
 
 	return nil
 }
@@ -197,9 +191,7 @@ func (pc *PokerClient) ProcessTip(ctx context.Context, toPlayerID string, amount
 
 // SetPlayerReady sets the player ready status
 func (pc *PokerClient) SetPlayerReady(ctx context.Context) error {
-	pc.RLock()
-	tableID := pc.tableID
-	pc.RUnlock()
+	tableID := pc.GetCurrentTableID()
 
 	if tableID == "" {
 		return fmt.Errorf("not currently in a table")
@@ -222,9 +214,7 @@ func (pc *PokerClient) SetPlayerReady(ctx context.Context) error {
 
 // SetPlayerUnready sets the player unready status
 func (pc *PokerClient) SetPlayerUnready(ctx context.Context) error {
-	pc.RLock()
-	tableID := pc.tableID
-	pc.RUnlock()
+	tableID := pc.GetCurrentTableID()
 
 	if tableID == "" {
 		return fmt.Errorf("not currently in a table")
