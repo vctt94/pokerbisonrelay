@@ -40,7 +40,7 @@ type PokerClient struct {
 	IsReady      bool
 	BetAmt       int64 // bet amount in atoms
 	tableID      string
-	cfg          *PokerClientConfig
+	cfg          *AppConfig
 	ntfns        *NotificationManager
 	log          slog.Logger
 	logBackend   *logging.LogBackend
@@ -63,7 +63,7 @@ type PokerClient struct {
 }
 
 // NewPokerClient creates a new poker client with notification support
-func NewPokerClient(ctx context.Context, cfg *PokerClientConfig) (*PokerClient, error) {
+func NewPokerClient(ctx context.Context, cfg *AppConfig) (*PokerClient, error) {
 	// Validate that notifications are properly initialized
 	if cfg.Notifications == nil {
 		// initialize notification manager with NewNotificationManager
@@ -104,7 +104,7 @@ func NewPokerClient(ctx context.Context, cfg *PokerClientConfig) (*PokerClient, 
 }
 
 // newBaseClient creates a basic client without notification support (internal use)
-func newClient(ctx context.Context, cfg *PokerClientConfig) (*PokerClient, error) {
+func newClient(ctx context.Context, cfg *AppConfig) (*PokerClient, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("cfg is nil")
 	}

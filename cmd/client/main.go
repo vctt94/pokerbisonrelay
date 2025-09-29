@@ -13,6 +13,7 @@ import (
 var (
 	// Define command line flags
 	dataDir         = flag.String("datadir", "", "Directory to load config file from")
+	payoutAddress   = flag.String("payoutaddress", "", "Address to payout to")
 	rpcURL          = flag.String("url", "", "URL of the websocket endpoint")
 	grpcServerCert  = flag.String("grpcservercert", "", "Path to server.crt file for TLS")
 	brClientCert    = flag.String("brclientcert", "", "Path to brclient rpc.cert file")
@@ -31,56 +32,22 @@ var (
 func main() {
 	flag.Parse()
 
-	// Create and load configuration
-	cfg := &client.PokerClientConfig{}
-	if err := cfg.LoadConfig("pokerclient", *dataDir); err != nil {
+	cfg, err := client.LoadConfig("pokerclient", *dataDir, client.ConfigOverrides{
+		BRClientRPCURL:  *rpcURL,
+		BRClientCert:    *brClientCert,
+		BRClientRPCCert: *brClientRPCCert,
+		BRClientRPCKey:  *brClientRPCKey,
+		RPCUser:         *rpcUser,
+		RPCPass:         *rpcPass,
+		GRPCHost:        *grpcHost,
+		GRPCPort:        *grpcPort,
+		GRPCServerCert:  *grpcServerCert,
+		PayoutAddress:   *payoutAddress,
+	})
+	if err != nil {
 		fmt.Printf("Configuration error: %v\n", err)
 		os.Exit(1)
 	}
-
-	// Override config with command line flags
-	flagOverrides := make(map[string]interface{})
-	if *rpcURL != "" {
-		flagOverrides["rpcurl"] = *rpcURL
-	}
-	if *grpcServerCert != "" {
-		flagOverrides["grpcservercert"] = *grpcServerCert
-	}
-	if *brClientCert != "" {
-		flagOverrides["brclientcert"] = *brClientCert
-	}
-	if *brClientRPCCert != "" {
-		flagOverrides["brclientrpccert"] = *brClientRPCCert
-	}
-	if *brClientRPCKey != "" {
-		flagOverrides["brclientrpckey"] = *brClientRPCKey
-	}
-	if *rpcUser != "" {
-		flagOverrides["rpcuser"] = *rpcUser
-	}
-	if *rpcPass != "" {
-		flagOverrides["rpcpass"] = *rpcPass
-	}
-	if *grpcHost != "" {
-		flagOverrides["grpchost"] = *grpcHost
-	}
-	if *grpcPort != "" {
-		flagOverrides["grpcport"] = *grpcPort
-	}
-	if *logFile != "" {
-		flagOverrides["logfile"] = *logFile
-	}
-	if *maxLogFiles != 10 { // Only override if not default
-		flagOverrides["maxlogfiles"] = *maxLogFiles
-	}
-	if *maxBufferLines != 1000 { // Only override if not default
-		flagOverrides["maxbufferlines"] = *maxBufferLines
-	}
-	if *debug != "" {
-		flagOverrides["debug"] = *debug
-	}
-
-	cfg.SetConfigValues(flagOverrides)
 
 	// Validate configuration
 	if err := cfg.ValidateConfig(); err != nil {

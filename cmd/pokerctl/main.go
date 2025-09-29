@@ -36,6 +36,7 @@ var (
 	grpcInsecure    = flag.Bool("grpcinsecure", false, "Use insecure gRPC (no TLS) - tests only")
 	offline         = flag.Bool("offline", false, "Skip BisonRelay init (tests only)")
 	playerID        = flag.String("id", "", "Explicit player ID (offline mode)")
+	payoutAddress   = flag.String("payoutaddress", "", "Address to payout to")
 )
 
 func main() {
@@ -67,66 +68,25 @@ func main() {
 	}
 	cmd := flag.Arg(0)
 
-	cfg := &client.PokerClientConfig{}
-	if err := cfg.LoadConfig("pokerclient", *dataDir); err != nil {
+	cfg, err := client.LoadConfig("pokerclient", *dataDir, client.ConfigOverrides{
+		BRClientRPCURL:  *rpcURL,
+		BRClientCert:    *brClientCert,
+		BRClientRPCCert: *brClientRPCCert,
+		BRClientRPCKey:  *brClientRPCKey,
+		RPCUser:         *rpcUser,
+		RPCPass:         *rpcPass,
+		GRPCHost:        *grpcHost,
+		GRPCPort:        *grpcPort,
+		GRPCServerCert:  *grpcServerCert,
+		PayoutAddress:   *payoutAddress,
+	})
+	if err != nil {
 		fmt.Printf("Configuration error: %v\n", err)
 		os.Exit(1)
 	}
 
-	flagOverrides := make(map[string]interface{})
-	if *rpcURL != "" {
-		flagOverrides["rpcurl"] = *rpcURL
-	}
-	if *grpcServerCert != "" {
-		flagOverrides["grpcservercert"] = *grpcServerCert
-	}
-	if *brClientCert != "" {
-		flagOverrides["brclientcert"] = *brClientCert
-	}
-	if *brClientRPCCert != "" {
-		flagOverrides["brclientrpccert"] = *brClientRPCCert
-	}
-	if *brClientRPCKey != "" {
-		flagOverrides["brclientrpckey"] = *brClientRPCKey
-	}
-	if *rpcUser != "" {
-		flagOverrides["rpcuser"] = *rpcUser
-	}
-	if *rpcPass != "" {
-		flagOverrides["rpcpass"] = *rpcPass
-	}
-	if *grpcHost != "" {
-		flagOverrides["grpchost"] = *grpcHost
-	}
-	if *grpcPort != "" {
-		flagOverrides["grpcport"] = *grpcPort
-	}
-	if *logFile != "" {
-		flagOverrides["logfile"] = *logFile
-	}
-	if *maxLogFiles != 10 {
-		flagOverrides["maxlogfiles"] = *maxLogFiles
-	}
-	if *maxBufferLines != 1000 {
-		flagOverrides["maxbufferlines"] = *maxBufferLines
-	}
-	if *debug != "" {
-		flagOverrides["debug"] = *debug
-	}
-	if *grpcInsecure {
-		flagOverrides["grpcinsecure"] = true
-	}
-	if *offline {
-		flagOverrides["offline"] = true
-	}
-	if *playerID != "" {
-		flagOverrides["id"] = *playerID
-	}
-	cfg.SetConfigValues(flagOverrides)
-
-	// Minimal validation for GRPC connectivity
-	if cfg.GRPCHost == "" || cfg.GRPCPort == "" {
-		fmt.Println("grpchost and grpcport are required (from config file or flags)")
+	if err := cfg.ValidateConfig(); err != nil {
+		fmt.Printf("Configuration validation error: %v\n", err)
 		os.Exit(1)
 	}
 

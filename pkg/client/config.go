@@ -8,13 +8,30 @@ import (
 	"path/filepath"
 
 	"github.com/vctt94/bisonbotkit/config"
+	brconfig "github.com/vctt94/bisonbotkit/config"
 	"github.com/vctt94/bisonbotkit/utils"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
 
+// ConfigOverrides carries optional CLI/runtime overrides for config values.
+type ConfigOverrides struct {
+	BRClientRPCURL  string
+	BRClientCert    string
+	BRClientRPCCert string
+	BRClientRPCKey  string
+	RPCUser         string
+	RPCPass         string
+
+	// Pong-specific (stored under ExtraConfig in the .conf)
+	GRPCHost       string
+	GRPCPort       string
+	GRPCServerCert string
+	PayoutAddress  string
+}
+
 // PokerClientConfig is the unified configuration structure that handles all configuration concerns
-type PokerClientConfig struct {
+type AppConfig struct {
 	// BRConfig holds the brclient configuration options
 	BRConfig *config.ClientConfig
 
@@ -29,6 +46,7 @@ type PokerClientConfig struct {
 	GRPCPort       string
 	GRPCServerCert string
 
+	PayoutAddress string
 	// Notifications
 	Notifications *NotificationManager
 
@@ -38,72 +56,85 @@ type PokerClientConfig struct {
 }
 
 // LoadConfig loads and processes the complete configuration from files only
-func (cfg *PokerClientConfig) LoadConfig(appName string, datadir string) error {
+func LoadConfig(appName string, datadir string, ov ConfigOverrides) (*AppConfig, error) {
 	// Set up configuration directory
 	if datadir == "" {
 		datadir = utils.AppDataDir(appName, false)
 	}
-	cfg.DataDir = datadir
-
-	// Ensure the log directory exists
-	logDir := filepath.Join(cfg.DataDir, "logs")
-	if err := os.MkdirAll(logDir, 0700); err != nil {
-		return fmt.Errorf("failed to create log directory: %v", err)
-	}
-
-	// Load existing configuration file if it exists.
-	existingConfig, err := config.LoadClientConfig(datadir, appName+".conf")
+	cfg, err := brconfig.LoadClientConfig(datadir, appName+".conf")
 	if err != nil {
-		// Proceed with an empty config; flags may override
-		existingConfig = &config.ClientConfig{ExtraConfig: make(map[string]string)}
+		return nil, fmt.Errorf("load config: %w", err)
 	}
 
-	if cfg.BRConfig == nil {
-		cfg.BRConfig = &config.ClientConfig{}
+	// Apply BR RPC/TLS overrides
+	if ov.BRClientRPCURL != "" {
+		cfg.RPCURL = ov.BRClientRPCURL
+	}
+	if ov.BRClientCert != "" {
+		cfg.BRClientCert = ov.BRClientCert
+	}
+	if ov.BRClientRPCCert != "" {
+		cfg.BRClientRPCCert = ov.BRClientRPCCert
+	}
+	if ov.BRClientRPCKey != "" {
+		cfg.BRClientRPCKey = ov.BRClientRPCKey
+	}
+	if ov.RPCUser != "" {
+		cfg.RPCUser = ov.RPCUser
+	}
+	if ov.RPCPass != "" {
+		cfg.RPCPass = ov.RPCPass
 	}
 
-	// Use existing config as base
-	cfg.BRConfig.RPCURL = existingConfig.RPCURL
-	cfg.BRConfig.BRClientCert = existingConfig.BRClientCert
-	cfg.BRConfig.BRClientRPCCert = existingConfig.BRClientRPCCert
-	cfg.BRConfig.BRClientRPCKey = existingConfig.BRClientRPCKey
-	cfg.BRConfig.RPCUser = existingConfig.RPCUser
-	cfg.BRConfig.RPCPass = existingConfig.RPCPass
-	cfg.BRConfig.Debug = existingConfig.Debug
-	cfg.BRConfig.LogFile = existingConfig.LogFile
-	cfg.BRConfig.MaxLogFiles = existingConfig.MaxLogFiles
-	cfg.BRConfig.MaxBufferLines = existingConfig.MaxBufferLines
-
-	// Also set the standalone fields needed for validation
-	if grpcServerCert := existingConfig.GetString("grpcservercert"); grpcServerCert != "" {
-		cfg.GRPCServerCert = grpcServerCert
+	// Pong gRPC settings live in ExtraConfig; let overrides win but persist in cfg
+	grpcHost := cfg.GetString("grpchost")
+	if ov.GRPCHost != "" {
+		grpcHost = ov.GRPCHost
+		cfg.SetString("grpchost", grpcHost)
+	}
+	grpcPort := cfg.GetString("grpcport")
+	if ov.GRPCPort != "" {
+		grpcPort = ov.GRPCPort
+		cfg.SetString("grpcport", grpcPort)
 	}
 
-	// Load grpchost and grpcport from ExtraConfig if available
-	if grpcHost := existingConfig.GetString("grpchost"); grpcHost != "" {
-		cfg.GRPCHost = grpcHost
-	}
-	if grpcPort := existingConfig.GetString("grpcport"); grpcPort != "" {
-		cfg.GRPCPort = grpcPort
+	grpcCert := cfg.GetString("grpcservercert")
+	if ov.GRPCServerCert != "" {
+		grpcCert = ov.GRPCServerCert
+		cfg.SetString("grpcservercert", grpcCert)
 	}
 
-	// Also check grpcservercert in ExtraConfig if the direct field is empty
-	if grpcServerCert := existingConfig.GetString("grpcservercert"); grpcServerCert != "" {
-		cfg.GRPCServerCert = grpcServerCert
+	// Payout address
+	addr := cfg.GetString("address")
+	if ov.PayoutAddress != "" {
+		addr = ov.PayoutAddress
+		cfg.SetString("address", addr)
 	}
 
-	return nil
+	return &AppConfig{
+		BRConfig:       cfg,
+		DataDir:        datadir,
+		GRPCHost:       grpcHost,
+		GRPCPort:       grpcPort,
+		GRPCServerCert: grpcCert,
+		PayoutAddress:  addr,
+	}, nil
+}
+
+// LoadAppConfig loads the pokerui application config with optional overrides.
+func LoadAppConfig(datadir string, ov ConfigOverrides) (*AppConfig, error) {
+	return LoadConfig("pokerui", datadir, ov)
 }
 
 // SetConfigValues allows the main app to override configuration values from flags or other sources
-func (cfg *PokerClientConfig) SetConfigValues(values map[string]interface{}) {
+func (cfg *AppConfig) SetConfigValues(values map[string]interface{}) {
 	for key, value := range values {
 		switch key {
 		case "id", "playerid":
 			if v, ok := value.(string); ok && v != "" {
 				cfg.PlayerID = v
 			}
-		case "rpcurl":
+		case "brrpcurl":
 			if v, ok := value.(string); ok && v != "" {
 				cfg.BRConfig.RPCURL = v
 			}
@@ -168,7 +199,7 @@ func (cfg *PokerClientConfig) SetConfigValues(values map[string]interface{}) {
 }
 
 // ValidateConfig checks that all required configuration values are present
-func (cfg *PokerClientConfig) ValidateConfig() error {
+func (cfg *AppConfig) ValidateConfig() error {
 	var missingConfigs []string
 
 	if cfg.GRPCHost == "" {
@@ -212,7 +243,7 @@ func (cfg *PokerClientConfig) ValidateConfig() error {
 }
 
 // ToBisonRelayConfig converts PokerClientConfig to BisonRelay's ClientConfig
-func (cfg *PokerClientConfig) ToBisonRelayConfig() *config.ClientConfig {
+func (cfg *AppConfig) ToBisonRelayConfig() *config.ClientConfig {
 	brConfig := &config.ClientConfig{
 		DataDir:         cfg.DataDir,
 		RPCURL:          cfg.BRConfig.RPCURL,
@@ -240,14 +271,8 @@ func (cfg *PokerClientConfig) ToBisonRelayConfig() *config.ClientConfig {
 }
 
 // CreateDefaultServerCert creates a basic server certificate file for testing
-func (cfg *PokerClientConfig) CreateDefaultServerCert() error {
+func (cfg *AppConfig) CreateDefaultServerCert() error {
 	return CreateDefaultServerCert(cfg.GRPCServerCert)
-}
-
-// SetupGRPCConnection sets up a GRPC connection with TLS credentials
-func (cfg *PokerClientConfig) SetupGRPCConnection() (*grpc.ClientConn, error) {
-	serverAddr := fmt.Sprintf("%s:%s", cfg.GRPCHost, cfg.GRPCPort)
-	return SetupGRPCConnection(serverAddr, cfg.GRPCServerCert, cfg.GRPCHost)
 }
 
 // CreateDefaultServerCert creates a basic server certificate file for testing
