@@ -9,6 +9,10 @@ service PokerService {
   // Game stream for real-time updates
   rpc StartGameStream(StartGameStreamRequest) returns (stream GameUpdate) {}
   
+  // Card visibility management
+  rpc ShowCards(ShowCardsRequest) returns (ShowCardsResponse) {}
+  rpc HideCards(HideCardsRequest) returns (HideCardsResponse) {}
+
   // Player actions
   rpc MakeBet(MakeBetRequest) returns (MakeBetResponse) {}
   rpc CallBet(CallBetRequest) returns (CallBetResponse) {}
@@ -41,10 +45,6 @@ service LobbyService {
   // Ready state management
   rpc SetPlayerReady(SetPlayerReadyRequest) returns (SetPlayerReadyResponse) {}
   rpc SetPlayerUnready(SetPlayerUnreadyRequest) returns (SetPlayerUnreadyResponse) {}
-  
-  // Card visibility management
-  rpc ShowCards(ShowCardsRequest) returns (ShowCardsResponse) {}
-  rpc HideCards(HideCardsRequest) returns (HideCardsResponse) {}
   
   // Notification stream
   rpc StartNotificationStream(StartNotificationStreamRequest) returns (stream Notification) {}
@@ -309,6 +309,12 @@ message Notification {
   bool game_ready_to_play = 12;
   int32 countdown = 13;
   repeated Winner winners = 14;
+  Showdown showdown = 15;
+}
+
+message Showdown {
+  repeated Winner winners = 1;
+  int64 pot = 2;
 }
 
 // Common Messages

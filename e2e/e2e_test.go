@@ -1104,6 +1104,7 @@ func TestThreePlayersAutoplayOneHand(t *testing.T) {
 	deadline := time.NewTimer(30 * time.Second)
 	defer deadline.Stop()
 
+	var potChecked bool
 	for {
 		select {
 		case <-deadline.C:
@@ -1114,6 +1115,12 @@ func TestThreePlayersAutoplayOneHand(t *testing.T) {
 		state := env.getGameState(ctx, tableID)
 		if state.GameStarted && state.Phase == pokerrpc.GamePhase_SHOWDOWN {
 			break
+		}
+
+		// Check pot during RIVER phase (before showdown completes)
+		if !potChecked && state.GameStarted && state.Phase == pokerrpc.GamePhase_RIVER {
+			assert.Greater(t, state.Pot, int64(0), "pot should be greater than 0 during RIVER phase")
+			potChecked = true
 		}
 
 		// Identify current player and their contribution
@@ -1151,7 +1158,8 @@ func TestThreePlayersAutoplayOneHand(t *testing.T) {
 	final := env.getGameState(ctx, tableID)
 	require.Equal(t, pokerrpc.GamePhase_SHOWDOWN, final.Phase)
 	require.Equal(t, int32(3), final.PlayersJoined)
-	assert.Greater(t, final.Pot, int64(0))
 	// Ensure we still see 3 players in the final state
 	assert.Equal(t, 3, len(final.Players))
+	// Verify that we checked the pot during the RIVER phase
+	assert.True(t, potChecked, "pot should have been checked during RIVER phase")
 }

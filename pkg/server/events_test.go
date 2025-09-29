@@ -1,6 +1,10 @@
 package server
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
+)
 
 // TestEventProcessorStartPublishStop verifies that events can be queued after
 // the processor is started and that Stop terminates cleanly.
@@ -11,12 +15,12 @@ func TestEventProcessorStartPublishStop(t *testing.T) {
 	ep := NewEventProcessor(s, 2, 0)
 
 	// Publish before start should be dropped and not panic.
-	ep.PublishEvent(&GameEvent{Type: GameEventTypeBetMade, TableID: "tid"})
+	ep.PublishEvent(&GameEvent{Type: pokerrpc.NotificationType_BET_MADE, TableID: "tid"})
 
 	ep.Start()
 
 	// Publish after start – with no workers the queue should buffer the event.
-	evt := &GameEvent{Type: GameEventTypePlayerReady, TableID: "tid"}
+	evt := &GameEvent{Type: pokerrpc.NotificationType_PLAYER_READY, TableID: "tid"}
 	ep.PublishEvent(evt)
 
 	if len(ep.queue) != 1 {
@@ -26,14 +30,4 @@ func TestEventProcessorStartPublishStop(t *testing.T) {
 	// Stop must not panic and should flip the started flag allowing Start to be idempotent.
 	ep.Stop()
 	ep.Stop() // call twice to ensure idempotency
-}
-
-// TestSnapshotRegistryUnknownEvent ensures an error is returned when requesting
-// a snapshot for an unregistered event type.
-func TestSnapshotRegistryUnknownEvent(t *testing.T) {
-	s := newBareServer()
-	_, err := defaultSnapshotRegistry.CollectSnapshot(GameEventType("unknown_event"), s, "tid", "pid", 0, nil)
-	if err == nil {
-		t.Fatalf("expected error for unknown event type, got nil")
-	}
 }

@@ -20,6 +20,8 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	PokerService_StartGameStream_FullMethodName = "/poker.PokerService/StartGameStream"
+	PokerService_ShowCards_FullMethodName       = "/poker.PokerService/ShowCards"
+	PokerService_HideCards_FullMethodName       = "/poker.PokerService/HideCards"
 	PokerService_MakeBet_FullMethodName         = "/poker.PokerService/MakeBet"
 	PokerService_CallBet_FullMethodName         = "/poker.PokerService/CallBet"
 	PokerService_FoldBet_FullMethodName         = "/poker.PokerService/FoldBet"
@@ -37,6 +39,9 @@ const (
 type PokerServiceClient interface {
 	// Game stream for real-time updates
 	StartGameStream(ctx context.Context, in *StartGameStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GameUpdate], error)
+	// Card visibility management
+	ShowCards(ctx context.Context, in *ShowCardsRequest, opts ...grpc.CallOption) (*ShowCardsResponse, error)
+	HideCards(ctx context.Context, in *HideCardsRequest, opts ...grpc.CallOption) (*HideCardsResponse, error)
 	// Player actions
 	MakeBet(ctx context.Context, in *MakeBetRequest, opts ...grpc.CallOption) (*MakeBetResponse, error)
 	CallBet(ctx context.Context, in *CallBetRequest, opts ...grpc.CallOption) (*CallBetResponse, error)
@@ -76,6 +81,26 @@ func (c *pokerServiceClient) StartGameStream(ctx context.Context, in *StartGameS
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type PokerService_StartGameStreamClient = grpc.ServerStreamingClient[GameUpdate]
+
+func (c *pokerServiceClient) ShowCards(ctx context.Context, in *ShowCardsRequest, opts ...grpc.CallOption) (*ShowCardsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ShowCardsResponse)
+	err := c.cc.Invoke(ctx, PokerService_ShowCards_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pokerServiceClient) HideCards(ctx context.Context, in *HideCardsRequest, opts ...grpc.CallOption) (*HideCardsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HideCardsResponse)
+	err := c.cc.Invoke(ctx, PokerService_HideCards_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
 func (c *pokerServiceClient) MakeBet(ctx context.Context, in *MakeBetRequest, opts ...grpc.CallOption) (*MakeBetResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -155,6 +180,9 @@ func (c *pokerServiceClient) GetLastWinners(ctx context.Context, in *GetLastWinn
 type PokerServiceServer interface {
 	// Game stream for real-time updates
 	StartGameStream(*StartGameStreamRequest, grpc.ServerStreamingServer[GameUpdate]) error
+	// Card visibility management
+	ShowCards(context.Context, *ShowCardsRequest) (*ShowCardsResponse, error)
+	HideCards(context.Context, *HideCardsRequest) (*HideCardsResponse, error)
 	// Player actions
 	MakeBet(context.Context, *MakeBetRequest) (*MakeBetResponse, error)
 	CallBet(context.Context, *CallBetRequest) (*CallBetResponse, error)
@@ -178,6 +206,12 @@ type UnimplementedPokerServiceServer struct{}
 
 func (UnimplementedPokerServiceServer) StartGameStream(*StartGameStreamRequest, grpc.ServerStreamingServer[GameUpdate]) error {
 	return status.Errorf(codes.Unimplemented, "method StartGameStream not implemented")
+}
+func (UnimplementedPokerServiceServer) ShowCards(context.Context, *ShowCardsRequest) (*ShowCardsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ShowCards not implemented")
+}
+func (UnimplementedPokerServiceServer) HideCards(context.Context, *HideCardsRequest) (*HideCardsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HideCards not implemented")
 }
 func (UnimplementedPokerServiceServer) MakeBet(context.Context, *MakeBetRequest) (*MakeBetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method MakeBet not implemented")
@@ -231,6 +265,42 @@ func _PokerService_StartGameStream_Handler(srv interface{}, stream grpc.ServerSt
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type PokerService_StartGameStreamServer = grpc.ServerStreamingServer[GameUpdate]
+
+func _PokerService_ShowCards_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ShowCardsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PokerServiceServer).ShowCards(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PokerService_ShowCards_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PokerServiceServer).ShowCards(ctx, req.(*ShowCardsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PokerService_HideCards_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HideCardsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PokerServiceServer).HideCards(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PokerService_HideCards_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PokerServiceServer).HideCards(ctx, req.(*HideCardsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 func _PokerService_MakeBet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(MakeBetRequest)
@@ -366,6 +436,14 @@ var PokerService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*PokerServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			MethodName: "ShowCards",
+			Handler:    _PokerService_ShowCards_Handler,
+		},
+		{
+			MethodName: "HideCards",
+			Handler:    _PokerService_HideCards_Handler,
+		},
+		{
 			MethodName: "MakeBet",
 			Handler:    _PokerService_MakeBet_Handler,
 		},
@@ -415,8 +493,6 @@ const (
 	LobbyService_ProcessTip_FullMethodName              = "/poker.LobbyService/ProcessTip"
 	LobbyService_SetPlayerReady_FullMethodName          = "/poker.LobbyService/SetPlayerReady"
 	LobbyService_SetPlayerUnready_FullMethodName        = "/poker.LobbyService/SetPlayerUnready"
-	LobbyService_ShowCards_FullMethodName               = "/poker.LobbyService/ShowCards"
-	LobbyService_HideCards_FullMethodName               = "/poker.LobbyService/HideCards"
 	LobbyService_StartNotificationStream_FullMethodName = "/poker.LobbyService/StartNotificationStream"
 )
 
@@ -439,9 +515,6 @@ type LobbyServiceClient interface {
 	// Ready state management
 	SetPlayerReady(ctx context.Context, in *SetPlayerReadyRequest, opts ...grpc.CallOption) (*SetPlayerReadyResponse, error)
 	SetPlayerUnready(ctx context.Context, in *SetPlayerUnreadyRequest, opts ...grpc.CallOption) (*SetPlayerUnreadyResponse, error)
-	// Card visibility management
-	ShowCards(ctx context.Context, in *ShowCardsRequest, opts ...grpc.CallOption) (*ShowCardsResponse, error)
-	HideCards(ctx context.Context, in *HideCardsRequest, opts ...grpc.CallOption) (*HideCardsResponse, error)
 	// Notification stream
 	StartNotificationStream(ctx context.Context, in *StartNotificationStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Notification], error)
 }
@@ -554,26 +627,6 @@ func (c *lobbyServiceClient) SetPlayerUnready(ctx context.Context, in *SetPlayer
 	return out, nil
 }
 
-func (c *lobbyServiceClient) ShowCards(ctx context.Context, in *ShowCardsRequest, opts ...grpc.CallOption) (*ShowCardsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ShowCardsResponse)
-	err := c.cc.Invoke(ctx, LobbyService_ShowCards_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *lobbyServiceClient) HideCards(ctx context.Context, in *HideCardsRequest, opts ...grpc.CallOption) (*HideCardsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(HideCardsResponse)
-	err := c.cc.Invoke(ctx, LobbyService_HideCards_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *lobbyServiceClient) StartNotificationStream(ctx context.Context, in *StartNotificationStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Notification], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &LobbyService_ServiceDesc.Streams[0], LobbyService_StartNotificationStream_FullMethodName, cOpts...)
@@ -612,9 +665,6 @@ type LobbyServiceServer interface {
 	// Ready state management
 	SetPlayerReady(context.Context, *SetPlayerReadyRequest) (*SetPlayerReadyResponse, error)
 	SetPlayerUnready(context.Context, *SetPlayerUnreadyRequest) (*SetPlayerUnreadyResponse, error)
-	// Card visibility management
-	ShowCards(context.Context, *ShowCardsRequest) (*ShowCardsResponse, error)
-	HideCards(context.Context, *HideCardsRequest) (*HideCardsResponse, error)
 	// Notification stream
 	StartNotificationStream(*StartNotificationStreamRequest, grpc.ServerStreamingServer[Notification]) error
 	mustEmbedUnimplementedLobbyServiceServer()
@@ -656,12 +706,6 @@ func (UnimplementedLobbyServiceServer) SetPlayerReady(context.Context, *SetPlaye
 }
 func (UnimplementedLobbyServiceServer) SetPlayerUnready(context.Context, *SetPlayerUnreadyRequest) (*SetPlayerUnreadyResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetPlayerUnready not implemented")
-}
-func (UnimplementedLobbyServiceServer) ShowCards(context.Context, *ShowCardsRequest) (*ShowCardsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ShowCards not implemented")
-}
-func (UnimplementedLobbyServiceServer) HideCards(context.Context, *HideCardsRequest) (*HideCardsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method HideCards not implemented")
 }
 func (UnimplementedLobbyServiceServer) StartNotificationStream(*StartNotificationStreamRequest, grpc.ServerStreamingServer[Notification]) error {
 	return status.Errorf(codes.Unimplemented, "method StartNotificationStream not implemented")
@@ -867,42 +911,6 @@ func _LobbyService_SetPlayerUnready_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
-func _LobbyService_ShowCards_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ShowCardsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(LobbyServiceServer).ShowCards(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: LobbyService_ShowCards_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(LobbyServiceServer).ShowCards(ctx, req.(*ShowCardsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _LobbyService_HideCards_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(HideCardsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(LobbyServiceServer).HideCards(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: LobbyService_HideCards_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(LobbyServiceServer).HideCards(ctx, req.(*HideCardsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _LobbyService_StartNotificationStream_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(StartNotificationStreamRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -960,14 +968,6 @@ var LobbyService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetPlayerUnready",
 			Handler:    _LobbyService_SetPlayerUnready_Handler,
-		},
-		{
-			MethodName: "ShowCards",
-			Handler:    _LobbyService_ShowCards_Handler,
-		},
-		{
-			MethodName: "HideCards",
-			Handler:    _LobbyService_HideCards_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

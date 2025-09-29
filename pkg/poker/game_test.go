@@ -53,7 +53,7 @@ func TestNewGame(t *testing.T) {
 		if player.Balance != 1000 {
 			t.Errorf("Player %d: Expected 1000 balance, got %d", i, player.Balance)
 		}
-		if player.HasFolded {
+		if player.GetCurrentStateString() == "FOLDED" {
 			t.Errorf("Player %d: Expected not folded", i)
 		}
 		if player.HasBet != 0 {
@@ -224,12 +224,15 @@ func TestShowdown(t *testing.T) {
 	}
 
 	// Set up pot
-	game.potManager = NewPotManager()
-	game.potManager.AddBet(0, 50) // Player 1 bet 50
-	game.potManager.AddBet(1, 50) // Player 2 bet 50
+	game.potManager = NewPotManager(2)
+	game.potManager.AddBet(0, 50, game.players) // Player 1 bet 50
+	game.potManager.AddBet(1, 50, game.players) // Player 2 bet 50
 
 	// Run the showdown
-	stateShowdown(game, nil)
+	_, err = game.HandleShowdown()
+	if err != nil {
+		t.Fatalf("HandleShowdown() error = %v", err)
+	}
 
 	// Player 1 should win with pair of Aces
 	if player1.Balance != 100 {
@@ -301,16 +304,19 @@ func TestTieBreakerShowdown(t *testing.T) {
 	}
 
 	// Mark player 3 as folded
-	player3.HasFolded = true
+	player3.stateMachine.Dispatch(playerStateFolded)
 
 	// Set up pot
-	game.potManager = NewPotManager()
-	game.potManager.AddBet(0, 50) // Player 1 bet 50
-	game.potManager.AddBet(1, 50) // Player 2 bet 50
+	game.potManager = NewPotManager(3)
+	game.potManager.AddBet(0, 50, game.players) // Player 1 bet 50
+	game.potManager.AddBet(1, 50, game.players) // Player 2 bet 50
 	// Player 3 folded, no bet
 
 	// Run the showdown
-	stateShowdown(game, nil)
+	_, err = game.HandleShowdown()
+	if err != nil {
+		t.Fatalf("HandleShowdown() error = %v", err)
+	}
 
 	// Players 1 and 2 should tie and split the pot (50 each)
 	if player1.Balance != 50 {
@@ -352,12 +358,13 @@ func TestSplitPotShowdown(t *testing.T) {
 		{suit: Hearts, value: Ace},
 	}
 
-	game.potManager = NewPotManager()
-	game.potManager.AddBet(0, 50)
-	game.potManager.AddBet(1, 50)
+	game.potManager = NewPotManager(2)
+	game.potManager.AddBet(0, 50, game.players)
+	game.potManager.AddBet(1, 50, game.players)
 
 	// Resolve showdown
-	res := game.handleShowdown()
+	res, err := game.handleShowdown()
+	require.NoError(t, err)
 	require.NotNil(t, res)
 
 	// Both players should split 100 → 50 each
@@ -384,29 +391,37 @@ func TestSidePotShowdown(t *testing.T) {
 
 	// Set balances to simulate all-in thresholds via bets recorded in pot manager
 	// We control through PotManager directly for test.
-	game.potManager = NewPotManager()
+	game.potManager = NewPotManager(3)
 
 	// Bets: p3 short 30, p1 50, p2 50 → main 90 (all eligible), side 40 (p1,p2)
-	game.potManager.AddBet(0, 50)
-	game.potManager.AddBet(1, 50)
-	game.potManager.AddBet(2, 30)
+	game.potManager.AddBet(0, 50, game.players)
+	game.potManager.AddBet(1, 50, game.players)
+	game.potManager.AddBet(2, 30, game.players)
 
 	// Hand strengths: p3 wins main, p1 wins side
-	game.players[0].HasFolded = false
-	game.players[1].HasFolded = false
-	game.players[2].HasFolded = false
+	game.players[0].stateMachine.Dispatch(playerStateInGame)
+	game.players[1].stateMachine.Dispatch(playerStateInGame)
+	game.players[2].stateMachine.Dispatch(playerStateInGame)
 
 	// Give explicit evaluated values via EvaluateHand semantics
-	hv3 := EvaluateHand([]Card{{suit: Hearts, value: Five}, {suit: Clubs, value: Five}}, []Card{{suit: Diamonds, value: Five}, {suit: Spades, value: Two}, {suit: Hearts, value: Three}, {suit: Clubs, value: Nine}, {suit: Diamonds, value: Queen}}) // trips
-	hv1 := EvaluateHand([]Card{{suit: Hearts, value: Ace}, {suit: Clubs, value: Ace}}, []Card{{suit: Diamonds, value: King}, {suit: Spades, value: Two}, {suit: Hearts, value: Three}, {suit: Clubs, value: Nine}, {suit: Diamonds, value: Queen}})   // pair aces
-	hv2 := EvaluateHand([]Card{{suit: Hearts, value: Ten}, {suit: Clubs, value: Nine}}, []Card{{suit: Diamonds, value: King}, {suit: Spades, value: Two}, {suit: Hearts, value: Three}, {suit: Clubs, value: Nine}, {suit: Diamonds, value: Queen}})  // pair nines
+	hv3, err := EvaluateHand([]Card{{suit: Hearts, value: Five}, {suit: Clubs, value: Five}}, []Card{{suit: Diamonds, value: Five}, {suit: Spades, value: Two}, {suit: Hearts, value: Three}, {suit: Clubs, value: Nine}, {suit: Diamonds, value: Queen}}) // trips
+	if err != nil {
+		t.Fatalf("EvaluateHand() error = %v", err)
+	}
+	hv1, err := EvaluateHand([]Card{{suit: Hearts, value: Ace}, {suit: Clubs, value: Ace}}, []Card{{suit: Diamonds, value: King}, {suit: Spades, value: Two}, {suit: Hearts, value: Three}, {suit: Clubs, value: Nine}, {suit: Diamonds, value: Queen}}) // pair aces
+	if err != nil {
+		t.Fatalf("EvaluateHand() error = %v", err)
+	}
+	hv2, err := EvaluateHand([]Card{{suit: Hearts, value: Ten}, {suit: Clubs, value: Nine}}, []Card{{suit: Diamonds, value: King}, {suit: Spades, value: Two}, {suit: Hearts, value: Three}, {suit: Clubs, value: Nine}, {suit: Diamonds, value: Queen}}) // pair nines
+	if err != nil {
+		t.Fatalf("EvaluateHand() error = %v", err)
+	}
 
 	game.players[0].HandValue = &hv1
 	game.players[1].HandValue = &hv2
 	game.players[2].HandValue = &hv3
 
-	// Create side pots based on current bets
-	game.potManager.CreateSidePots(game.players)
+	// Pots are automatically built on each bet, no need to call BuildPotsFromTotals
 
 	// Distribute pots
 	game.potManager.DistributePots(game.players)

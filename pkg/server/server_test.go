@@ -925,9 +925,6 @@ func TestSnapshotRestoresCurrentPlayer(t *testing.T) {
 	}
 	require.NotEmpty(t, currentPlayer, "failed to retrieve current player")
 
-	// Simulate the current player disconnecting.
-	require.NoError(t, srv1.markPlayerDisconnected(tableID, currentPlayer))
-
 	// Give the async persistence some time to complete safely.
 	time.Sleep(50 * time.Millisecond)
 
@@ -1027,7 +1024,7 @@ func TestBlindPostingAndBalances(t *testing.T) {
 	require.Contains(t, []string{p1, p2}, currentPlayer)
 
 	// Current player calls to match big blind
-	_, err = srv.Call(ctx, &pokerrpc.CallBetRequest{PlayerId: currentPlayer, TableId: tableID})
+	_, err = srv.CallBet(ctx, &pokerrpc.CallBetRequest{PlayerId: currentPlayer, TableId: tableID})
 	require.NoError(t, err)
 
 	// Fetch updated state

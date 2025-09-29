@@ -106,7 +106,7 @@ func NewGame(cfg GameConfig) (*Game, error) {
 		dealer:          0,
 		deck:            NewDeck(rng),
 		communityCards:  nil,
-		potManager:      NewPotManager(),
+		potManager:      NewPotManager(cfg.NumPlayers),
 		currentBet:      0,
 		round:           0,
 		betRound:        0,
@@ -126,26 +126,22 @@ func NewGame(cfg GameConfig) (*Game, error) {
 // Each state function performs its work and returns the next state function (or nil to terminate)
 
 // stateNewHandDealing handles the NEW_HAND_DEALING phase
-func stateNewHandDealing(entity *Game, callback func(stateName string, event statemachine.StateEvent)) GameStateFn {
+func stateNewHandDealing(entity *Game) GameStateFn {
 	// This state is primarily managed by the table layer
 	// The table handles card dealing and blind posting, then transitions to PRE_FLOP
 	// This state function is mainly for completeness in the state machine
 	entity.phase = pokerrpc.GamePhase_NEW_HAND_DEALING
-	if callback != nil {
-		callback("NEW_HAND_DEALING", statemachine.StateEntered)
-	}
 	return statePreDeal
 }
 
 // statePreDeal prepares the game for a new hand
-func statePreDeal(entity *Game, callback func(stateName string, event statemachine.StateEvent)) GameStateFn {
+func statePreDeal(entity *Game) GameStateFn {
 	// Reset game state for a new hand
 	entity.round++
 
 	// Reset the deck, community cards, pot, etc.
 	entity.deck.Shuffle()
 	entity.communityCards = []Card{}
-	entity.potManager = NewPotManager()
 	entity.currentBet = 0
 	entity.betRound = 0
 
@@ -156,34 +152,23 @@ func statePreDeal(entity *Game, callback func(stateName string, event statemachi
 	// Set phase to PRE_FLOP (game about to start)
 	entity.phase = pokerrpc.GamePhase_PRE_FLOP
 
-	if callback != nil {
-		callback("PRE_DEAL", statemachine.StateEntered)
-	}
-
 	return stateDeal
 }
 
 // stateDeal deals initial cards to players
-func stateDeal(entity *Game, callback func(stateName string, event statemachine.StateEvent)) GameStateFn {
+func stateDeal(entity *Game) GameStateFn {
 	// Note: Card dealing is handled by the table layer to maintain
 	// consistency with existing game flow. This state is mainly for
 	// state machine progression.
-
-	if callback != nil {
-		callback("DEAL", statemachine.StateEntered)
-	}
 
 	// After dealing (handled externally), move to blinds state
 	return stateBlinds
 }
 
 // stateBlinds handles posting small and big blinds and sets the current player
-func stateBlinds(entity *Game, callback func(stateName string, event statemachine.StateEvent)) GameStateFn {
+func stateBlinds(entity *Game) GameStateFn {
 	numPlayers := len(entity.players)
 	if numPlayers < 2 {
-		if callback != nil {
-			callback("END", statemachine.StateEntered)
-		}
 		return stateEnd
 	}
 
@@ -210,11 +195,11 @@ func stateBlinds(entity *Game, callback func(stateName string, event statemachin
 		if amount > p.Balance {
 			// Player cannot cover blind – treat as all-in of remaining balance.
 			amount = p.Balance
-			p.IsAllIn = true
+			p.stateMachine.Dispatch(playerStateAllIn)
 		}
 		p.Balance -= amount
 		p.HasBet += amount
-		entity.potManager.AddBet(pos, amount)
+		entity.potManager.AddBet(pos, amount, entity.players)
 	}
 
 	// Post blinds, guarding against duplicates.
@@ -230,21 +215,14 @@ func stateBlinds(entity *Game, callback func(stateName string, event statemachin
 		entity.currentPlayer = (bigBlindPos + 1) % numPlayers
 	}
 
-	if callback != nil {
-		callback("BLINDS", statemachine.StateEntered)
-	}
-
 	// Move to pre-flop betting
 	return statePreFlop
 }
 
 // statePreFlop handles the pre-flop betting round logic
-func statePreFlop(entity *Game, callback func(stateName string, event statemachine.StateEvent)) GameStateFn {
+func statePreFlop(entity *Game) GameStateFn {
 	// This is a betting round - handled by external logic
 	// Based on betting completion, determine next state
-	if callback != nil {
-		callback("PRE_FLOP", statemachine.StateEntered)
-	}
 
 	switch entity.betRound {
 	case 0: // Pre-flop complete, move to flop
@@ -256,19 +234,10 @@ func statePreFlop(entity *Game, callback func(stateName string, event statemachi
 	}
 }
 
-// stateFlop deals the flop (first 3 community cards)
-func stateFlop(entity *Game, callback func(stateName string, event statemachine.StateEvent)) GameStateFn {
-	// Deal 3 cards to community
-	for i := 0; i < 3; i++ {
-		card, ok := entity.deck.Draw()
-		if !ok {
-			if callback != nil {
-				callback("END", statemachine.StateEntered)
-			}
-			return stateEnd // End game if deck is empty
-		}
-		entity.communityCards = append(entity.communityCards, card)
-	}
+// stateFlop handles the flop betting round (community cards dealt by StateFlop method)
+func stateFlop(entity *Game) GameStateFn {
+	// Community cards are dealt by the StateFlop() method, not here
+	// This state function just handles the betting round logic
 
 	// Reset bets for new betting round (table handles this)
 	entity.currentBet = 0
@@ -276,10 +245,6 @@ func stateFlop(entity *Game, callback func(stateName string, event statemachine.
 
 	// Update phase to FLOP
 	entity.phase = pokerrpc.GamePhase_FLOP
-
-	if callback != nil {
-		callback("FLOP", statemachine.StateEntered)
-	}
 
 	// Check if betting should advance immediately to next phase
 	switch entity.betRound {
@@ -292,17 +257,10 @@ func stateFlop(entity *Game, callback func(stateName string, event statemachine.
 	}
 }
 
-// stateTurn deals the turn (fourth community card)
-func stateTurn(entity *Game, callback func(stateName string, event statemachine.StateEvent)) GameStateFn {
-	// Deal the turn (4th community card)
-	card, ok := entity.deck.Draw()
-	if !ok {
-		if callback != nil {
-			callback("END", statemachine.StateEntered)
-		}
-		return stateEnd // End game if deck is empty
-	}
-	entity.communityCards = append(entity.communityCards, card)
+// stateTurn handles the turn betting round (community cards dealt by StateTurn method)
+func stateTurn(entity *Game) GameStateFn {
+	// Community cards are dealt by the StateTurn() method, not here
+	// This state function just handles the betting round logic
 
 	// Reset bets for new betting round (table handles this)
 	entity.currentBet = 0
@@ -310,10 +268,6 @@ func stateTurn(entity *Game, callback func(stateName string, event statemachine.
 
 	// Update phase to TURN
 	entity.phase = pokerrpc.GamePhase_TURN
-
-	if callback != nil {
-		callback("TURN", statemachine.StateEntered)
-	}
 
 	// Check if betting should advance immediately to next phase
 	switch entity.betRound {
@@ -326,17 +280,10 @@ func stateTurn(entity *Game, callback func(stateName string, event statemachine.
 	}
 }
 
-// stateRiver deals the river (fifth community card)
-func stateRiver(entity *Game, callback func(stateName string, event statemachine.StateEvent)) GameStateFn {
-	// Deal the river (5th community card)
-	card, ok := entity.deck.Draw()
-	if !ok {
-		if callback != nil {
-			callback("END", statemachine.StateEntered)
-		}
-		return stateEnd // End game if deck is empty
-	}
-	entity.communityCards = append(entity.communityCards, card)
+// stateRiver handles the river betting round (community cards dealt by StateRiver method)
+func stateRiver(entity *Game) GameStateFn {
+	// Community cards are dealt by the StateRiver() method, not here
+	// This state function just handles the betting round logic
 
 	// Reset bets for new betting round (table handles this)
 	entity.currentBet = 0
@@ -344,10 +291,6 @@ func stateRiver(entity *Game, callback func(stateName string, event statemachine
 
 	// Update phase to RIVER
 	entity.phase = pokerrpc.GamePhase_RIVER
-
-	if callback != nil {
-		callback("RIVER", statemachine.StateEntered)
-	}
 
 	// Check if betting should advance immediately to showdown
 	switch entity.betRound {
@@ -360,24 +303,17 @@ func stateRiver(entity *Game, callback func(stateName string, event statemachine
 }
 
 // stateShowdown determines the winner of the hand
-func stateShowdown(entity *Game, callback func(stateName string, event statemachine.StateEvent)) GameStateFn {
+func stateShowdown(entity *Game) GameStateFn {
 	// Mark phase as SHOWDOWN; actual showdown resolution is handled by Table.handleShowdown → Game.handleShowdown
 	entity.log.Debugf("stateShowdown: entered showdown state")
 	entity.phase = pokerrpc.GamePhase_SHOWDOWN
-
-	if callback != nil {
-		callback("SHOWDOWN", statemachine.StateEntered)
-	}
 
 	// Remain in SHOWDOWN state until the Table schedules the next hand.
 	return stateShowdown
 }
 
 // stateEnd terminates the game
-func stateEnd(entity *Game, callback func(stateName string, event statemachine.StateEvent)) GameStateFn {
-	if callback != nil {
-		callback("END", statemachine.StateEntered)
-	}
+func stateEnd(entity *Game) GameStateFn {
 	return nil // Return nil to terminate the state machine
 }
 
@@ -393,6 +329,12 @@ func (g *Game) GetPot() int64 {
 func (g *Game) StateFlop() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+
+	// Guard: only deal flop if we haven't already dealt it
+	if len(g.communityCards) >= 3 {
+		g.phase = pokerrpc.GamePhase_FLOP
+		return
+	}
 
 	// Deal 3 cards to community
 	for i := 0; i < 3; i++ {
@@ -413,6 +355,12 @@ func (g *Game) StateTurn() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	// Guard: only deal turn if we haven't already dealt it
+	if len(g.communityCards) >= 4 {
+		g.phase = pokerrpc.GamePhase_TURN
+		return
+	}
+
 	// Deal 1 card to community
 	card, ok := g.deck.Draw()
 	if !ok {
@@ -428,6 +376,12 @@ func (g *Game) StateTurn() {
 func (g *Game) StateRiver() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+
+	// Guard: only deal river if we haven't already dealt it
+	if len(g.communityCards) >= 5 {
+		g.phase = pokerrpc.GamePhase_RIVER
+		return
+	}
 
 	// Deal 1 card to community
 	card, ok := g.deck.Draw()
@@ -460,7 +414,7 @@ func (g *Game) AddToPotForPlayer(playerIndex int, amount int64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	g.potManager.AddBet(playerIndex, amount)
+	g.potManager.AddBet(playerIndex, amount, g.players)
 }
 
 // GetCommunityCards returns a copy of the community cards slice.
@@ -545,16 +499,17 @@ func (g *Game) ResetActionsInRound() {
 }
 
 // ResetForNewHand resets the game state for a new hand while preserving the game instance
-func (g *Game) ResetForNewHand(activePlayers []*Player) {
+func (g *Game) ResetForNewHand(activePlayers []*Player) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	// Update player references for this hand - use the same objects to maintain unified state
 	g.players = activePlayers
+	potManager := NewPotManager(len(activePlayers))
 
 	// Reset hand-specific state
 	g.communityCards = nil
-	g.potManager = NewPotManager()
+	g.potManager = potManager // Reset pot manager for new hand
 	g.currentBet = 0
 	g.round++
 	g.betRound = 0
@@ -593,7 +548,9 @@ func (g *Game) ResetForNewHand(activePlayers []*Player) {
 	g.currentPlayer = -1
 
 	// Reset state machine to NEW_HAND_DEALING
-	g.stateMachine.SetState(stateNewHandDealing)
+	g.stateMachine.Dispatch(stateNewHandDealing)
+
+	return nil
 }
 
 // HandlePlayerFold handles a player folding in the game (external API)
@@ -609,20 +566,35 @@ func (g *Game) handlePlayerFold(playerID string) error {
 	if player == nil {
 		return fmt.Errorf("player not found in game")
 	}
-
 	if g.currentPlayerID() != playerID {
 		return fmt.Errorf("not your turn to act")
 	}
 
-	player.HasFolded = true
+	player.stateMachine.Dispatch(playerStateFolded)
 	player.LastAction = time.Now()
-
-	// Update player state using state machine dispatch
 	g.updatePlayerState(player)
-
 	g.actionsInRound++
-	g.advanceToNextPlayer()
 
+	// Count alive
+	active := 0
+	for _, p := range g.players {
+		if p != nil && p.GetCurrentStateString() != "FOLDED" {
+			active++
+		}
+	}
+
+	// If only one remains, finish NOW via state machine
+	if active == 1 {
+		g.phase = pokerrpc.GamePhase_SHOWDOWN
+		g.stateMachine.Dispatch(stateShowdown)
+		g.log.Debugf("handlePlayerFold: only %d active players, moving to SHOWDOWN", active)
+
+		// Do NOT advance turn after hand is finished
+		return nil
+	}
+
+	// Otherwise continue normal action
+	g.advanceToNextPlayer()
 	return nil
 }
 
@@ -650,7 +622,12 @@ func (g *Game) handlePlayerCall(playerID string) error {
 
 	delta := g.currentBet - player.HasBet
 	if delta > player.Balance {
-		return fmt.Errorf("insufficient balance to call")
+		// Player cannot afford to call - make them all-in with remaining balance
+		g.log.Debugf("Player %s cannot afford to call %d (has %d), going all-in", player.ID, delta, player.Balance)
+		delta = player.Balance
+		player.stateMachine.Dispatch(playerStateAllIn)
+		player.LastAction = time.Now()
+
 	}
 
 	player.Balance -= delta
@@ -728,7 +705,11 @@ func (g *Game) handlePlayerBet(playerID string, amount int64) error {
 
 	delta := amount - player.HasBet
 	if delta > 0 && delta > player.Balance {
-		return fmt.Errorf("insufficient balance")
+		// Player cannot afford the bet - make them all-in with remaining balance
+		g.log.Debugf("Player %s cannot afford to bet %d (has %d), going all-in", player.ID, delta, player.Balance)
+		delta = player.Balance
+		amount = player.HasBet + delta
+		player.stateMachine.Dispatch(playerStateAllIn)
 	}
 
 	if delta > 0 {
@@ -766,15 +747,9 @@ func (g *Game) updatePlayerState(player *Player) {
 		return
 	}
 
-	// Create callback to handle state transition events
-	callback := func(stateName string, event statemachine.StateEvent) {
-		// State transitions are handled by the state functions themselves
-		// This callback just observes the transitions
-	}
-
 	// Dispatch the state machine - the current state function will examine player conditions
 	// and return the appropriate next state function based on Rob Pike's pattern
-	player.stateMachine.Dispatch(callback)
+	player.stateMachine.Dispatch(player.stateMachine.GetCurrentState())
 }
 
 // getPlayerByID finds a player by ID
@@ -812,7 +787,8 @@ func (g *Game) advanceToNextPlayer() {
 			break
 		}
 
-		if !g.players[g.currentPlayer].HasFolded {
+		// Skip folded players and all-in players (they can't act)
+		if g.players[g.currentPlayer].GetCurrentStateString() != "FOLDED" && g.players[g.currentPlayer].GetCurrentStateString() != "ALL_IN" {
 			break
 		}
 	}
@@ -826,132 +802,176 @@ type ShowdownResult struct {
 }
 
 // HandleShowdown processes the showdown logic and returns results (external API)
-func (g *Game) HandleShowdown() *ShowdownResult {
+func (g *Game) HandleShowdown() (*ShowdownResult, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.handleShowdown()
 }
 
 // handleShowdown is the core logic without locking (for internal use)
-func (g *Game) handleShowdown() *ShowdownResult {
-	// Debug: Log that we entered handleShowdown
+func (g *Game) handleShowdown() (*ShowdownResult, error) {
 	g.log.Debugf("handleShowdown: entered showdown processing")
-	// Count active players (non-folded)
-	activePlayers := make([]*Player, 0)
+
+	// Gather active (non-folded) players
+	activePlayers := make([]*Player, 0, len(g.players))
 	for _, player := range g.players {
-		if !player.HasFolded {
+		if player != nil && player.GetCurrentStateString() != "FOLDED" {
 			activePlayers = append(activePlayers, player)
 		}
 	}
 
-	// Track winners and create result
+	// Prepare result
 	result := &ShowdownResult{
 		Winners:    make([]string, 0),
 		WinnerInfo: make([]*pokerrpc.Winner, 0),
-		TotalPot:   g.getPot(),
+		TotalPot:   0, // Will be set after pot rebuilding
 	}
 
-	// If only one player remains, they win automatically without hand evaluation
-	if len(activePlayers) <= 1 {
-		if len(activePlayers) == 1 {
-			winner := activePlayers[0]
-			winnings := g.getPot()
-			winner.Balance += winnings
-			result.Winners = append(result.Winners, winner.ID)
+	// --- Uncontested (fold-win): build pots, award total, reset state
+	if len(activePlayers) == 1 {
+		winner := activePlayers[0]
+		g.log.Infof("HERE ON ONE ACTIVE PLAYER: %s", winner.ID)
 
-			// Create winner notification with their cards
-			result.WinnerInfo = append(result.WinnerInfo, &pokerrpc.Winner{
-				PlayerId: winner.ID,
-				Winnings: winnings,
-				BestHand: CreateHandFromCards(winner.Hand),
-			})
+		sum := int64(0)
+		for _, p := range g.potManager.Pots {
+			sum += p.Amount
 		}
-	} else {
-		// Multiple players remain - need proper hand evaluation
-		validEvaluations := true
 
-		// Check if we have enough cards for evaluation
-		for _, player := range activePlayers {
-			totalCards := len(player.Hand) + len(g.communityCards)
-			if totalCards < 5 {
-				validEvaluations = false
-				break
+		// Total pot for the event
+		result.TotalPot = g.potManager.GetTotalPot()
+
+		// --- Use delta accounting to populate result (avoids “empty winners”)
+		prev := make(map[string]int64, len(g.players))
+		for _, p := range g.players {
+			if p != nil {
+				prev[p.ID] = p.Balance
 			}
 		}
 
-		if validEvaluations {
-			// Evaluate each active player's hand
-			for _, player := range activePlayers {
-				handValue := EvaluateHand(player.Hand, g.communityCards)
-				player.HandValue = &handValue
-				player.HandDescription = GetHandDescription(handValue)
+		g.potManager.DistributePots(g.players)
+
+		// Fill result from actual balance deltas (handles any future edge cases too)
+		totalWinnings := int64(0)
+		for _, p := range g.players {
+			if p == nil {
+				continue
 			}
+			delta := p.Balance - prev[p.ID]
+			if delta > 0 {
+				result.Winners = append(result.Winners, p.ID)
 
-			// Check for any uncalled bets and return them
-			g.potManager.ReturnUncalledBet(g.players)
-
-			// Create side pots if needed
-			g.potManager.CreateSidePots(g.players)
-
-			// Snapshot balances before distribution to compute per-player winnings precisely
-			prevBalances := make(map[string]int64, len(g.players))
-			for _, p := range g.players {
-				prevBalances[p.ID] = p.Balance
-			}
-
-			// Distribute pots to winners
-			g.potManager.DistributePots(g.players)
-
-			// Build winner list based on balance deltas (captures main/side pots and remainder)
-			for _, p := range g.players {
-				delta := p.Balance - prevBalances[p.ID]
-				if delta > 0 {
-					result.Winners = append(result.Winners, p.ID)
-					var handRank pokerrpc.HandRank
-					var bestHand []Card
-					if p.HandValue != nil {
-						handRank = p.HandValue.HandRank
-						bestHand = p.HandValue.BestHand
-					} else {
-						bestHand = p.Hand
+				// Best hand (use hole cards if board < 5)
+				var best []Card
+				if len(p.Hand)+len(g.communityCards) >= 5 {
+					hv, err := EvaluateHand(p.Hand, g.communityCards)
+					if err != nil {
+						return nil, fmt.Errorf("failed to evaluate hand for player %s: %w", p.ID, err)
 					}
-					result.WinnerInfo = append(result.WinnerInfo, &pokerrpc.Winner{
-						PlayerId: p.ID,
-						HandRank: handRank,
-						BestHand: CreateHandFromCards(bestHand),
-						Winnings: delta,
-					})
+					p.HandValue = &hv
+					p.HandDescription = GetHandDescription(hv)
+					best = hv.BestHand
+				} else {
+					best = p.Hand
 				}
-			}
-		} else {
-			// Can't properly evaluate hands - award pot to first active player
-			if len(activePlayers) > 0 {
-				winner := activePlayers[0]
-				winnings := g.getPot()
-				winner.Balance += winnings
-				result.Winners = append(result.Winners, winner.ID)
 
 				result.WinnerInfo = append(result.WinnerInfo, &pokerrpc.Winner{
-					PlayerId: winner.ID,
-					Winnings: winnings,
-					BestHand: CreateHandFromCards(winner.Hand),
+					PlayerId: p.ID,
+					BestHand: CreateHandFromCards(best),
+					Winnings: delta,
 				})
+				totalWinnings += delta
 			}
+		}
+
+		// Now reset for next hand (and clear unswept for clean logs)
+
+		g.phase = pokerrpc.GamePhase_SHOWDOWN
+		g.winners = result.Winners
+		g.log.Infof("result: %+v", result)
+		return result, nil
+	}
+
+	// --- True showdown: require enough cards to evaluate
+	for _, p := range activePlayers {
+		if len(p.Hand)+len(g.communityCards) < 5 {
+			msg := fmt.Sprintf("invalid showdown: player %s has insufficient cards (hole=%d, board=%d)",
+				p.ID, len(p.Hand), len(g.communityCards))
+			g.log.Errorf(msg)
+			panic(msg)
 		}
 	}
 
-	// Set phase to showdown
+	// Evaluate each active player's hand
+	for _, p := range activePlayers {
+		hv, err := EvaluateHand(p.Hand, g.communityCards)
+		if err != nil {
+			return nil, fmt.Errorf("failed to evaluate hand for player %s: %w", p.ID, err)
+		}
+		p.HandValue = &hv
+		p.HandDescription = GetHandDescription(hv)
+		g.log.Debugf("handleShowdown: player %s hand=%v description=%s", p.ID, p.Hand, p.HandDescription)
+	}
+
+	// Set TotalPot after rebuilding pots
+	result.TotalPot = g.potManager.GetTotalPot()
+
+	g.log.Debugf("handleShowdown: total pots=%d", len(g.potManager.Pots))
+	for i, pot := range g.potManager.Pots {
+		g.log.Debugf("handleShowdown: pot %d amount=%d eligible_players=%v", i, pot.Amount, pot.Eligibility)
+	}
+
+	// Snapshot balances to compute exact deltas
+	prev := make(map[string]int64, len(g.players))
+	for _, p := range g.players {
+		if p != nil {
+			prev[p.ID] = p.Balance
+			g.log.Debugf("handleShowdown: player %s balance before distribution=%d", p.ID, p.Balance)
+		}
+	}
+
+	// Distribute pots
+	if err := g.potManager.DistributePots(g.players); err != nil {
+		g.log.Errorf("Failed to distribute pots: %v", err)
+		return nil, err
+	}
+
+	// Collect winners by positive delta
+	for _, p := range g.players {
+		if p == nil {
+			continue
+		}
+		delta := p.Balance - prev[p.ID]
+		g.log.Debugf("handleShowdown: player %s balance after distribution=%d delta=%d", p.ID, p.Balance, delta)
+		if delta > 0 {
+			result.Winners = append(result.Winners, p.ID)
+			var handRank pokerrpc.HandRank
+			var best []Card
+			if p.HandValue != nil {
+				handRank = p.HandValue.HandRank
+				best = p.HandValue.BestHand
+			} else {
+				best = p.Hand
+			}
+			result.WinnerInfo = append(result.WinnerInfo, &pokerrpc.Winner{
+				PlayerId: p.ID,
+				HandRank: handRank,
+				BestHand: CreateHandFromCards(best),
+				Winnings: delta,
+			})
+		}
+	}
+
+	// Assertion helper: log pot sums to catch regressions
+	totalWinnings := int64(0)
+	for _, winner := range result.WinnerInfo {
+		totalWinnings += winner.Winnings
+	}
+
+	// Mark phase and cache winners
 	g.phase = pokerrpc.GamePhase_SHOWDOWN
 	g.winners = result.Winners
 
-	// Schedule auto-start if configured
-
-	return result
-}
-
-// getPot is the core logic without locking (for internal use)
-func (g *Game) getPot() int64 {
-	return g.potManager.GetTotalPot()
+	return result, nil
 }
 
 // MaybeAdvancePhase checks if betting round is finished and progresses the game phase (external API)
@@ -973,10 +993,11 @@ func (g *Game) maybeAdvancePhase() {
 	g.log.Debugf("maybeAdvancePhase: phase=%v actionsInRound=%d currentBet=%d",
 		g.phase, g.actionsInRound, g.currentBet)
 
-	// Count active players (non-folded) from game players
+	// Count active players (non-folded and non-all-in) from game players
+	// All-in players can't act, so they don't count toward the action requirement
 	activePlayers := 0
 	for _, p := range g.players {
-		if !p.HasFolded {
+		if p.GetCurrentStateString() != "FOLDED" && p.GetCurrentStateString() != "ALL_IN" {
 			activePlayers++
 		}
 	}
@@ -984,7 +1005,7 @@ func (g *Game) maybeAdvancePhase() {
 	// If only one player remains, advance to showdown
 	if activePlayers <= 1 {
 		g.phase = pokerrpc.GamePhase_SHOWDOWN
-		g.stateMachine.SetState(stateShowdown)
+		g.stateMachine.Dispatch(stateShowdown)
 		g.log.Debugf("maybeAdvancePhase: only %d active players, moving to SHOWDOWN", activePlayers)
 		return
 	}
@@ -1000,9 +1021,14 @@ func (g *Game) maybeAdvancePhase() {
 	}
 
 	// Check if all active players have matching bets
+	// All-in players are considered "matched" even if their bet is less than currentBet
 	unmatchedPlayers := 0
 	for _, p := range g.players {
-		if p.HasFolded {
+		if p.GetCurrentStateString() == "FOLDED" {
+			continue
+		}
+		// All-in players are considered matched regardless of their bet amount
+		if p.GetCurrentStateString() == "ALL_IN" {
 			continue
 		}
 		if p.HasBet != g.currentBet {
@@ -1019,19 +1045,19 @@ func (g *Game) maybeAdvancePhase() {
 	switch g.phase {
 	case pokerrpc.GamePhase_PRE_FLOP:
 		g.StateFlop()
-		g.stateMachine.SetState(stateFlop)
+		g.stateMachine.Dispatch(stateFlop)
 		g.log.Debug("maybeAdvancePhase: advanced to FLOP")
 	case pokerrpc.GamePhase_FLOP:
 		g.StateTurn()
-		g.stateMachine.SetState(stateTurn)
+		g.stateMachine.Dispatch(stateTurn)
 		g.log.Debug("maybeAdvancePhase: advanced to TURN")
 	case pokerrpc.GamePhase_TURN:
 		g.StateRiver()
-		g.stateMachine.SetState(stateRiver)
+		g.stateMachine.Dispatch(stateRiver)
 		g.log.Debug("maybeAdvancePhase: advanced to RIVER")
 	case pokerrpc.GamePhase_RIVER:
 		g.phase = pokerrpc.GamePhase_SHOWDOWN
-		g.stateMachine.SetState(stateShowdown)
+		g.stateMachine.Dispatch(stateShowdown)
 		g.log.Debug("maybeAdvancePhase: advanced to SHOWDOWN")
 		return
 	}
@@ -1052,7 +1078,7 @@ func (g *Game) maybeAdvancePhase() {
 
 	// Set the new current player's LastAction to now for the new betting round
 	if g.currentPlayer >= 0 && g.currentPlayer < len(g.players) {
-		if !g.players[g.currentPlayer].HasFolded {
+		if g.players[g.currentPlayer].GetCurrentStateString() != "FOLDED" {
 			g.players[g.currentPlayer].LastAction = time.Now()
 		}
 	}
@@ -1106,7 +1132,7 @@ func (g *Game) initializeCurrentPlayer() {
 		}
 
 		// Use the unified player state directly
-		if !g.players[g.currentPlayer].HasFolded {
+		if g.players[g.currentPlayer].GetCurrentStateString() != "FOLDED" {
 			break
 		}
 
@@ -1228,19 +1254,22 @@ func (g *Game) scheduleAutoStart() {
 
 		readyCount := 0
 		for _, player := range g.players {
+			// Count players who have sufficient balance (folded status will be reset for new hand)
 			if player.Balance >= g.config.BigBlind {
 				readyCount++
+				log.Debugf("Player %s ready for auto-start: balance=%d >= bigBlind=%d", player.ID, player.Balance, g.config.BigBlind)
+			} else {
+				log.Debugf("Player %s not ready for auto-start: balance=%d < bigBlind=%d", player.ID, player.Balance, g.config.BigBlind)
 			}
 		}
 
 		minRequired := callbacks.MinPlayers()
+		log.Debugf("Auto-start check: readyCount=%d, minRequired=%d", readyCount, minRequired)
 		if readyCount >= minRequired {
-			log.Debugf("Auto-starting new hand with %d players after showdown", readyCount)
 			err := callbacks.StartNewHand()
 			if err != nil {
 				log.Debugf("Auto-start new hand failed: %v", err)
 			} else {
-				log.Debugf("Auto-started new hand successfully with %d players", readyCount)
 				if callbacks.OnNewHandStarted != nil {
 					// Invoke the callback
 					go callbacks.OnNewHandStarted()
@@ -1298,8 +1327,6 @@ func (g *Game) GetStateSnapshot() GameStateSnapshot {
 			Balance:         player.Balance,
 			StartingBalance: player.StartingBalance,
 			HasBet:          player.HasBet,
-			HasFolded:       player.HasFolded,
-			IsAllIn:         player.IsAllIn,
 			IsDealer:        player.IsDealer,
 			IsTurn:          player.IsTurn,
 			Hand:            make([]Card, len(player.Hand)),
@@ -1316,11 +1343,16 @@ func (g *Game) GetStateSnapshot() GameStateSnapshot {
 	communityCardsCopy := make([]Card, len(g.communityCards))
 	copy(communityCardsCopy, g.communityCards)
 
+	// Calculate pot amount based on game phase
+	var potAmount int64
+	// During showdown, use GetTotalPot() after pots have been built
+	potAmount = g.potManager.GetTotalPot()
+
 	return GameStateSnapshot{
 		Dealer:         g.dealer,
 		CurrentPlayer:  g.currentPlayer,
 		CurrentBet:     g.currentBet,
-		Pot:            g.potManager.GetTotalPot(),
+		Pot:            potAmount,
 		Round:          g.round,
 		BetRound:       g.betRound,
 		CommunityCards: communityCardsCopy,
@@ -1349,7 +1381,7 @@ func (g *Game) ForceSetPot(amount int64) {
 	defer g.mu.Unlock()
 
 	if g.potManager == nil {
-		g.potManager = NewPotManager()
+		g.potManager = NewPotManager(len(g.players))
 	}
 
 	// Ensure there is at least a main pot.

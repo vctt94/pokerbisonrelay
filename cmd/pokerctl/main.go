@@ -36,6 +36,7 @@ var (
 	grpcInsecure    = flag.Bool("grpcinsecure", false, "Use insecure gRPC (no TLS) - tests only")
 	offline         = flag.Bool("offline", false, "Skip BisonRelay init (tests only)")
 	playerID        = flag.String("id", "", "Explicit player ID (offline mode)")
+	payoutAddress   = flag.String("payoutaddress", "", "Address to payout to")
 )
 
 func main() {
@@ -48,86 +49,44 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  create-table [opts]              Create table; prints table ID")
 		fmt.Fprintln(os.Stderr, "  join --table-id ID               Join a table")
 		fmt.Fprintln(os.Stderr, "  leave                            Leave current table")
-		fmt.Fprintln(os.Stderr, "  ready set|unset                  Set or unset ready state")
+		fmt.Fprintln(os.Stderr, "  ready set|unset [--table-id ID]  Set or unset ready state")
 		fmt.Fprintln(os.Stderr, "  state [--table-id ID]            Print game state (JSON)")
 		fmt.Fprintln(os.Stderr, "  stream [--table-id ID]           Stream game updates (JSON)")
-		fmt.Fprintln(os.Stderr, "  act check|call|bet N|raise N|fold Perform an action")
-		fmt.Fprintln(os.Stderr, "  autoplay-one-hand                Auto check/call until showdown")
+		fmt.Fprintln(os.Stderr, "  events [--table-id ID] [--types T1,T2]  Stream server events (notifications) as JSON")
+		fmt.Fprintln(os.Stderr, "  wait --type T [--table-id ID] [--timeout D]  Block until event arrives; print it as JSON")
+		fmt.Fprintln(os.Stderr, "  act check|call|bet N|raise N|fold [--table-id ID]  Perform an action")
 		fmt.Fprintln(os.Stderr, "  last-winners [--table-id ID]     Print last hand winners (JSON)")
 		fmt.Fprintln(os.Stderr, "\nGlobal flags:")
 		flag.PrintDefaults()
 	}
 
-	// Suppress default flag errors to avoid noisy usage on subcommands
 	flag.CommandLine.SetOutput(io.Discard)
 	flag.Parse()
 	if flag.NArg() < 1 {
 		flag.Usage()
 		os.Exit(2)
 	}
-
 	cmd := flag.Arg(0)
 
-	cfg := &client.PokerClientConfig{}
-	if err := cfg.LoadConfig("pokerclient", *dataDir); err != nil {
+	cfg, err := client.LoadConfig("pokerclient", *dataDir, client.ConfigOverrides{
+		BRClientRPCURL:  *rpcURL,
+		BRClientCert:    *brClientCert,
+		BRClientRPCCert: *brClientRPCCert,
+		BRClientRPCKey:  *brClientRPCKey,
+		RPCUser:         *rpcUser,
+		RPCPass:         *rpcPass,
+		GRPCHost:        *grpcHost,
+		GRPCPort:        *grpcPort,
+		GRPCServerCert:  *grpcServerCert,
+		PayoutAddress:   *payoutAddress,
+	})
+	if err != nil {
 		fmt.Printf("Configuration error: %v\n", err)
 		os.Exit(1)
 	}
 
-	flagOverrides := make(map[string]interface{})
-	if *rpcURL != "" {
-		flagOverrides["rpcurl"] = *rpcURL
-	}
-	if *grpcServerCert != "" {
-		flagOverrides["grpcservercert"] = *grpcServerCert
-	}
-	if *brClientCert != "" {
-		flagOverrides["brclientcert"] = *brClientCert
-	}
-	if *brClientRPCCert != "" {
-		flagOverrides["brclientrpccert"] = *brClientRPCCert
-	}
-	if *brClientRPCKey != "" {
-		flagOverrides["brclientrpckey"] = *brClientRPCKey
-	}
-	if *rpcUser != "" {
-		flagOverrides["rpcuser"] = *rpcUser
-	}
-	if *rpcPass != "" {
-		flagOverrides["rpcpass"] = *rpcPass
-	}
-	if *grpcHost != "" {
-		flagOverrides["grpchost"] = *grpcHost
-	}
-	if *grpcPort != "" {
-		flagOverrides["grpcport"] = *grpcPort
-	}
-	if *logFile != "" {
-		flagOverrides["logfile"] = *logFile
-	}
-	if *maxLogFiles != 10 {
-		flagOverrides["maxlogfiles"] = *maxLogFiles
-	}
-	if *maxBufferLines != 1000 {
-		flagOverrides["maxbufferlines"] = *maxBufferLines
-	}
-	if *debug != "" {
-		flagOverrides["debug"] = *debug
-	}
-	if *grpcInsecure {
-		flagOverrides["grpcinsecure"] = true
-	}
-	if *offline {
-		flagOverrides["offline"] = true
-	}
-	if *playerID != "" {
-		flagOverrides["id"] = *playerID
-	}
-	cfg.SetConfigValues(flagOverrides)
-
-	// Minimal validation for GRPC connectivity
-	if cfg.GRPCHost == "" || cfg.GRPCPort == "" {
-		fmt.Println("grpchost and grpcport are required (from config file or flags)")
+	if err := cfg.ValidateConfig(); err != nil {
+		fmt.Printf("Configuration validation error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -197,14 +156,20 @@ func main() {
 		}
 		return
 
-	case "act":
-		if err := handleAct(ctx, pcli, flag.Args()[1:]); err != nil {
+	case "events":
+		if err := handleEvents(ctx, pcli, flag.Args()[1:]); err != nil {
 			fatalErr(err)
 		}
 		return
 
-	case "autoplay-one-hand":
-		if err := handleAutoplayOneHand(ctx, pcli, flag.Args()[1:]); err != nil {
+	case "wait":
+		if err := handleWait(ctx, pcli, flag.Args()[1:]); err != nil {
+			fatalErr(err)
+		}
+		return
+
+	case "act":
+		if err := handleAct(ctx, pcli, flag.Args()[1:]); err != nil {
 			fatalErr(err)
 		}
 		return
@@ -292,7 +257,6 @@ func handleTables(ctx context.Context, pcli *client.PokerClient) error {
 }
 
 func handleCreateTable(ctx context.Context, pcli *client.PokerClient, args []string) error {
-	// Use sub-FlagSet to avoid global flag confusion
 	fs := flag.NewFlagSet("create-table", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	smallBlind := fs.Int64("small-blind", 5, "Small blind")
@@ -361,8 +325,7 @@ func handleState(ctx context.Context, pcli *client.PokerClient, args []string) e
 		return err
 	}
 
-	// Annotate players with stack alias; optionally include DCR balance.
-	// - players[].balance in GameUpdate is the in-game poker chip stack.
+	// Re-label balance->stack and optionally add DCR account balance.
 	var raw map[string]interface{}
 	if b, err := json.Marshal(resp.GameState); err == nil {
 		_ = json.Unmarshal(b, &raw)
@@ -374,11 +337,9 @@ func handleState(ctx context.Context, pcli *client.PokerClient, args []string) e
 				if !ok {
 					continue
 				}
-				// Add stack alias for clarity
 				if bal, ok := pm["balance"]; ok {
 					pm["stack"] = bal
 				}
-				// Optionally fetch and add DCR account balance (disabled by default)
 				if !*noDCR {
 					if pid, ok := pm["id"].(string); ok && pid != "" {
 						if balResp, err := pcli.LobbyService.GetBalance(ctx, &pokerrpc.GetBalanceRequest{PlayerId: pid}); err == nil {
@@ -436,6 +397,161 @@ func handleStream(ctx context.Context, pcli *client.PokerClient, args []string) 
 	}
 }
 
+// --- Events (Notifications) ---
+
+func handleEvents(ctx context.Context, pcli *client.PokerClient, args []string) error {
+	fs := flag.NewFlagSet("events", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	tableID := fs.String("table-id", "", "Table ID to filter (optional)")
+	typesCSV := fs.String("types", "", "Comma-separated event types to include (e.g. SHOWDOWN_RESULT,NEW_HAND_STARTED)")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("events: %w", err)
+	}
+	typeFilter := parseTypes(*typesCSV)
+
+	// NOTE: adjust these to your client API
+	if err := pcli.StartNotificationStream(ctx); err != nil {
+		return err
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	for {
+		select {
+		case n := <-pcli.NotificationsCh: // NOTE: channel name in your client
+			if n == nil {
+				continue
+			}
+			if *tableID != "" && n.TableId != *tableID {
+				continue
+			}
+			if len(typeFilter) > 0 && !typeFilter[n.Type.String()] {
+				continue
+			}
+			if err := enc.Encode(n); err != nil {
+				return err
+			}
+		case err := <-pcli.ErrorsCh:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func gameStarted(ctx context.Context, pcli *client.PokerClient, tableID string) (bool, *pokerrpc.GameUpdate, error) {
+	resp, err := pcli.PokerService.GetGameState(ctx, &pokerrpc.GetGameStateRequest{TableId: tableID})
+	if err != nil {
+		return false, nil, err
+	}
+	if resp == nil || resp.GameState == nil {
+		return false, nil, nil
+	}
+	return resp.GameState.GameStarted, resp.GameState, nil
+}
+
+func handleWait(ctx context.Context, pcli *client.PokerClient, args []string) error {
+	fs := flag.NewFlagSet("wait", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	wantType := fs.String("type", "", "Event type to wait for (e.g. SHOWDOWN_RESULT, NEW_HAND_STARTED)")
+	tableID := fs.String("table-id", "", "Filter by table ID (optional)")
+	timeoutStr := fs.String("timeout", "2m", "Timeout (e.g. 30s, 2m, 5m)")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("wait: %w", err)
+	}
+	if *wantType == "" {
+		return errors.New("wait: --type is required")
+	}
+	to, err := time.ParseDuration(*timeoutStr)
+	if err != nil {
+		return fmt.Errorf("wait: invalid --timeout: %w", err)
+	}
+	// Map string -> enum once
+	var want pokerrpc.NotificationType
+	if v, ok := pokerrpc.NotificationType_value[*wantType]; ok {
+		want = pokerrpc.NotificationType(v)
+	} else {
+		want = parseNotificationTypeRelaxed(*wantType)
+		if want == pokerrpc.NotificationType_UNKNOWN {
+			return fmt.Errorf("wait: unknown event type %q", *wantType)
+		}
+	}
+
+	// --- PRECHECK for GAME_STARTED (race-safe) ---
+	if want == pokerrpc.NotificationType_GAME_STARTED {
+		if *tableID == "" {
+			// best effort: derive current table
+			tid := pcli.GetCurrentTableID()
+			if tid != "" {
+				*tableID = tid
+			}
+		}
+		if *tableID != "" {
+			started, _, err := gameStarted(ctx, pcli, *tableID)
+			if err == nil && started {
+				// Emit a synthetic notification payload so callers get JSON they expect
+				n := &pokerrpc.Notification{
+					Type:    pokerrpc.NotificationType_GAME_STARTED,
+					TableId: *tableID,
+					Message: "precheck: game already started",
+				}
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(n)
+			}
+		}
+	}
+
+	// Start the notification stream and wait
+	if err := pcli.StartNotificationStream(ctx); err != nil {
+		return err
+	}
+	timer := time.NewTimer(to)
+	defer timer.Stop()
+
+	for {
+		select {
+		case n := <-pcli.NotificationsCh:
+			if n == nil {
+				continue
+			}
+			if n.Type != want {
+				continue
+			}
+			if *tableID != "" && n.TableId != *tableID {
+				continue
+			}
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(n)
+
+		case err := <-pcli.ErrorsCh:
+			return err
+
+		case <-timer.C:
+			// --- POSTCHECK on timeout (covers just-missed events) ---
+			if want == pokerrpc.NotificationType_GAME_STARTED && *tableID != "" {
+				if ok, _, err := gameStarted(ctx, pcli, *tableID); err == nil && ok {
+					n := &pokerrpc.Notification{
+						Type:    pokerrpc.NotificationType_GAME_STARTED,
+						TableId: *tableID,
+						Message: "postcheck: game is started",
+					}
+					enc := json.NewEncoder(os.Stdout)
+					enc.SetIndent("", "  ")
+					return enc.Encode(n)
+				}
+			}
+			return errors.New("wait: timeout")
+
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// --- Actions ---
+
 func handleAct(ctx context.Context, pcli *client.PokerClient, args []string) error {
 	fs := flag.NewFlagSet("act", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -457,14 +573,13 @@ func handleAct(ctx context.Context, pcli *client.PokerClient, args []string) err
 		}
 	}
 
-	sub := rest[0]
-	switch sub {
+	switch rest[0] {
 	case "check":
 		return pcli.Check(ctx)
 	case "fold":
 		return pcli.Fold(ctx)
 	case "call":
-		// Use the dedicated Call RPC via client wrapper to avoid fetching state first
+		// Event-directed: let the server figure the amount from state.
 		return pcli.Call(ctx, 0)
 	case "bet", "raise":
 		if len(rest) < 2 {
@@ -473,61 +588,7 @@ func handleAct(ctx context.Context, pcli *client.PokerClient, args []string) err
 		amt := mustAtoi64(rest[1])
 		return pcli.Bet(ctx, amt)
 	default:
-		return fmt.Errorf("unknown act subcommand: %s", sub)
-	}
-}
-
-func handleAutoplayOneHand(ctx context.Context, pcli *client.PokerClient, args []string) error {
-	fs := flag.NewFlagSet("autoplay-one-hand", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	tableID := fs.String("table-id", "", "Table ID")
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("autoplay-one-hand: %w", err)
-	}
-	if *tableID != "" {
-		if err := pcli.JoinTable(ctx, *tableID); err != nil {
-			return err
-		}
-	}
-	if pcli.GetCurrentTableID() == "" {
-		return errors.New("join a table first")
-	}
-	// Start stream
-	if err := pcli.StartGameStream(ctx); err != nil {
-		return err
-	}
-	deadline := time.NewTimer(4 * time.Minute)
-	defer deadline.Stop()
-
-	for {
-		select {
-		case <-deadline.C:
-			return errors.New("autoplay timeout")
-		case msg := <-pcli.UpdatesCh:
-			gu, ok := (any)(msg).(client.GameUpdateMsg)
-			if !ok || gu == nil {
-				continue
-			}
-			u := (*pokerrpc.GameUpdate)(gu)
-			if u.GameStarted && u.Phase == pokerrpc.GamePhase_SHOWDOWN {
-				// Slight delay to allow server to settle
-				time.Sleep(500 * time.Millisecond)
-				return nil
-			}
-			if u.CurrentPlayer == pcli.ID {
-				if u.CurrentBet > 0 {
-					_ = pcli.Call(ctx, u.CurrentBet)
-				} else {
-					_ = pcli.Check(ctx)
-				}
-				// avoid spamming actions
-				time.Sleep(200 * time.Millisecond)
-			}
-		case err := <-pcli.ErrorsCh:
-			return err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		return fmt.Errorf("unknown act subcommand: %s", rest[0])
 	}
 }
 
@@ -554,6 +615,8 @@ func handleLastWinners(ctx context.Context, pcli *client.PokerClient, args []str
 	return enc.Encode(resp)
 }
 
+// --- Helpers ---
+
 func indexOf(ss []string, s string) int {
 	for i, v := range ss {
 		if v == s {
@@ -563,42 +626,42 @@ func indexOf(ss []string, s string) int {
 	return -1
 }
 
-func valueAfter(args []string, key string) string {
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == key {
-			if i+1 < len(args) {
-				return args[i+1]
-			}
-			return ""
-		}
-		if strings.HasPrefix(arg, key+"=") {
-			return strings.TrimPrefix(arg, key+"=")
-		}
-	}
-	return ""
-}
-
-func splitKV(arg string) (string, string) {
-	arg = strings.TrimPrefix(arg, "--")
-	if kv := strings.SplitN(arg, "=", 2); len(kv) == 2 {
-		return kv[0], kv[1]
-	}
-	return arg, ""
-}
-
-func mustAtoi(s string) int {
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		fatalErr(err)
-	}
-	return n
-}
-
 func mustAtoi64(s string) int64 {
 	n, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
 		fatalErr(err)
 	}
 	return n
+}
+
+func parseTypes(csv string) map[string]bool {
+	if csv == "" {
+		return nil
+	}
+	set := make(map[string]bool)
+	for _, t := range strings.Split(csv, ",") {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		set[t] = true
+	}
+	return set
+}
+
+func parseNotificationTypeRelaxed(s string) pokerrpc.NotificationType {
+	s = strings.TrimSpace(strings.ToUpper(strings.ReplaceAll(s, " ", "_")))
+	for k, v := range pokerrpc.NotificationType_value {
+		if strings.EqualFold(k, s) {
+			return pokerrpc.NotificationType(v)
+		}
+	}
+	// try matching by suffix or partials (e.g., "SHOWDOWN_RESULT" vs "SHOWDOWN")
+	for k, v := range pokerrpc.NotificationType_value {
+		ku := strings.ToUpper(k)
+		if strings.Contains(ku, s) || strings.Contains(s, ku) {
+			return pokerrpc.NotificationType(v)
+		}
+	}
+	return pokerrpc.NotificationType_UNKNOWN
 }

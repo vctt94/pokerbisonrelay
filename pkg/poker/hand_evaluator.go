@@ -1,6 +1,7 @@
 package poker
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/chehsunliu/poker"
@@ -101,9 +102,10 @@ func intToValue(value int) Value {
 	}
 }
 
-// convertCardToChehsunliu converts our Card type to the chehsunliu/poker Card type
-func convertCardToChehsunliu(card Card) poker.Card {
-	// Convert our value to chehsunliu string format
+// convertCardToChehsunliu converts our Card type to the chehsunliu/poker Card type.
+// Returns an error if the rank or suit is invalid instead of silently defaulting.
+func convertCardToChehsunliu(card Card) (poker.Card, error) {
+	// Rank
 	var rankChar byte
 	switch Value(card.GetValue()) {
 	case Two:
@@ -133,10 +135,11 @@ func convertCardToChehsunliu(card Card) poker.Card {
 	case Ace:
 		rankChar = 'A'
 	default:
-		rankChar = '2' // fallback
+		var emptyCard poker.Card
+		return emptyCard, fmt.Errorf("invalid rank: %v", card.GetValue())
 	}
 
-	// Convert our suit to chehsunliu string format
+	// Suit
 	var suitChar byte
 	switch Suit(card.GetSuit()) {
 	case Spades:
@@ -148,11 +151,12 @@ func convertCardToChehsunliu(card Card) poker.Card {
 	case Clubs:
 		suitChar = 'c'
 	default:
-		suitChar = 's' // fallback
+		var emptyCard poker.Card
+		return emptyCard, fmt.Errorf("invalid suit: %v", card.GetSuit())
 	}
 
-	cardStr := string([]byte{rankChar, suitChar})
-	return poker.NewCard(cardStr)
+	cs := string([]byte{rankChar, suitChar})
+	return poker.NewCard(cs), nil
 }
 
 // convertRankClassToHandRank converts chehsunliu rank class to our HandRank
@@ -208,15 +212,19 @@ func convertRankClassToGRPCHandRank(rankClass int32) pokerrpc.HandRank {
 }
 
 // EvaluateHand evaluates a player's best 5-card hand from their 2 hole cards and the 5 community cards
-func EvaluateHand(holeCards []Card, communityCards []Card) HandValue {
+func EvaluateHand(holeCards []Card, communityCards []Card) (HandValue, error) {
 	// Combine hole cards and community cards
 	allCards := append([]Card{}, holeCards...)
 	allCards = append(allCards, communityCards...)
 
 	// Convert to chehsunliu format
-	chehsunliuCards := make([]poker.Card, len(allCards))
-	for i, card := range allCards {
-		chehsunliuCards[i] = convertCardToChehsunliu(card)
+	chehsunliuCards := make([]poker.Card, 0, len(allCards))
+	for _, card := range allCards {
+		convertedCard, err := convertCardToChehsunliu(card)
+		if err != nil {
+			return HandValue{}, fmt.Errorf("failed to convert card: %w", err)
+		}
+		chehsunliuCards = append(chehsunliuCards, convertedCard)
 	}
 
 	// Evaluate using chehsunliu library
@@ -224,30 +232,40 @@ func EvaluateHand(holeCards []Card, communityCards []Card) HandValue {
 	rankClass := poker.RankClass(rank)
 	rankString := poker.RankString(rank)
 
+	// Get best 5 cards
+	bestCards, err := getBestFiveCards(allCards)
+	if err != nil {
+		return HandValue{}, fmt.Errorf("failed to get best five cards: %w", err)
+	}
+
 	// Create HandValue with chehsunliu results
 	handValue := HandValue{
 		Rank:            convertRankClassToHandRank(rankClass),
-		RankValue:       int(rank),                  // Use the actual rank value for comparison
-		Kickers:         []int{},                    // Simplified - chehsunliu handles this internally
-		BestHand:        getBestFiveCards(allCards), // Get best 5 cards
+		RankValue:       int(rank), // Use the actual rank value for comparison
+		Kickers:         []int{},   // Simplified - chehsunliu handles this internally
+		BestHand:        bestCards, // Get best 5 cards
 		HandRank:        convertRankClassToGRPCHandRank(rankClass),
 		HandDescription: rankString,
 	}
 
-	return handValue
+	return handValue, nil
 }
 
 // getBestFiveCards returns the best 5 cards from a hand using chehsunliu evaluation
-func getBestFiveCards(cards []Card) []Card {
+func getBestFiveCards(cards []Card) ([]Card, error) {
 	if len(cards) <= 5 {
 		// If we have 5 or fewer cards, return them all
-		return cards
+		return cards, nil
 	}
 
 	// Convert all cards to chehsunliu format
-	chehsunliuCards := make([]poker.Card, len(cards))
-	for i, card := range cards {
-		chehsunliuCards[i] = convertCardToChehsunliu(card)
+	chehsunliuCards := make([]poker.Card, 0, len(cards))
+	for _, card := range cards {
+		convertedCard, err := convertCardToChehsunliu(card)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert card: %w", err)
+		}
+		chehsunliuCards = append(chehsunliuCards, convertedCard)
 	}
 
 	// Use chehsunliu to find the best 5-card combination
@@ -263,9 +281,13 @@ func getBestFiveCards(cards []Card) []Card {
 	combinations := generateCombinations(cards, 5)
 	for _, combo := range combinations {
 		// Convert this combination to chehsunliu format
-		comboChehsunliu := make([]poker.Card, 5)
-		for i, card := range combo {
-			comboChehsunliu[i] = convertCardToChehsunliu(card)
+		comboChehsunliu := make([]poker.Card, 0, 5)
+		for _, card := range combo {
+			convertedCard, err := convertCardToChehsunliu(card)
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert card in combination: %w", err)
+			}
+			comboChehsunliu = append(comboChehsunliu, convertedCard)
 		}
 
 		// Check if this combination produces the same rank as our best
@@ -283,7 +305,7 @@ func getBestFiveCards(cards []Card) []Card {
 		bestCards = sortedCards[:5]
 	}
 
-	return bestCards
+	return bestCards, nil
 }
 
 // generateCombinations generates all possible k-combinations from a slice of cards
