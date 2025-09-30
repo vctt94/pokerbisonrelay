@@ -891,13 +891,35 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 		return result, nil
 	}
 
-	// --- True showdown: require enough cards to evaluate
+	// --- True showdown: ensure board is fully dealt if multiple players remain
+	if len(activePlayers) >= 2 && len(g.communityCards) < 5 {
+		// Fast-forward dealing based on current phase/board size
+		// It's safe to call these as they lock internally.
+		switch g.phase {
+		case pokerrpc.GamePhase_PRE_FLOP:
+			g.StateFlop()
+			g.StateTurn()
+			g.StateRiver()
+		case pokerrpc.GamePhase_FLOP:
+			// Flop already dealt, deal remaining streets
+			g.StateTurn()
+			g.StateRiver()
+		case pokerrpc.GamePhase_TURN:
+			// Turn dealt, deal river
+			g.StateRiver()
+		case pokerrpc.GamePhase_RIVER:
+			// Nothing to do
+		default:
+			// If phase is unexpected throw error
+			return nil, fmt.Errorf("invalid showdown: unexpected phase %s", g.phase)
+		}
+	}
+
+	// After auto-deal, validate again for safety
 	for _, p := range activePlayers {
 		if len(p.Hand)+len(g.communityCards) < 5 {
-			msg := fmt.Sprintf("invalid showdown: player %s has insufficient cards (hole=%d, board=%d)",
+			return nil, fmt.Errorf("invalid showdown: player %s has insufficient cards (hole=%d, board=%d)",
 				p.ID, len(p.Hand), len(g.communityCards))
-			g.log.Errorf(msg)
-			panic(msg)
 		}
 	}
 
@@ -993,20 +1015,45 @@ func (g *Game) maybeAdvancePhase() {
 	g.log.Debugf("maybeAdvancePhase: phase=%v actionsInRound=%d currentBet=%d",
 		g.phase, g.actionsInRound, g.currentBet)
 
-	// Count active players (non-folded and non-all-in) from game players
-	// All-in players can't act, so they don't count toward the action requirement
+	// Count alive (non-folded) and actionable (non-folded, non-all-in) players
+	alivePlayers := 0
 	activePlayers := 0
 	for _, p := range g.players {
-		if p.GetCurrentStateString() != "FOLDED" && p.GetCurrentStateString() != "ALL_IN" {
-			activePlayers++
+		if p.GetCurrentStateString() != "FOLDED" {
+			alivePlayers++
+			if p.GetCurrentStateString() != "ALL_IN" {
+				activePlayers++
+			}
 		}
 	}
 
-	// If only one player remains, advance to showdown
-	if activePlayers <= 1 {
+	// If only one alive player remains (others folded), finish hand now (uncontested win)
+	if alivePlayers <= 1 {
 		g.phase = pokerrpc.GamePhase_SHOWDOWN
 		g.stateMachine.Dispatch(stateShowdown)
-		g.log.Debugf("maybeAdvancePhase: only %d active players, moving to SHOWDOWN", activePlayers)
+		g.log.Debugf("maybeAdvancePhase: only %d alive players, moving to SHOWDOWN", alivePlayers)
+		return
+	}
+
+	// If betting is effectively closed (no one or only one player can act), fast-forward and showdown.
+	// - activePlayers == 0: all alive players are all-in
+	// - activePlayers == 1: only one player could act, but with no opponent able to respond,
+	//   further betting isn't possible (e.g., heads-up where one is all-in, or multi-way with only one non-all-in).
+	if activePlayers == 0 || activePlayers == 1 {
+		switch g.phase {
+		case pokerrpc.GamePhase_PRE_FLOP:
+			g.StateFlop()
+			g.StateTurn()
+			g.StateRiver()
+		case pokerrpc.GamePhase_FLOP:
+			g.StateTurn()
+			g.StateRiver()
+		case pokerrpc.GamePhase_TURN:
+			g.StateRiver()
+		}
+		g.phase = pokerrpc.GamePhase_SHOWDOWN
+		g.stateMachine.Dispatch(stateShowdown)
+		g.log.Debugf("maybeAdvancePhase: betting closed (alive=%d, active=%d), fast-forward to SHOWDOWN", alivePlayers, activePlayers)
 		return
 	}
 
@@ -1254,12 +1301,18 @@ func (g *Game) scheduleAutoStart() {
 
 		readyCount := 0
 		for _, player := range g.players {
-			// Count players who have sufficient balance (folded status will be reset for new hand)
-			if player.Balance >= g.config.BigBlind {
+			// Count players who have any chips left. Short stacks will auto-post
+			// blinds all-in when needed during hand setup.
+			if player.Balance > 0 {
 				readyCount++
-				log.Debugf("Player %s ready for auto-start: balance=%d >= bigBlind=%d", player.ID, player.Balance, g.config.BigBlind)
+				// Log explicitly that short stacks are still eligible for auto-start.
+				if player.Balance < g.config.BigBlind {
+					log.Debugf("Player %s ready for auto-start (short stack all-in): balance=%d < bigBlind=%d", player.ID, player.Balance, g.config.BigBlind)
+				} else {
+					log.Debugf("Player %s ready for auto-start: balance=%d >= bigBlind=%d", player.ID, player.Balance, g.config.BigBlind)
+				}
 			} else {
-				log.Debugf("Player %s not ready for auto-start: balance=%d < bigBlind=%d", player.ID, player.Balance, g.config.BigBlind)
+				log.Debugf("Player %s not ready for auto-start: balance=0", player.ID)
 			}
 		}
 

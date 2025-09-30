@@ -17,9 +17,10 @@ import (
 type CmdType = int32
 
 const (
-	CTUnknown           CmdType = 0x00
-	CTHello             CmdType = 0x01
-	CTInitClient        CmdType = 0x02
+	CTUnknown    CmdType = 0x00
+	CTHello      CmdType = 0x01
+	CTInitClient CmdType = 0x02
+
 	CTGetUserNick       CmdType = 0x03
 	CTStopClient        CmdType = 0x04
 	CTGetWRPlayers      CmdType = 0x05
@@ -35,7 +36,7 @@ const (
 	CTArchiveSessionKey CmdType = 0x0e
 
 	// Poker-specific commands
-	CTInitPokerClient         CmdType = 0x10
+	CTGetPlayerCurrentTable   CmdType = 0x10
 	CTLoadConfig              CmdType = 0x11
 	CTGetPokerTables          CmdType = 0x12
 	CTJoinPokerTable          CmdType = 0x13
@@ -126,13 +127,6 @@ func call(cmd *cmd) *CmdResult {
 		if decode(&initClient) {
 			v, err = handleInitClient(uint32(cmd.ClientHandle), initClient)
 		}
-
-	case CTInitPokerClient:
-		var initPokerClient initPokerClient
-		if decode(&initPokerClient) {
-			v, err = handleInitPokerClient(uint32(cmd.ClientHandle), initPokerClient)
-		}
-
 	case CTLoadConfig:
 		// Accept a string payload (filepath or datadir) to load config from Go.
 		var pathOrDir string

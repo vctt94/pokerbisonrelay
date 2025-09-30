@@ -96,12 +96,13 @@ Aq6RDElOTqAlDbNAuV8b/joQjIDLwqA=
       final result = await Golib.createDefaultConfig(config);
       
       if (result['status'] != 'created') {
-        throw Exception('Failed to create config: ${result['error']}');
+        final err = result['error'] ?? 'unknown error';
+        throw Exception('Failed to create config: $err');
       }
     } catch (e) {
-      // Fall back to the old method if native plugin fails
-      debugPrint('Native plugin failed, falling back to old method: $e');
-      await widget.model.saveConfig();
+      // Surface native error to UI
+      debugPrint('Native plugin createDefaultConfig error: $e');
+      throw Exception('Create config failed: $e');
     }
   }
 
@@ -181,9 +182,9 @@ Aq6RDElOTqAlDbNAuV8b/joQjIDLwqA=
                     style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
                 _field(_brRpcUrl, 'BR RPC WebSocket URL', required: true),
-                _field(_brClientCert, 'BR Client Cert Path'),
-                _field(_brClientRpcCert, 'BR Client RPC Cert Path'),
-                _field(_brClientRpcKey, 'BR Client RPC Key Path'),
+                _field(_brClientCert, 'BR Client Cert Path', required: true),
+                _field(_brClientRpcCert, 'BR Client RPC Cert Path', required: true),
+                _field(_brClientRpcKey, 'BR Client RPC Key Path', required: true),
                 _field(_user, 'RPC User', required: true),
                 _field(_pass, 'RPC Password', required: true, obscure: true),
                 const SizedBox(height: 12),

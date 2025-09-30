@@ -509,3 +509,49 @@ func TestAutoStartOnNewHandStarted(t *testing.T) {
 	}
 	mu.Unlock()
 }
+
+// Ensure auto-start counts short-stacked players (>0 chips) as eligible and starts a new hand.
+func TestAutoStartAllowsShortStackAllIn(t *testing.T) {
+    cfg := GameConfig{
+        NumPlayers:     2,
+        StartingChips:  0,
+        SmallBlind:     10,
+        BigBlind:       20,
+        AutoStartDelay: 10 * time.Millisecond,
+        Log:            createTestLogger(),
+    }
+    game, err := NewGame(cfg)
+    require.NoError(t, err)
+
+    users := []*User{
+        NewUser("short", "short", 0, 0),
+        NewUser("deep", "deep", 0, 1),
+    }
+    game.SetPlayers(users)
+
+    // Simulate balances: short < big blind, deep >> big blind
+    game.players[0].Balance = 10  // short stack
+    game.players[1].Balance = 1990 // deep stack
+
+    startedCh := make(chan struct{}, 1)
+
+    game.SetAutoStartCallbacks(&AutoStartCallbacks{
+        MinPlayers: func() int { return 2 },
+        StartNewHand: func() error {
+            select {
+            case startedCh <- struct{}{}:
+            default:
+            }
+            return nil
+        },
+    })
+
+    game.ScheduleAutoStart()
+
+    select {
+    case <-startedCh:
+        // ok
+    case <-time.After(200 * time.Millisecond):
+        t.Fatal("expected auto-start to trigger with short-stacked player")
+    }
+}

@@ -17,7 +17,7 @@ class _PokerHomeScreenState extends State<PokerHomeScreen> {
   Widget build(BuildContext context) {
     // Only rebuild this widget when the game state changes
     final gameStarted =
-        context.select<PokerModel, bool>((m) => m.game?.gameStarted ?? false);
+        context.select<PokerModel, bool>((m) => m.state == PokerState.handInProgress || m.state == PokerState.showdown);
 
     return SharedLayout(
       title: "Poker - Home",
@@ -29,9 +29,12 @@ class _PokerHomeScreenState extends State<PokerHomeScreen> {
               ),
             )
           : Consumer<PokerModel>(builder: (context, pokerModel, _) {
-              return SingleChildScrollView(
-                padding: const EdgeInsets.only(bottom: 24),
-                child: Column(
+              return RefreshIndicator(
+                onRefresh: pokerModel.refreshTables,
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.only(bottom: 24),
+                  child: Column(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     // 1) Top area: balance and connection status
@@ -258,6 +261,7 @@ class _PokerHomeScreenState extends State<PokerHomeScreen> {
                       child: main_content.PokerMainContent(model: pokerModel),
                     ),
                   ],
+                  ),
                 ),
               );
             }),

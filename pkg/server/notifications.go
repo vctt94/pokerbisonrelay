@@ -25,6 +25,23 @@ func (s *Server) sendNotificationToPlayer(playerID string, notification *pokerrp
 	}
 }
 
+// broadcastNotificationToAll sends a notification to all connected players
+// that currently have an active notification stream.
+func (s *Server) broadcastNotificationToAll(notification *pokerrpc.Notification) {
+    s.notificationMu.RLock()
+    for _, notifStream := range s.notificationStreams {
+        select {
+        case <-notifStream.done:
+            // Skip closed streams
+            continue
+        default:
+            // Best-effort send; ignore errors if client disconnected
+            _ = notifStream.stream.Send(notification)
+        }
+    }
+    s.notificationMu.RUnlock()
+}
+
 // broadcastNotificationToTable sends a notification to all players at a table
 func (s *Server) broadcastNotificationToTable(tableID string, notification *pokerrpc.Notification) {
 	s.mu.RLock()

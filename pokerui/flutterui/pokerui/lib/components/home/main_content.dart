@@ -14,8 +14,11 @@ class PokerMainContent extends StatefulWidget {
 class _PokerMainContentState extends State<PokerMainContent> {
   @override
   Widget build(BuildContext context) {
-    // Show appropriate content based on current state
-    switch (widget.model.state) {
+    // Guard against stale state: if not seated, always render browsing
+    final effectiveState =
+        widget.model.currentTableId == null ? PokerState.browsingTables : widget.model.state;
+    // Show appropriate content based on effective state
+    switch (effectiveState) {
       case PokerState.idle:
         return _buildIdleState(context, widget.model);
       case PokerState.browsingTables:
@@ -112,14 +115,14 @@ class _PokerMainContentState extends State<PokerMainContent> {
       );
     }
 
-    return RefreshIndicator(
-      onRefresh: () => model.refreshTables(),
-      child: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        shrinkWrap: true,
-        physics: const AlwaysScrollableScrollPhysics(),
-        itemCount: model.tables.length,
-        itemBuilder: (context, index) {
+    // List is embedded inside a parent scroll view on the Home screen.
+    // Make it non-scrollable here to avoid nested scroll conflicts.
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: model.tables.length,
+      itemBuilder: (context, index) {
           final table = model.tables[index];
           return Card(
             margin: const EdgeInsets.only(bottom: 12),
@@ -182,8 +185,12 @@ class _PokerMainContentState extends State<PokerMainContent> {
                         ),
                       ),
                       ElevatedButton(
-                        onPressed: () {
-                          model.joinTable(table.id);
+                        onPressed: () async {
+                          final ok = await model.joinTable(table.id);
+                          if (ok && context.mounted) {
+                            // Navigate to the dedicated table screen
+                            Navigator.pushNamed(context, '/table');
+                          }
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.green,
@@ -198,7 +205,6 @@ class _PokerMainContentState extends State<PokerMainContent> {
             ),
           );
         },
-      ),
     );
   }
 
@@ -266,6 +272,16 @@ class _PokerMainContentState extends State<PokerMainContent> {
       return const Center(child: Text('No game data available'));
     }
 
+    // Debug snapshot for UI layer
+    final myP = model.me;
+    final myHandCnt = myP?.hand.length ?? 0;
+    // Keep this lightweight to avoid log spam
+    // Shows who is to act and whether we have cards client-side
+    // during PRE_FLOP and later.
+    // Example: UI DEBUG: my=... curr=... hand=2 phase=...
+    // ignore: avoid_print
+    print('DEBUG: UI HandInProgress - my=${model.playerId.substring(0, 8)} curr=${game.currentPlayerId.substring(0, 8)} hand=$myHandCnt phase=${game.phase}');
+
     final focusNode = FocusNode();
     final pokerGame = PokerGame(model.playerId, model);
 
@@ -283,6 +299,13 @@ class _PokerMainContentState extends State<PokerMainContent> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
+                // Always offer a way to leave the table, even when it's not your turn
+                ElevatedButton(
+                  onPressed: model.leaveTable,
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                  child: const Text('Leave Table'),
+                ),
+                const SizedBox(width: 12),
                 if (model.isMyTurn) ...[
                   ElevatedButton(
                     onPressed: () => model.fold(),
@@ -345,7 +368,18 @@ class _PokerMainContentState extends State<PokerMainContent> {
               'Player ${winner.playerId}: ${winner.handRank.name}',
               style: const TextStyle(color: Colors.white70),
             )),
+            const SizedBox(height: 16),
           ],
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              ElevatedButton(
+                onPressed: model.leaveTable,
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                child: const Text('Leave Table'),
+              ),
+            ],
+          ),
         ],
       ),
     );

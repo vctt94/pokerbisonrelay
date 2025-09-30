@@ -79,6 +79,19 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 	// Register table
 	s.tables[cfg.ID] = table
 
+	// Publish TABLE_CREATED event so all connected clients can promptly refresh
+	// their lobby/waiting rooms view.
+	evt, err := s.buildGameEvent(
+		pokerrpc.NotificationType_TABLE_CREATED,
+		cfg.ID,
+		nil,
+	)
+	if err != nil {
+		s.log.Errorf("Failed to build TABLE_CREATED event: %v", err)
+		return &pokerrpc.CreateTableResponse{TableId: cfg.ID}, nil
+	}
+	s.eventProcessor.PublishEvent(evt)
+
 	return &pokerrpc.CreateTableResponse{TableId: cfg.ID}, nil
 }
 
@@ -299,6 +312,8 @@ func (s *Server) LeaveTable(ctx context.Context, req *pokerrpc.LeaveTableRequest
 
 		// If no other players remain, close the table
 		delete(s.tables, req.TableId)
+
+		// Persist cleanup before broadcasting event to avoid keeping stale state
 		err = s.db.DeleteTableState(req.TableId)
 		if err != nil {
 			s.log.Errorf("Failed to delete table state from database: %v", err)
@@ -308,6 +323,19 @@ func (s *Server) LeaveTable(ctx context.Context, req *pokerrpc.LeaveTableRequest
 		s.saveMu.Lock()
 		delete(s.saveMutexes, req.TableId)
 		s.saveMu.Unlock()
+
+
+		// Publish TABLE_REMOVED event so clients can remove it from their lists.
+		evt, err := s.buildGameEvent(
+			pokerrpc.NotificationType_TABLE_REMOVED,
+			req.TableId,
+			nil,
+		)
+		if err != nil {
+			s.log.Errorf("Failed to build TABLE_REMOVED event: %v", err)
+		} else {
+			s.eventProcessor.PublishEvent(evt)
+		}
 
 		return &pokerrpc.LeaveTableResponse{
 			Success: true,

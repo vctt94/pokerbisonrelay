@@ -86,6 +86,9 @@ func handleClientCmd(cc *clientCtx, cmd *cmd) (interface{}, error) {
 				HostID: req.ClientID,
 				BetAmt: req.BetAmt,
 			}
+			// Emit a background notification that a waiting room was created.
+			// This allows Flutter UI to update waiting room lists reactively.
+			notify(NTWRCreated, out, nil)
 			return out, nil
 		}
 
@@ -168,6 +171,12 @@ func handleClientCmd(cc *clientCtx, cmd *cmd) (interface{}, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to join table: %v", err)
 		}
+
+		// Immediately start game stream; make failures fatal (no silent fallbacks).
+		if err := cc.c.StartGameStream(cc.ctx); err != nil {
+			return nil, fmt.Errorf("failed to start game stream: %v", err)
+		}
+		notify(NTLogLine, fmt.Sprintf("CTJoinPokerTable ok: player=%s table=%s", cc.ID.String(), req.TableID), nil)
 		return map[string]string{"status": "joined", "table_id": req.TableID}, nil
 
 	case CTCreatePokerTable:
@@ -217,6 +226,16 @@ func handleClientCmd(cc *clientCtx, cmd *cmd) (interface{}, error) {
 			return nil, fmt.Errorf("failed to get balance: %v", err)
 		}
 		return map[string]int64{"balance": balance}, nil
+
+	case CTGetPlayerCurrentTable:
+		if cc.c == nil {
+			return nil, fmt.Errorf("poker client not initialized")
+		}
+		tid, err := cc.c.GetPlayerCurrentTable(cc.ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get current table: %v", err)
+		}
+		return map[string]string{"table_id": tid}, nil
 
 	default:
 		return nil, fmt.Errorf("unknown cmd 0x%x", cmd.Type)

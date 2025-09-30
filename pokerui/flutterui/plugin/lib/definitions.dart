@@ -8,6 +8,43 @@ import 'package:json_annotation/json_annotation.dart';
 
 part 'definitions.g.dart';
 
+/// -------------------- JSON helpers --------------------
+/// Some platforms or older backends may double-encode JSON payloads or
+/// sometimes return a single object instead of a list. These helpers
+/// normalize responses so call sites can be strict about types.
+
+// Decodes a JSON string if [value] is a String. If decoding fails,
+// the original value is returned. Performs up to two decode passes
+// to handle possible double-encoding.
+dynamic _decodeIfString(dynamic value) {
+  dynamic v = value;
+  for (var i = 0; i < 2 && v is String; i++) {
+    try {
+      v = jsonDecode(v as String);
+    } catch (_) {
+      break;
+    }
+  }
+  return v;
+}
+
+// Ensures a Map<String, dynamic> by decoding if needed and throwing a
+// StateError if the final value is not a Map.
+Map<String, dynamic> _asJsonMap(dynamic value) {
+  final v = _decodeIfString(value);
+  if (v is Map) return Map<String, dynamic>.from(v as Map);
+  throw StateError('Expected Map, got ${v.runtimeType}: $v');
+}
+
+// Ensures a List by decoding if needed. If the final value is a Map,
+// wraps it in a single-element list. Throws if neither List nor Map.
+List<dynamic> _asJsonListOrWrap(dynamic value) {
+  final v = _decodeIfString(value);
+  if (v is List) return v;
+  if (v is Map) return [v];
+  throw StateError('Expected List/Map, got ${v.runtimeType}: $v');
+}
+
 /// -------------------- Init / Identity --------------------
 
 @JsonSerializable(explicitToJson: true)
@@ -557,11 +594,17 @@ mixin NtfStreams {
       StreamController<UINotification>.broadcast();
   Stream<UINotification> uiNotifications() => ntfUINotifications.stream;
 
+  // Waiting room notifications
+  final StreamController<LocalWaitingRoom> ntfWaitingRoomCreated =
+      StreamController<LocalWaitingRoom>.broadcast();
+  Stream<LocalWaitingRoom> waitingRoomCreated() => ntfWaitingRoomCreated.stream;
+
   void disposeNtfStreams() {
     ntfAcceptedInvites.close();
     ntfLogLines.close();
     ntfRescanProgress.close();
     ntfUINotifications.close();
+    ntfWaitingRoomCreated.close();
   }
 
   void handleNotifications(int cmd, bool isError, String jsonPayload) {
@@ -570,6 +613,18 @@ mixin NtfStreams {
 
     switch (cmd) {
       case NTNOP:
+        break;
+
+      case NTWRCreated:
+        try {
+          if (jsonPayload.isNotEmpty) {
+            final data = jsonDecode(jsonPayload);
+            final wr = LocalWaitingRoom.fromJson(Map<String, dynamic>.from(data as Map));
+            ntfWaitingRoomCreated.add(wr);
+          }
+        } catch (e) {
+          debugPrint("Failed to parse NTWRCreated payload: $e");
+        }
         break;
       default:
         debugPrint("Received unknown notification ${cmd.toRadixString(16)}");
@@ -601,6 +656,9 @@ abstract class PluginPlatform {
   Future<dynamic> asyncCall(int cmd, dynamic payload) async =>
       Future.error("unimplemented");
 
+  // Notification streams (must be provided by platform mixins)
+  Stream<LocalWaitingRoom> waitingRoomCreated();
+
   Future<String> asyncHello(String name) async {
     final r = await asyncCall(CTHello, name);
     return r as String;
@@ -609,27 +667,24 @@ abstract class PluginPlatform {
 
   Future<LocalInfo> initClient(InitClient args) async {
     final res = await asyncCall(CTInitClient, args.toJson());
-    return LocalInfo.fromJson(Map<String, dynamic>.from(res as Map));
+    print("DEBUG: InitClient response: $res");
+    return LocalInfo.fromJson(_asJsonMap(res));
   }
 
-  Future<LocalInfo> initPokerClient(InitPokerClient args) async {
-    final res = await asyncCall(CTInitPokerClient, args.toJson());
-    return LocalInfo.fromJson(Map<String, dynamic>.from(res as Map));
-  }
 
   Future<Map<String, dynamic>> createDefaultConfig(CreateDefaultConfig args) async {
     final res = await asyncCall(CTCreateDefaultConfig, args.toJson());
-    return Map<String, dynamic>.from(res as Map);
+    return _asJsonMap(res);
   }
 
   Future<Map<String, dynamic>> createDefaultServerCert(String certPath) async {
     final res = await asyncCall(CTCreateDefaultServerCert, certPath);
-    return Map<String, dynamic>.from(res as Map);
+    return _asJsonMap(res);
   }
 
   Future<Map<String, dynamic>> loadConfig(String filepath) async {
     final res = await asyncCall(CTLoadConfig, filepath);
-    return Map<String, dynamic>.from(res as Map);
+    return _asJsonMap(res);
   }
 
   Future<void> createLockFile(String rootDir) async =>
@@ -644,19 +699,21 @@ abstract class PluginPlatform {
   Future<List<LocalPlayer>> getWRPlayers() async {
     final res = await asyncCall(CTGetWRPlayers, "");
     if (res == null) return [];
-    final list = (res as List);
-    return list
-        .map((v) => LocalPlayer.fromJson(Map<String, dynamic>.from(v)))
-        .toList();
+    final list = _asJsonListOrWrap(res);
+    return list.map((v) {
+      final item = _decodeIfString(v);
+      return LocalPlayer.fromJson(Map<String, dynamic>.from(item as Map));
+    }).toList();
   }
 
   Future<List<LocalWaitingRoom>> getWaitingRooms() async {
     final res = await asyncCall(CTGetWaitingRooms, "");
     if (res == null) return [];
-    final list = (res as List);
-    return list
-        .map((v) => LocalWaitingRoom.fromJson(Map<String, dynamic>.from(v)))
-        .toList();
+    final list = _asJsonListOrWrap(res);
+    return list.map((v) {
+      final item = _decodeIfString(v);
+      return LocalWaitingRoom.fromJson(Map<String, dynamic>.from(item as Map));
+    }).toList();
   }
 
   Future<LocalWaitingRoom> JoinWaitingRoom(String id, {String? escrowId}) async {
@@ -665,8 +722,9 @@ abstract class PluginPlatform {
       'escrow_id': escrowId ?? '',
     };
     final response = await asyncCall(CTJoinWaitingRoom, payload);
-    if (response is Map) {
-      return LocalWaitingRoom.fromJson(Map<String, dynamic>.from(response));
+    final resp = _decodeIfString(response);
+    if (resp is Map) {
+      return LocalWaitingRoom.fromJson(Map<String, dynamic>.from(resp));
     }
     throw Exception("Invalid JoinWaitingRoom response: $response");
   }
@@ -679,8 +737,9 @@ abstract class PluginPlatform {
       'escrow_id': args.escrowId ?? '',
     };
     final response = await asyncCall(CTCreateWaitingRoom, payload);
-    if (response is Map) {
-      return LocalWaitingRoom.fromJson(Map<String, dynamic>.from(response));
+    final resp = _decodeIfString(response);
+    if (resp is Map) {
+      return LocalWaitingRoom.fromJson(Map<String, dynamic>.from(resp));
     }
     throw Exception("Invalid CreateWaitingRoom response: $response");
   }
@@ -692,7 +751,8 @@ abstract class PluginPlatform {
   // Escrow/Settlement methods
   Future<Map<String, String>> generateSettlementSessionKey() async {
     final res = await asyncCall(CTGenerateSessionKey, "");
-    return Map<String, String>.from(res as Map);
+    final m = _asJsonMap(res);
+    return m.map((k, v) => MapEntry(k, v == null ? '' : v.toString()));
   }
 
   Future<Map<String, dynamic>> openEscrow({
@@ -706,7 +766,7 @@ abstract class PluginPlatform {
       'csv_blocks': csvBlocks,
     };
     final res = await asyncCall(CTOpenEscrow, payload);
-    return Map<String, dynamic>.from(res as Map);
+    return _asJsonMap(res);
   }
 
   Future<void> startPreSign(String matchId) async {
@@ -721,30 +781,56 @@ abstract class PluginPlatform {
   Future<List<PokerTable>> getPokerTables() async {
     final res = await asyncCall(CTGetPokerTables, "");
     if (res == null) return [];
-    final list = (res as List);
-    return list
-        .map((v) => PokerTable.fromJson(Map<String, dynamic>.from(v)))
-        .toList();
+
+    // Normalize payload across platforms and older/newer Go responses.
+    final list = _asJsonListOrWrap(res);
+    print("DEBUG: GetPokerTables response: $list");
+
+    return list.map((v) {
+      final item = _decodeIfString(v);
+      if (item is! Map) {
+        throw Exception("Invalid table item type: ${item.runtimeType}");
+      }
+      final m = Map<String, dynamic>.from(item);
+      // Backwards-compat: some backends may omit these flags; default to false.
+      if (m['game_started'] == null) {
+        m['game_started'] = false;
+      }
+      if (m['all_players_ready'] == null) {
+        m['all_players_ready'] = false;
+      }
+      return PokerTable.fromJson(m);
+    }).toList();
   }
 
   Future<Map<String, dynamic>> joinPokerTable(JoinPokerTableArgs args) async {
     final res = await asyncCall(CTJoinPokerTable, args.toJson());
-    return Map<String, dynamic>.from(res as Map);
+    return _asJsonMap(res);
   }
 
   Future<Map<String, dynamic>> createPokerTable(CreatePokerTableArgs args) async {
     final res = await asyncCall(CTCreatePokerTable, args.toJson());
-    return Map<String, dynamic>.from(res as Map);
+    return _asJsonMap(res);
   }
 
   Future<Map<String, dynamic>> leavePokerTable() async {
     final res = await asyncCall(CTLeavePokerTable, "");
-    return Map<String, dynamic>.from(res as Map);
+    return _asJsonMap(res);
   }
 
   Future<Map<String, int>> getPokerBalance() async {
     final res = await asyncCall(CTGetPokerBalance, "");
-    return Map<String, int>.from(res as Map);
+    final m = _asJsonMap(res);
+    return m.map((k, v) => MapEntry(k, (v as num).toInt()));
+  }
+
+  Future<String> getPokerCurrentTable() async {
+    final res = await asyncCall(CTGetPlayerCurrentTable, "");
+    final map = _asJsonMap(res);
+    if (!map.containsKey('table_id') || map['table_id'] is! String) {
+      throw StateError('CTGetPlayerCurrentTable: missing or invalid table_id');
+    }
+    return map['table_id'] as String;
   }
 }
 
@@ -767,7 +853,7 @@ const int CTStartPreSign      = 0x0c;
 const int CTArchiveSessionKey = 0x0e;
 
 // Poker-specific commands
-const int CTInitPokerClient   = 0x10;
+const int CTGetPlayerCurrentTable = 0x10;
 const int CTLoadConfig       = 0x11;
 const int CTGetPokerTables    = 0x12;
 const int CTJoinPokerTable    = 0x13;
@@ -780,5 +866,6 @@ const int CTCreateDefaultServerCert = 0x18;
 const int CTCloseLockFile     = 0x60;
 
 const int notificationsStartID = 0x1000;
-const int notificationClientStopped = 0x1001;
+const int notificationClientStopped = 0x1001; // kept for compatibility; actual client-stopped is 0x1002 in golib
 const int NTNOP = 0x1004;
+const int NTWRCreated = 0x1005;

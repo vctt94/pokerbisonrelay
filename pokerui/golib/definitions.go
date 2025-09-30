@@ -2,7 +2,6 @@ package golib
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,7 +16,6 @@ import (
 	"github.com/companyzero/bisonrelay/rates"
 	"github.com/companyzero/bisonrelay/zkidentity"
 	"github.com/decred/slog"
-	"github.com/vctt94/bisonbotkit/logging"
 	"github.com/vctt94/pokerbisonrelay/pkg/client"
 	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
 )
@@ -43,18 +41,6 @@ type initClient struct {
 	RPCCLientKeyPath  string `json:"rpc_client_key_path"`
 	RPCUser           string `json:"rpc_user"`
 	RPCPass           string `json:"rpc_pass"`
-}
-
-type initPokerClient struct {
-	DataDir        string `json:"datadir"`
-	GRPCHost       string `json:"grpc_host"`
-	GRPCPort       string `json:"grpc_port"`
-	GRPCServerCert string `json:"grpc_server_cert"`
-	Insecure       bool   `json:"insecure"`
-	Offline        bool   `json:"offline"`
-	PlayerID       string `json:"player_id,omitempty"`
-	LogFile        string `json:"log_file"`
-	DebugLevel     string `json:"debug_level"`
 }
 
 type createDefaultConfigArgs struct {
@@ -111,7 +97,7 @@ type createPokerTable struct {
 // JSON returned to Flutter (shape must match Dart LocalWaitingRoom/LocalPlayer)
 type player struct {
 	UID    string `json:"uid"`
-	Nick   string `json:"nick,omitempty"`
+	Nick   string `json:"nick"`
 	BetAmt int64  `json:"bet_amt"`
 	Ready  bool   `json:"ready"`
 }
@@ -120,7 +106,7 @@ type waitingRoom struct {
 	ID      string    `json:"id"`
 	HostID  string    `json:"host_id"`
 	BetAmt  int64     `json:"bet_amt"`
-	Players []*player `json:"players,omitempty"`
+	Players []*player `json:"players"`
 }
 
 func playerFromServer(sp *pokerrpc.Player) (*player, error) {
@@ -135,8 +121,9 @@ func playerFromServer(sp *pokerrpc.Player) (*player, error) {
 
 // localInfo represents local client information
 type localInfo struct {
-	ID   zkidentity.ShortID `json:"id"`
-	Nick string             `json:"nick"`
+	// Full hex-encoded client ID used by the server.
+	ID   string `json:"id"`
+	Nick string `json:"nick"`
 }
 
 // runState represents the current run state
@@ -153,7 +140,8 @@ type escrowState struct {
 
 // clientCtx represents a client context
 type clientCtx struct {
-	ID     *localInfo
+	ID     zkidentity.ShortID
+	Nick   string
 	c      *client.PokerClient
 	ctx    context.Context
 	chat   types.ChatServiceClient
@@ -205,7 +193,7 @@ func handleInitClient(handle uint32, args initClient) (*localInfo, error) {
 		cs = make(map[uint32]*clientCtx)
 	}
 	if cs[handle] != nil {
-		return cs[handle].ID, nil
+		return &localInfo{ID: cs[handle].ID.String(), Nick: cs[handle].Nick}, nil
 	}
 
 	// Ensure the data directory exists first
@@ -235,48 +223,10 @@ func handleInitClient(handle uint32, args initClient) (*localInfo, error) {
 		return nil, fmt.Errorf("failed to load config: %v", err)
 	}
 
-	// Apply overrides from args when available
-	flagOverrides := make(map[string]interface{})
-	if args.RPCWebsocketURL != "" {
-		flagOverrides["brrpcurl"] = args.RPCWebsocketURL
-	}
-	if args.RPCCertPath != "" {
-		flagOverrides["brclientcert"] = args.RPCCertPath
-	}
-	if args.RPCCLientCertPath != "" {
-		flagOverrides["brclientrpccert"] = args.RPCCLientCertPath
-	}
-	if args.RPCCLientKeyPath != "" {
-		flagOverrides["brclientrpckey"] = args.RPCCLientKeyPath
-	}
-	if args.RPCUser != "" {
-		flagOverrides["rpcuser"] = args.RPCUser
-	}
-	if args.RPCPass != "" {
-		flagOverrides["rpcpass"] = args.RPCPass
-	}
-	if args.DebugLevel != "" {
-		flagOverrides["debug"] = args.DebugLevel
-	}
-	if args.ServerAddr != "" {
-		// Parse server address for GRPC host and port
-		parts := strings.Split(args.ServerAddr, ":")
-		if len(parts) >= 2 {
-			flagOverrides["grpchost"] = parts[0]
-			flagOverrides["grpcport"] = parts[1]
-		}
-	}
-	if args.GRPCCertPath != "" {
-		flagOverrides["grpcservercert"] = args.GRPCCertPath
-	}
-
-	cfg.SetConfigValues(flagOverrides)
-
 	// Validate configuration
 	if err := cfg.ValidateConfig(); err != nil {
 		return nil, fmt.Errorf("configuration validation error: %v", err)
 	}
-	fmt.Println("cfg", cfg)
 
 	// Initialize notification manager BEFORE creating the client
 	cfg.Notifications = client.NewNotificationManager()
@@ -285,34 +235,31 @@ func handleInitClient(handle uint32, args initClient) (*localInfo, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Create poker client with configuration
-	pokerClient, err := client.NewPokerClient(ctx, cfg)
+	pc, err := client.NewPokerClient(ctx, cfg)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to create poker client: %v", err)
 	}
-
+	var nresp types.PublicIdentity
+	var clientID zkidentity.ShortID
+	var nick string
+	if err := pc.BRClient.Chat.UserPublicIdentity(ctx, &types.PublicIdentityReq{}, &nresp); err == nil && nresp.Nick != "" {
+		nick = nresp.Nick
+		clientID.FromBytes(nresp.Identity)
+	}
 	// Start the notification stream
-	if err := pokerClient.StartNotificationStream(ctx); err != nil {
+	if err := pc.StartNotificationStream(ctx); err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to start notifications: %v", err)
 	}
 
-	// Initialize clientID using a random 32-byte value (avoid BR dependency for ID)
-	var rnd [32]byte
-	if _, err := rand.Read(rnd[:]); err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to generate random id: %v", err)
-	}
-	var id zkidentity.ShortID
-	id.FromBytes(rnd[:])
-	localInfo := &localInfo{ID: id, Nick: "poker-player"}
-
 	cctx := &clientCtx{
-		ID:     localInfo,
+		ID:     pc.ID,
+		Nick:   nick,
 		ctx:    ctx,
-		c:      pokerClient,
+		c:      pc,
 		cancel: cancel,
-		log:    pokerClient.BRClient.LogBackend.Logger("pokerclient"),
+		log:    pc.BRClient.LogBackend.Logger("pokerclient"),
 	}
 	cs[handle] = cctx
 
@@ -330,9 +277,9 @@ func handleInitClient(handle uint32, args initClient) (*localInfo, error) {
 		notify(NTClientStopped, nil, ctx.Err())
 	}()
 
-	cctx.log.Infof("Poker client initialized with ID: %s", localInfo.ID.String())
+	cctx.log.Infof("Poker client initialized with ID: %s", clientID.String())
 
-	return localInfo, nil
+	return &localInfo{ID: clientID.String(), Nick: nick}, nil
 }
 
 // createDefaultConfig creates a default configuration file when none exists
@@ -355,11 +302,39 @@ func createDefaultConfig(dataDir, serverAddr, grpcCertPath, debugLevel, brRpcUrl
 	if brRpcUrl == "" {
 		brRpcUrl = "wss://127.0.0.1:7777/ws"
 	}
+	// XXX add default br config values?
+
+	// if brClientCert == "" {
+	// 	brClientCert = filepath.Join(brDataDir, "client.cert")
+	// }
+	// if brClientRpcCert == "" {
+	// 	brClientRpcCert = filepath.Join(dataDir, "client.rpc.cert")
+	// }
+	// if brClientRpcKey == "" {
+	// 	brClientRpcKey = filepath.Join(dataDir, "client.rpc.key")
+	// }
 	if rpcUser == "" {
 		rpcUser = "rpcuser"
 	}
 	if rpcPass == "" {
 		rpcPass = "rpcpass"
+	}
+
+	// Validate required BR config values before writing the file. These are
+	// required for the client to successfully connect to BisonRelay; writing
+	// an incomplete config leads to startup failure later.
+	var missing []string
+	if strings.TrimSpace(brClientCert) == "" {
+		missing = append(missing, "brclientcert")
+	}
+	if strings.TrimSpace(brClientRpcCert) == "" {
+		missing = append(missing, "brclientrpccert")
+	}
+	if strings.TrimSpace(brClientRpcKey) == "" {
+		missing = append(missing, "brclientrpckey")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("cannot create config: missing required BR fields: %s", strings.Join(missing, ", "))
 	}
 
 	// Note: grpcHost and grpcPort are not needed for the INI format
@@ -498,118 +473,4 @@ func handleLoadConfig(pathOrDir string) (map[string]interface{}, error) {
 	}
 
 	return res, nil
-}
-
-// handleInitPokerClient initializes a new poker client
-func handleInitPokerClient(handle uint32, args initPokerClient) (*localInfo, error) {
-	// Ensure the data directory exists first
-	if err := os.MkdirAll(args.DataDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create data directory %s: %v", args.DataDir, err)
-	}
-
-	// Ensure the logs subdirectory exists
-	logsDir := filepath.Dir(args.LogFile)
-	if err := os.MkdirAll(logsDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create logs directory %s: %v", logsDir, err)
-	}
-
-	logBackend, err := logging.NewLogBackend(logging.LogConfig{
-		LogFile:        args.LogFile,
-		DebugLevel:     args.DebugLevel,
-		MaxLogFiles:    10,
-		MaxBufferLines: 1000,
-	})
-	if err != nil {
-		return nil, err
-	}
-	log := logBackend.Logger("pokerui")
-
-	// Initialize clientID using a random 32-byte value
-	var rnd [32]byte
-	if _, err := rand.Read(rnd[:]); err != nil {
-		return nil, fmt.Errorf("failed to generate random id: %v", err)
-	}
-	var id zkidentity.ShortID
-	id.FromBytes(rnd[:])
-	localInfo := &localInfo{ID: id, Nick: "poker-player"}
-
-	// Load application config from datadir with gRPC overrides only.
-	// BR-related settings are loaded from file; Flutter should not handle them.
-	cfg, err := client.LoadAppConfig(args.DataDir, client.ConfigOverrides{
-		GRPCHost:       args.GRPCHost,
-		GRPCPort:       args.GRPCPort,
-		GRPCServerCert: args.GRPCServerCert,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %v", err)
-	}
-
-	// Apply runtime flag-like overrides
-	flagOverrides := map[string]interface{}{
-		"grpcinsecure": args.Insecure,
-		"offline":      args.Offline,
-	}
-	if args.PlayerID != "" {
-		flagOverrides["playerid"] = args.PlayerID
-	}
-	if args.LogFile != "" {
-		flagOverrides["logfile"] = args.LogFile
-	}
-	if args.DebugLevel != "" {
-		flagOverrides["debug"] = args.DebugLevel
-	}
-	if args.GRPCHost != "" {
-		flagOverrides["grpchost"] = args.GRPCHost
-	}
-	if args.GRPCPort != "" {
-		flagOverrides["grpcport"] = args.GRPCPort
-	}
-	if args.GRPCServerCert != "" {
-		flagOverrides["grpcservercert"] = args.GRPCServerCert
-	}
-	cfg.SetConfigValues(flagOverrides)
-
-	// Validate configuration before starting
-	if err := cfg.ValidateConfig(); err != nil {
-		return nil, fmt.Errorf("configuration validation error: %v", err)
-	}
-
-	// Initialize notification manager (required by NewPokerClient)
-	cfg.Notifications = client.NewNotificationManager()
-
-	// Create a context used for the client lifecycle
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Create the poker client
-	pc, err := client.NewPokerClient(ctx, cfg)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create poker client: %v", err)
-	}
-
-	// Start the notification stream
-	if err := pc.StartNotificationStream(ctx); err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to start notifications: %v", err)
-	}
-
-	cctx := &clientCtx{
-		ID:     localInfo,
-		ctx:    ctx,
-		c:      pc,
-		cancel: cancel,
-		log:    log,
-	}
-
-	// Store in global map
-	cmtx.Lock()
-	if cs == nil {
-		cs = make(map[uint32]*clientCtx)
-	}
-	cs[handle] = cctx
-	cmtx.Unlock()
-
-	log.Infof("Poker client initialized with ID: %s", localInfo.ID.String())
-
-	return localInfo, nil
 }

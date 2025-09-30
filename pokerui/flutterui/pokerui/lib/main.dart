@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:golib_plugin/golib_plugin.dart';
+import 'package:golib_plugin/definitions.dart';
 import 'package:pokerui/components/notification_bar.dart';
 import 'package:pokerui/models/newconfig.dart';
 import 'package:pokerui/models/notifications.dart';
@@ -97,6 +98,7 @@ class _PokerBootstrapAppState extends State<PokerBootstrapApp> {
   bool _loading = true;
   Object? _lastError;
   List<String> _missingFields = const [];
+  StreamSubscription<LocalWaitingRoom>? _wrCreatedSub;
 
   ThemeData get _theme => ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color.fromARGB(255, 25, 23, 44),
@@ -119,6 +121,7 @@ class _PokerBootstrapAppState extends State<PokerBootstrapApp> {
   void _disposeCurrentModel() {
     _pokerModel?.dispose();
     _notificationModel?.dispose();
+    _wrCreatedSub?.cancel();
     _pokerModel = null;
     _notificationModel = null;
   }
@@ -169,6 +172,14 @@ class _PokerBootstrapAppState extends State<PokerBootstrapApp> {
         _notificationModel = notificationModel;
         _pokerModel = pokerModel;
         _loading = false;
+      });
+
+      // Listen for waiting room creation notifications and surface in UI
+      _wrCreatedSub?.cancel();
+      _wrCreatedSub = Golib.waitingRoomCreated().listen((wr) {
+        final bet = (wr.betAmt / 1e8).toStringAsFixed(4);
+        _notificationModel?.showNotification(
+            'Waiting room created by ${wr.host} • Bet: $bet DCR');
       });
     } catch (error, stackTrace) {
       developer.log(

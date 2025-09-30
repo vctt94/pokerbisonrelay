@@ -21,9 +21,13 @@ func NewNotificationHandler(server *Server) *NotificationHandler {
 
 // HandleEvent processes an event and broadcasts appropriate notifications
 func (nh *NotificationHandler) HandleEvent(event *GameEvent) {
-	switch event.Type {
-	case pokerrpc.NotificationType_BET_MADE:
-		nh.handleBetMade(event)
+    switch event.Type {
+    case pokerrpc.NotificationType_TABLE_CREATED:
+        nh.handleTableCreated(event)
+    case pokerrpc.NotificationType_TABLE_REMOVED:
+        nh.handleTableRemoved(event)
+    case pokerrpc.NotificationType_BET_MADE:
+        nh.handleBetMade(event)
 	case pokerrpc.NotificationType_PLAYER_FOLDED:
 		nh.handlePlayerFolded(event)
 	case pokerrpc.NotificationType_CALL_MADE:
@@ -45,6 +49,26 @@ func (nh *NotificationHandler) HandleEvent(event *GameEvent) {
 	case pokerrpc.NotificationType_SHOWDOWN_RESULT:
 		nh.handleShowdownResult(event)
 	}
+}
+
+func (nh *NotificationHandler) handleTableCreated(event *GameEvent) {
+    // Inform all connected clients that a new table was created so they can
+    // refresh their lobby/waiting room lists.
+    notification := &pokerrpc.Notification{
+        Type:    pokerrpc.NotificationType_TABLE_CREATED,
+        TableId: event.TableID,
+    }
+    nh.server.broadcastNotificationToAll(notification)
+}
+
+func (nh *NotificationHandler) handleTableRemoved(event *GameEvent) {
+    // Inform all connected clients that a table was removed so they can
+    // remove it from their lobby/waiting room lists.
+    notification := &pokerrpc.Notification{
+        Type:    pokerrpc.NotificationType_TABLE_REMOVED,
+        TableId: event.TableID,
+    }
+    nh.server.broadcastNotificationToAll(notification)
 }
 
 func (nh *NotificationHandler) handleBetMade(event *GameEvent) {
@@ -140,31 +164,33 @@ func (nh *NotificationHandler) handlePlayerReady(event *GameEvent) {
 }
 
 func (nh *NotificationHandler) handlePlayerJoined(event *GameEvent) {
-	pl, ok := event.Payload.(PlayerJoinedPayload)
-	if !ok {
-		nh.server.log.Warnf("PLAYER_JOINED without PlayerJoinedPayload; skipping (table=%s)", event.TableID)
-		return
-	}
-	notification := &pokerrpc.Notification{
-		Type:     pokerrpc.NotificationType_PLAYER_JOINED,
-		PlayerId: pl.PlayerID,
-		TableId:  event.TableID,
-	}
-	nh.server.notifyPlayers(event.PlayerIDs, notification)
+    pl, ok := event.Payload.(PlayerJoinedPayload)
+    if !ok {
+        nh.server.log.Warnf("PLAYER_JOINED without PlayerJoinedPayload; skipping (table=%s)", event.TableID)
+        return
+    }
+    notification := &pokerrpc.Notification{
+        Type:     pokerrpc.NotificationType_PLAYER_JOINED,
+        PlayerId: pl.PlayerID,
+        TableId:  event.TableID,
+    }
+    // Broadcast to all so lobby lists update on every client.
+    nh.server.broadcastNotificationToAll(notification)
 }
 
 func (nh *NotificationHandler) handlePlayerLeft(event *GameEvent) {
-	pl, ok := event.Payload.(PlayerLeftPayload)
-	if !ok {
-		nh.server.log.Warnf("PLAYER_LEFT without PlayerLeftPayload; skipping (table=%s)", event.TableID)
-		return
-	}
-	notification := &pokerrpc.Notification{
-		Type:     pokerrpc.NotificationType_PLAYER_LEFT,
-		PlayerId: pl.PlayerID,
-		TableId:  event.TableID,
-	}
-	nh.server.notifyPlayers(event.PlayerIDs, notification)
+    pl, ok := event.Payload.(PlayerLeftPayload)
+    if !ok {
+        nh.server.log.Warnf("PLAYER_LEFT without PlayerLeftPayload; skipping (table=%s)", event.TableID)
+        return
+    }
+    notification := &pokerrpc.Notification{
+        Type:     pokerrpc.NotificationType_PLAYER_LEFT,
+        PlayerId: pl.PlayerID,
+        TableId:  event.TableID,
+    }
+    // Broadcast to all so lobby lists update on every client.
+    nh.server.broadcastNotificationToAll(notification)
 }
 
 func (nh *NotificationHandler) handleNewHandStarted(event *GameEvent) {

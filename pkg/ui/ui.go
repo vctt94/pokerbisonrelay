@@ -83,7 +83,7 @@ type PokerUI struct {
 func NewPokerUI(ctx context.Context, client *client.PokerClient) *PokerUI {
 	ui := &PokerUI{
 		ctx:      ctx,
-		clientID: client.ID,
+		clientID: client.ID.String(),
 		pc:       client,
 
 		smallBlind:          "10",
@@ -100,7 +100,7 @@ func NewPokerUI(ctx context.Context, client *client.PokerClient) *PokerUI {
 	// Create component handlers
 	ui.dispatcher = &CommandDispatcher{
 		ctx:      ctx,
-		clientID: client.ID,
+		clientID: client.ID.String(),
 		pc:       client,
 	}
 

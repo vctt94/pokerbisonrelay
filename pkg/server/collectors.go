@@ -149,6 +149,19 @@ func (s *Server) buildGameEvent(
 	tableID string,
 	payload interface{},
 ) (*GameEvent, error) {
+	// Avoid collecting snapshots or taking locks for lightweight global events
+	// to prevent deadlocks when called under the server write lock.
+	if eventType == pokerrpc.NotificationType_TABLE_CREATED || eventType == pokerrpc.NotificationType_TABLE_REMOVED {
+		return &GameEvent{
+			Type:          eventType,
+			TableID:       tableID,
+			PlayerIDs:     nil,
+			Timestamp:     time.Now(),
+			TableSnapshot: nil,
+			Payload:       nil,
+		}, nil
+	}
+
 	tableSnapshot, err := s.collectTableSnapshot(tableID)
 	if err != nil {
 		return nil, err

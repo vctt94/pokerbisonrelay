@@ -459,6 +459,7 @@ class PokerGame {
 
 class PokerPainter extends CustomPainter {
   final UiGameState gameState;
+  // This is the viewer's player ID (hero), not necessarily the player to act.
   final String currentPlayerId;
   
   PokerPainter(this.gameState, this.currentPlayerId);
@@ -477,6 +478,9 @@ class PokerPainter extends CustomPainter {
     
     // Draw players
     _drawPlayers(canvas, size, centerX, centerY, tableRadius);
+
+    // Draw hero hole cards as an overlay near the bottom center.
+    _drawHeroHoleCards(canvas, size);
   }
 
   void _drawTable(Canvas canvas, Size size, double centerX, double centerY, double tableRadius) {
@@ -554,6 +558,43 @@ class PokerPainter extends CustomPainter {
     );
   }
 
+  void _drawCardBack(Canvas canvas, double x, double y, double width, double height) {
+    // Card back background
+    final backPaint = Paint()
+      ..shader = const LinearGradient(
+        colors: [Color(0xFF1B1E2C), Color(0xFF0E111A)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ).createShader(Rect.fromLTWH(x, y, width, height));
+
+    final cardRect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(x, y, width, height),
+      const Radius.circular(4),
+    );
+    canvas.drawRRect(cardRect, backPaint);
+
+    // Border
+    final borderPaint = Paint()
+      ..color = Colors.black
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    canvas.drawRRect(cardRect, borderPaint);
+
+    // Minimal back pattern
+    final pipPainter = TextPainter(
+      text: const TextSpan(
+        text: '♠',
+        style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
+      ),
+      textDirection: TextDirection.ltr,
+    );
+    pipPainter.layout();
+    pipPainter.paint(
+      canvas,
+      Offset(x + (width - pipPainter.width) / 2, y + (height - pipPainter.height) / 2),
+    );
+  }
+
   String _getSuitSymbol(String suit) {
     switch (suit.toLowerCase()) {
       case 'hearts': return '♥';
@@ -587,6 +628,21 @@ class PokerPainter extends CustomPainter {
       final playerY = centerY + (tableRadius + 50) * math.sin(angle);
       
       _drawPlayer(canvas, playerX, playerY, playerRadius, player, i);
+
+      // Draw opponent backs near their seat if their hand is hidden but they are in-hand.
+      // If a player's hand is known (e.g., at showdown or hero), it will be drawn elsewhere.
+      if (player.id != currentPlayerId) {
+        final hasAnyCards = player.hand.isNotEmpty;
+        if (!hasAnyCards && (gameState.phase != pr.GamePhase.WAITING && gameState.phase != pr.GamePhase.NEW_HAND_DEALING)) {
+          final cw = 16.0;
+          final ch = cw * 1.4;
+          final gap = 4.0;
+          final startX = playerX - cw - gap / 2;
+          final y = playerY - playerRadius - ch - 6; // place just above the seat circle
+          _drawCardBack(canvas, startX, y, cw, ch);
+          _drawCardBack(canvas, startX + cw + gap, y, cw, ch);
+        }
+      }
     }
   }
 
@@ -647,4 +703,41 @@ class PokerPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant PokerPainter old) => 
       old.gameState != gameState || old.currentPlayerId != currentPlayerId;
+
+  void _drawHeroHoleCards(Canvas canvas, Size size) {
+    // Find hero in current players
+    UiPlayer? hero;
+    for (final p in gameState.players) {
+      if (p.id == currentPlayerId) {
+        hero = p;
+        break;
+      }
+    }
+    if (hero == null) return;
+
+    // Draw only during an active hand
+    if (gameState.phase == pr.GamePhase.WAITING || gameState.phase == pr.GamePhase.NEW_HAND_DEALING) return;
+
+    // Determine sizes relative to viewport
+    final cw = math.min(size.width * 0.06, 54.0);
+    final ch = cw * 1.4;
+    final gap = cw * 0.12;
+
+    // Bottom-center placement with safe margin
+    final centerX = size.width / 2;
+    // Leave room for action buttons overlay positioned at bottom:20 in UI
+    final marginBottom = 96.0;
+    final y = size.height - ch - marginBottom;
+    final startX = centerX - cw - gap / 2;
+
+    final cards = hero.hand;
+    if (cards.length >= 2) {
+      _drawCard(canvas, startX, y, cw, ch, cards[0]);
+      _drawCard(canvas, startX + cw + gap, y, cw, ch, cards[1]);
+    } else {
+      // Draw facedown placeholders when cards are hidden/unavailable
+      _drawCardBack(canvas, startX, y, cw, ch);
+      _drawCardBack(canvas, startX + cw + gap, y, cw, ch);
+    }
+  }
 }

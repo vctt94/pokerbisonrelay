@@ -231,6 +231,7 @@ class PokerModel extends ChangeNotifier {
 
   // Cached readiness
   bool _iAmReady = false;
+  bool _seated = false; // track whether user is seated at any table
 
   PokerModel({
     required this.lobby,
@@ -240,7 +241,7 @@ class PokerModel extends ChangeNotifier {
 
   /// Factory method to create PokerModel from Config
   static Future<PokerModel> fromConfig(Config cfg, NotificationModel notificationModel) async {
-    print('config: $cfg');
+    print('DEBUG: fromConfig - starting with cfg: $cfg');
     // Initialize the Go library with configuration
     final initClientArgs = InitClient(
       cfg.serverAddr,
@@ -260,6 +261,9 @@ class PokerModel extends ChangeNotifier {
     
     // Initialize the Go library client
     final localInfo = await Golib.initClient(initClientArgs);
+    print("*****************");
+    print(localInfo);
+    print('DEBUG: fromConfig - Golib.initClient returned id=${localInfo.id} nick=${localInfo.nick}');
     
     // Create gRPC channel
     final channel = await _createGrpcChannel(cfg);
@@ -312,6 +316,7 @@ class PokerModel extends ChangeNotifier {
 
   // -------- Lifecycle ----------
   Future<void> init() async {
+    print('DEBUG: PokerModel.init - begin (playerId=$playerId)');
     await _startNotificationStream();
     await refreshTables();
     // If server remembers seat, restore:
@@ -335,12 +340,14 @@ class PokerModel extends ChangeNotifier {
       );
       _ntfnSub = stream.listen(_onNotification,
           onError: _onStreamError, onDone: _onStreamDone, cancelOnError: false);
+      print('DEBUG: Notification stream attached for playerId=$playerId');
     } catch (e) {
       _scheduleBackoff(() => _startNotificationStream());
     }
   }
 
   void _onNotification(pr.Notification n) {
+    print('DEBUG: Notification received type=${n.type} tableId=${n.tableId} playerId=${n.playerId}');
     switch (n.type) {
       case pr.NotificationType.TABLE_CREATED:
       case pr.NotificationType.TABLE_REMOVED:
@@ -400,9 +407,31 @@ class PokerModel extends ChangeNotifier {
   // -------- Lobby / Tables ----------
   Future<void> refreshTables() async {
     try {
-      final resp = await lobby.getTables(pr.GetTablesRequest());
-      tables = List.unmodifiable(resp.tables.map(UiTable.fromProto));
-      if (_state == PokerState.idle) _state = PokerState.browsingTables;
+      // Prefer Golib for consistent identity and simpler transport
+      final list = await Golib.getPokerTables();
+      // Map plugin PokerTable -> UiTable (minimal fields used by lobby UI)
+      tables = List.unmodifiable(list.map((t) => UiTable(
+            id: t.id,
+            hostId: t.hostId,
+            players: const [],
+            smallBlind: t.smallBlind,
+            bigBlind: t.bigBlind,
+            maxPlayers: t.maxPlayers,
+            minPlayers: t.minPlayers,
+            currentPlayers: t.currentPlayers,
+            minBalanceAtoms: t.minBalance,
+            buyInAtoms: t.buyIn,
+            // Phase not provided by plugin; lobby UI already shows status via gameStarted
+            phase: pr.GamePhase.WAITING,
+            gameStarted: t.gameStarted,
+            allReady: t.allPlayersReady,
+          )));
+      // If not seated, keep UI in browsing mode.
+      if (currentTableId == null) {
+        _state = PokerState.browsingTables;
+        game = null;
+        lastWinners = const [];
+      }
       errorMessage = '';
       notifyListeners();
     } catch (e) {
@@ -413,9 +442,12 @@ class PokerModel extends ChangeNotifier {
 
   Future<void> _refreshBalance() async {
     try {
-      final b = await lobby.getBalance(pr.GetBalanceRequest()..playerId = playerId);
-      myAtomsBalance = b.balance.toInt();
-      notifyListeners();
+      final res = await Golib.getPokerBalance();
+      final b = res['balance'];
+      if (b is int) {
+        myAtomsBalance = b;
+        notifyListeners();
+      }
     } catch (_) {
       // Best-effort; keep old balance.
     }
@@ -433,21 +465,26 @@ class PokerModel extends ChangeNotifier {
     int autoStartMs = 0,
   }) async {
     try {
-      final req = pr.CreateTableRequest()
-        ..playerId = playerId
-        ..smallBlind = Int64(smallBlindChips)
-        ..bigBlind = Int64(bigBlindChips)
-        ..maxPlayers = maxPlayers
-        ..minPlayers = minPlayers
-        ..minBalance = Int64(minBalanceAtoms)
-        ..buyIn = Int64(buyInAtoms)
-        ..startingChips = Int64(startingChips)
-        ..timeBankSeconds = timeBankSeconds
-        ..autoStartMs = autoStartMs;
-
-      final resp = await lobby.createTable(req);
+      final res = await Golib.createPokerTable(CreatePokerTableArgs(
+        smallBlindChips,
+        bigBlindChips,
+        maxPlayers,
+        minPlayers,
+        minBalanceAtoms,
+        buyInAtoms,
+        startingChips,
+        timeBankSeconds,
+        autoStartMs,
+      ));
+      final tid = res['table_id'] as String?;
+      if (tid == null || (res['status'] as String?) != 'created') {
+        final msg = res['message'] ?? 'unknown error';
+        errorMessage = 'Create table failed: $msg';
+        notifyListeners();
+        return null;
+      }
       await refreshTables();
-      return resp.tableId;
+      return tid;
     } catch (e) {
       errorMessage = 'Create table failed: $e';
       notifyListeners();
@@ -457,20 +494,24 @@ class PokerModel extends ChangeNotifier {
 
   Future<bool> joinTable(String tableId) async {
     try {
-      final r = await lobby.joinTable(pr.JoinTableRequest()
-        ..playerId = playerId
-        ..tableId = tableId);
-      if (!r.success) {
-        errorMessage = r.message;
+      // Delegate join to embedded Go client to avoid Flutter-side identity mismatches
+      final res = await Golib.joinPokerTable(JoinPokerTableArgs(tableId));
+      if ((res['status'] as String?) != 'joined') {
+        final msg = res['message'] ?? 'unknown error';
+        errorMessage = 'Join failed: $msg';
         notifyListeners();
         return false;
       }
 
       currentTableId = tableId;
       _iAmReady = false;
+      _seated = true;
       _state = PokerState.inLobby;
+      print('DEBUG: joinTable ok - tableId=$tableId playerId=$playerId');
       await refreshTables();
-      await _attachGameStream(); // subscribe immediately
+      await _attachGameStream(); // subscribe immediately with this.playerId
+      // Ensure we didn't miss the GAME_STARTED snapshot by fetching current state.
+      await refreshGameState();
       await _refreshLastWinners(); // useful if a hand just ended
       _resetBackoff();
       notifyListeners();
@@ -486,9 +527,7 @@ class PokerModel extends ChangeNotifier {
     final tid = currentTableId;
     if (tid == null) return;
     try {
-      await lobby.leaveTable(pr.LeaveTableRequest()
-        ..playerId = playerId
-        ..tableId = tid);
+      await Golib.leavePokerTable();
     } catch (_) {
       // ignore; try to clean local state anyway
     } finally {
@@ -496,6 +535,7 @@ class PokerModel extends ChangeNotifier {
       currentTableId = null;
       game = null;
       _iAmReady = false;
+      _seated = false;
       _state = PokerState.browsingTables;
       notifyListeners();
       unawaited(refreshTables());
@@ -504,14 +544,14 @@ class PokerModel extends ChangeNotifier {
 
   Future<void> _restoreCurrentTable() async {
     try {
-      final resp = await lobby.getPlayerCurrentTable(
-          pr.GetPlayerCurrentTableRequest()..playerId = playerId);
-      if (resp.tableId.isEmpty) return;
-      currentTableId = resp.tableId;
-      _state = PokerState.inLobby; // phase refined once first GameUpdate arrives
-      await _attachGameStream();
-      await _refreshLastWinners();
-      notifyListeners();
+      // Use golib to discover any existing table and keep Go client in sync
+      final tid = await Golib.getPokerCurrentTable();
+      print('DEBUG: _restoreCurrentTable - tid=$tid');
+      if (tid.isEmpty) return;
+      // Re-join via golib to reconcile client-side state and attach streams
+      await joinTable(tid);
+      // Proactively refresh the state in case we attached mid-hand.
+      await refreshGameState();
     } catch (_) {
       // ignore
     }
@@ -581,6 +621,7 @@ class PokerModel extends ChangeNotifier {
     if (tid == null) return;
 
     try {
+      print('DEBUG: Attaching game stream - tableId=$tid playerId=$playerId');
       final stream = poker.startGameStream(pr.StartGameStreamRequest()
         ..playerId = playerId
         ..tableId = tid);
@@ -597,9 +638,31 @@ class PokerModel extends ChangeNotifier {
   }
 
   void _onGameUpdate(pr.GameUpdate u) {
+    // Ignore updates if not seated or not for the active table
+    if (!_seated) {
+      print('DEBUG: Ignoring game update - not seated');
+      return;
+    }
+    final tid = currentTableId;
+    if (tid != null && u.tableId != tid) {
+      print('DEBUG: Ignoring game update - wrong table: ${u.tableId} vs $tid');
+      return;
+    }
+
+    print('DEBUG: Processing game update - phase: ${u.phase}, gameStarted: ${u.gameStarted}, currentPlayer: ${u.currentPlayer}');
+    
     game = UiGameState.fromUpdate(u);
 
-    // Drive coarse UI state from phase
+    final myP = me;
+    final handCnt = myP?.hand.length ?? 0;
+    final playersCnt = game?.players.length ?? u.players.length;
+    print('DEBUG: GameUpdate snapshot - players=$playersCnt myHandCnt=$handCnt myId=$playerId curr=${u.currentPlayer}');
+    if (handCnt > 0) {
+      final h = myP!.hand;
+      print('DEBUG: My cards: ${h.map((c) => '${c.value} of ${c.suit}').join(', ')}');
+    }
+
+    // Drive coarse UI state from phase only for the active table
     if (u.phase == pr.GamePhase.SHOWDOWN) {
       _state = PokerState.showdown;
       unawaited(_refreshLastWinners());
@@ -609,6 +672,8 @@ class PokerModel extends ChangeNotifier {
       _state = PokerState.inLobby;
     }
 
+    print('DEBUG: Updated state to: $_state, isMyTurn: $isMyTurn');
+    
     errorMessage = '';
     _resetBackoff();
     notifyListeners();
@@ -711,7 +776,21 @@ class PokerModel extends ChangeNotifier {
     if (tid == null) return;
     try {
       final resp = await poker.getGameState(pr.GetGameStateRequest()..tableId = tid);
+      print('DEBUG: refreshGameState - phase: ${resp.gameState.phase}, gameStarted: ${resp.gameState.gameStarted}, currentPlayer: ${resp.gameState.currentPlayer}');
+      
       game = UiGameState.fromUpdate(resp.gameState);
+
+      final myP = me;
+      final handCnt = myP?.hand.length ?? 0;
+      final playersCnt = game?.players.length ?? 0;
+      print('DEBUG: refreshGameState snapshot - players=$playersCnt myHandCnt=$handCnt myId=$playerId curr=${resp.gameState.currentPlayer}');
+      if (handCnt > 0) {
+        final h = myP!.hand;
+        print('DEBUG: My cards (from GetGameState): ${h.map((c) => '${c.value} of ${c.suit}').join(', ')}');
+      }
+            
+      print('DEBUG: refreshGameState - Updated state to: $_state, isMyTurn: $isMyTurn');
+      
       notifyListeners();
     } catch (e) {
       errorMessage = 'GetGameState failed: $e';
