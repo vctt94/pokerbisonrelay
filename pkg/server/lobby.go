@@ -13,9 +13,6 @@ import (
 )
 
 func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableRequest) (*pokerrpc.CreateTableResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	// Get creator's DCR balance
 	creatorBalance, err := s.db.GetPlayerBalance(req.PlayerId)
 	if err != nil {
@@ -76,8 +73,8 @@ func (s *Server) CreateTable(ctx context.Context, req *pokerrpc.CreateTableReque
 		return nil, err
 	}
 
-	// Register table
-	s.tables[cfg.ID] = table
+	// Register table using concurrent registry
+	s.tables.Store(cfg.ID, table)
 
 	// Publish TABLE_CREATED event so all connected clients can promptly refresh
 	// their lobby/waiting rooms view.
@@ -117,9 +114,7 @@ func (s *Server) saveUserAsPlayerState(tableID string, user *poker.User) error {
 }
 
 func (s *Server) JoinTable(ctx context.Context, req *pokerrpc.JoinTableRequest) (*pokerrpc.JoinTableResponse, error) {
-	s.mu.RLock()
-	table, ok := s.tables[req.TableId]
-	s.mu.RUnlock()
+	table, ok := s.getTable(req.TableId)
 	if !ok {
 		return &pokerrpc.JoinTableResponse{Success: false, Message: "Table not found"}, nil
 	}
@@ -208,10 +203,7 @@ func (s *Server) JoinTable(ctx context.Context, req *pokerrpc.JoinTableRequest) 
 }
 
 func (s *Server) LeaveTable(ctx context.Context, req *pokerrpc.LeaveTableRequest) (*pokerrpc.LeaveTableResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	table, ok := s.tables[req.TableId]
+	table, ok := s.getTable(req.TableId)
 	if !ok {
 		return &pokerrpc.LeaveTableResponse{Success: false, Message: "Table not found"}, nil
 	}
@@ -311,7 +303,7 @@ func (s *Server) LeaveTable(ctx context.Context, req *pokerrpc.LeaveTableRequest
 		}
 
 		// If no other players remain, close the table
-		delete(s.tables, req.TableId)
+		s.tables.Delete(req.TableId)
 
 		// Persist cleanup before broadcasting event to avoid keeping stale state
 		err = s.db.DeleteTableState(req.TableId)
@@ -353,7 +345,7 @@ func (s *Server) LeaveTable(ctx context.Context, req *pokerrpc.LeaveTableRequest
 
 // transferTableHost transfers host ownership to a new user
 func (s *Server) transferTableHost(tableID, newHostID string) error {
-	table, ok := s.tables[tableID]
+	table, ok := s.getTable(tableID)
 	if !ok {
 		return fmt.Errorf("table not found")
 	}
@@ -370,13 +362,8 @@ func (s *Server) transferTableHost(tableID, newHostID string) error {
 }
 
 func (s *Server) GetTables(ctx context.Context, req *pokerrpc.GetTablesRequest) (*pokerrpc.GetTablesResponse, error) {
-	// Get table references with server lock
-	s.mu.RLock()
-	tableRefs := make([]*poker.Table, 0, len(s.tables))
-	for _, table := range s.tables {
-		tableRefs = append(tableRefs, table)
-	}
-	s.mu.RUnlock()
+	// Snapshot current tables from concurrent registry
+	tableRefs := s.getAllTables()
 
 	// Build response using regular table methods (no server lock held)
 	tables := make([]*pokerrpc.Table, 0, len(tableRefs))
@@ -406,12 +393,7 @@ func (s *Server) GetTables(ctx context.Context, req *pokerrpc.GetTablesRequest) 
 
 func (s *Server) GetPlayerCurrentTable(ctx context.Context, req *pokerrpc.GetPlayerCurrentTableRequest) (*pokerrpc.GetPlayerCurrentTableResponse, error) {
 	// Get table references with server lock
-	s.mu.RLock()
-	tableRefs := make([]*poker.Table, 0, len(s.tables))
-	for _, table := range s.tables {
-		tableRefs = append(tableRefs, table)
-	}
-	s.mu.RUnlock()
+	tableRefs := s.getAllTables()
 
 	// Search through tables using regular methods (no server lock held)
 	for _, table := range tableRefs {
@@ -480,10 +462,8 @@ func (s *Server) ProcessTip(ctx context.Context, req *pokerrpc.ProcessTipRequest
 }
 
 func (s *Server) SetPlayerReady(ctx context.Context, req *pokerrpc.SetPlayerReadyRequest) (*pokerrpc.SetPlayerReadyResponse, error) {
-	// First acquire server lock to get table reference
-	s.mu.RLock()
-	table, ok := s.tables[req.TableId]
-	s.mu.RUnlock()
+	// Get table reference
+	table, ok := s.getTable(req.TableId)
 
 	if !ok {
 		return nil, status.Error(codes.NotFound, "table not found")
@@ -555,10 +535,8 @@ func (s *Server) SetPlayerReady(ctx context.Context, req *pokerrpc.SetPlayerRead
 }
 
 func (s *Server) SetPlayerUnready(ctx context.Context, req *pokerrpc.SetPlayerUnreadyRequest) (*pokerrpc.SetPlayerUnreadyResponse, error) {
-	// First acquire server lock to get table reference
-	s.mu.RLock()
-	table, ok := s.tables[req.TableId]
-	s.mu.RUnlock()
+	// Get table reference
+	table, ok := s.getTable(req.TableId)
 
 	if !ok {
 		return nil, status.Error(codes.NotFound, "table not found")

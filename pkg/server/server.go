@@ -23,8 +23,8 @@ type Server struct {
 	log        slog.Logger
 	logBackend *logging.LogBackend
 	db         Database
-	tables     map[string]*poker.Table
-	mu         sync.RWMutex
+	// Concurrent registry of tables to avoid coarse-grained server locking.
+	tables sync.Map // key: string (tableID) -> value: *poker.Table
 
 	// Notification streaming
 	notificationStreams map[string]*NotificationStream
@@ -51,7 +51,6 @@ func NewServer(db Database, logBackend *logging.LogBackend) *Server {
 		log:                 logBackend.Logger("SERVER"),
 		logBackend:          logBackend,
 		db:                  db,
-		tables:              make(map[string]*poker.Table),
 		notificationStreams: make(map[string]*NotificationStream),
 		gameStreams:         make(map[string]map[string]pokerrpc.PokerService_StartGameStreamServer),
 		saveMutexes:         make(map[string]*sync.Mutex),
@@ -77,4 +76,25 @@ func (s *Server) Stop() {
 	}
 	// Wait for any in-flight asynchronous saves to complete before returning.
 	s.saveWg.Wait()
+}
+
+// getTable retrieves a table by ID from the registry.
+func (s *Server) getTable(tableID string) (*poker.Table, bool) {
+	if v, ok := s.tables.Load(tableID); ok {
+		if t, ok2 := v.(*poker.Table); ok2 && t != nil {
+			return t, true
+		}
+	}
+	return nil, false
+}
+
+func (s *Server) getAllTables() []*poker.Table {
+	tableRefs := make([]*poker.Table, 0)
+	s.tables.Range(func(_, value any) bool {
+		if t, ok := value.(*poker.Table); ok && t != nil {
+			tableRefs = append(tableRefs, t)
+		}
+		return true
+	})
+	return tableRefs
 }

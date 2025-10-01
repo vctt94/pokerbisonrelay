@@ -10,12 +10,8 @@ import (
 
 // collectTableSnapshot collects a complete immutable snapshot of table state
 func (s *Server) collectTableSnapshot(tableID string) (*TableSnapshot, error) {
-	// Use a read lock only while accessing the tables map. This avoids holding
-	// the server-wide lock for the entire snapshot generation while still
-	// guaranteeing a consistent pointer to the table.
-	s.mu.RLock()
-	table, ok := s.tables[tableID]
-	s.mu.RUnlock()
+	// Fetch table pointer from concurrent registry without coarse locks.
+	table, ok := s.getTable(tableID)
 	if !ok {
 		return nil, fmt.Errorf("table not found: %s", tableID)
 	}
@@ -174,10 +170,8 @@ func (s *Server) buildGameEvent(
 		return nil, err
 	}
 
-	s.mu.RLock()
-	t := s.tables[tableID]
-	s.mu.RUnlock()
-	if t == nil {
+	t, ok := s.getTable(tableID)
+	if !ok || t == nil {
 		return nil, fmt.Errorf("table not found: %s", tableID)
 	}
 

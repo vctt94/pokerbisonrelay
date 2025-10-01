@@ -13,11 +13,8 @@ import (
 
 // buildGameState creates a GameUpdate for the requesting player
 func (s *Server) buildGameState(tableID, requestingPlayerID string) (*pokerrpc.GameUpdate, error) {
-	// Acquire server lock only to fetch table pointer, then release before
-	// interacting with the table to avoid lock coupling.
-	s.mu.RLock()
-	table, ok := s.tables[tableID]
-	s.mu.RUnlock()
+	// Fetch table pointer without coarse-grained server locking.
+	table, ok := s.getTable(tableID)
 	if !ok {
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
@@ -32,13 +29,10 @@ func (s *Server) buildGameState(tableID, requestingPlayerID string) (*pokerrpc.G
 
 // saveTableState persists the current table state to the database
 func (s *Server) saveTableState(tableID string) error {
-	s.mu.RLock()
-	table, ok := s.tables[tableID]
+	table, ok := s.getTable(tableID)
 	if !ok {
-		s.mu.RUnlock()
 		return fmt.Errorf("table not found")
 	}
-	s.mu.RUnlock()
 
 	// Get atomic snapshot of table state to prevent race conditions
 	tableSnapshot := table.GetStateSnapshot()

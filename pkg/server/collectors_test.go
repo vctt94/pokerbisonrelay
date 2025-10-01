@@ -28,9 +28,8 @@ func (stubDB) Close() error                                            { return 
 // newBareServer returns a minimal Server suitable for snapshot tests.
 func newBareServer() *Server {
 	return &Server{
-		log:    slog.Disabled,
-		db:     stubDB{},
-		tables: make(map[string]*poker.Table),
+		log: slog.Disabled,
+		db:  stubDB{},
 	}
 }
 
@@ -79,7 +78,7 @@ func buildActiveHeadsUpTable(t *testing.T, id string) *poker.Table {
 func TestGameSnapshotCurrentBet(t *testing.T) {
 	s := newBareServer()
 	table := buildActiveHeadsUpTable(t, "table_test")
-	s.tables[table.GetConfig().ID] = table
+	s.tables.Store(table.GetConfig().ID, table)
 
 	snap, err := s.collectTableSnapshot(table.GetConfig().ID)
 	if err != nil {

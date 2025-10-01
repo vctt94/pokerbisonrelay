@@ -50,9 +50,7 @@ func (s *Server) StartGameStream(req *pokerrpc.StartGameStreamRequest, stream po
 }
 
 func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*pokerrpc.MakeBetResponse, error) {
-	s.mu.RLock()
-	table, ok := s.tables[req.TableId]
-	s.mu.RUnlock()
+	table, ok := s.getTable(req.TableId)
 	if !ok {
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
@@ -115,11 +113,11 @@ func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*po
 					if contributed < 0 {
 						contributed = 0
 					}
-                    if evt, err := s.buildGameEvent(
-                        pokerrpc.NotificationType_PLAYER_ALL_IN,
-                        req.TableId,
-                        PlayerAllInPayload{PlayerID: req.PlayerId, Amount: contributed},
-                    ); err == nil {
+					if evt, err := s.buildGameEvent(
+						pokerrpc.NotificationType_PLAYER_ALL_IN,
+						req.TableId,
+						PlayerAllInPayload{PlayerID: req.PlayerId, Amount: contributed},
+					); err == nil {
 						s.eventProcessor.PublishEvent(evt)
 					} else {
 						s.log.Errorf("Failed to build PLAYER_ALL_IN event: %v", err)
@@ -144,9 +142,7 @@ func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*po
 }
 
 func (s *Server) FoldBet(ctx context.Context, req *pokerrpc.FoldBetRequest) (*pokerrpc.FoldBetResponse, error) {
-	s.mu.RLock()
-	table, ok := s.tables[req.TableId]
-	s.mu.RUnlock()
+	table, ok := s.getTable(req.TableId)
 	if !ok {
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
@@ -180,9 +176,7 @@ func (s *Server) FoldBet(ctx context.Context, req *pokerrpc.FoldBetRequest) (*po
 
 // Call implements the Call RPC method
 func (s *Server) CallBet(ctx context.Context, req *pokerrpc.CallBetRequest) (*pokerrpc.CallBetResponse, error) {
-	s.mu.RLock()
-	table, ok := s.tables[req.TableId]
-	s.mu.RUnlock()
+	table, ok := s.getTable(req.TableId)
 	if !ok {
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
@@ -245,11 +239,11 @@ func (s *Server) CallBet(ctx context.Context, req *pokerrpc.CallBetRequest) (*po
 		for _, p := range game.GetPlayers() {
 			if p.ID() == req.PlayerId {
 				if p.GetCurrentStateString() == "ALL_IN" || (newBalance == 0 && p.CurrentBet() > 0) {
-                        if evt, err := s.buildGameEvent(
-                            pokerrpc.NotificationType_PLAYER_ALL_IN,
-                            req.TableId,
-                            PlayerAllInPayload{PlayerID: req.PlayerId, Amount: delta},
-                        ); err == nil {
+					if evt, err := s.buildGameEvent(
+						pokerrpc.NotificationType_PLAYER_ALL_IN,
+						req.TableId,
+						PlayerAllInPayload{PlayerID: req.PlayerId, Amount: delta},
+					); err == nil {
 						s.eventProcessor.PublishEvent(evt)
 					} else {
 						s.log.Errorf("Failed to build PLAYER_ALL_IN event: %v", err)
@@ -265,9 +259,7 @@ func (s *Server) CallBet(ctx context.Context, req *pokerrpc.CallBetRequest) (*po
 
 // Check implements the Check RPC method
 func (s *Server) CheckBet(ctx context.Context, req *pokerrpc.CheckBetRequest) (*pokerrpc.CheckBetResponse, error) {
-	s.mu.RLock()
-	table, ok := s.tables[req.TableId]
-	s.mu.RUnlock()
+	table, ok := s.getTable(req.TableId)
 	if !ok {
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
@@ -423,9 +415,7 @@ func (s *Server) buildGameStateForPlayer(table *poker.Table, game *poker.Game, r
 func (s *Server) GetGameState(ctx context.Context, req *pokerrpc.GetGameStateRequest) (*pokerrpc.GetGameStateResponse, error) {
 	// Acquire server lock only to fetch table pointer, then release before
 	// calling into table methods to avoid lock coupling (Server → Table).
-	s.mu.RLock()
-	table, ok := s.tables[req.TableId]
-	s.mu.RUnlock()
+	table, ok := s.getTable(req.TableId)
 	if !ok {
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
@@ -562,10 +552,7 @@ func (s *Server) EvaluateHand(ctx context.Context, req *pokerrpc.EvaluateHandReq
 }
 
 func (s *Server) GetLastWinners(ctx context.Context, req *pokerrpc.GetLastWinnersRequest) (*pokerrpc.GetLastWinnersResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	table, ok := s.tables[req.TableId]
+	table, ok := s.getTable(req.TableId)
 	if !ok {
 		return nil, status.Error(codes.NotFound, "table not found")
 	}
@@ -610,9 +597,7 @@ func (s *Server) GetLastWinners(ctx context.Context, req *pokerrpc.GetLastWinner
 }
 
 func (s *Server) ShowCards(ctx context.Context, req *pokerrpc.ShowCardsRequest) (*pokerrpc.ShowCardsResponse, error) {
-	s.mu.RLock()
-	table, ok := s.tables[req.TableId]
-	s.mu.RUnlock()
+	table, ok := s.getTable(req.TableId)
 
 	if !ok {
 		return nil, status.Error(codes.NotFound, "table not found")
@@ -639,9 +624,7 @@ func (s *Server) ShowCards(ctx context.Context, req *pokerrpc.ShowCardsRequest) 
 }
 
 func (s *Server) HideCards(ctx context.Context, req *pokerrpc.HideCardsRequest) (*pokerrpc.HideCardsResponse, error) {
-	s.mu.RLock()
-	table, ok := s.tables[req.TableId]
-	s.mu.RUnlock()
+	table, ok := s.getTable(req.TableId)
 
 	if !ok {
 		return nil, status.Error(codes.NotFound, "table not found")

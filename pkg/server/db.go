@@ -94,9 +94,7 @@ func (s *Server) loadTableFromDatabase(tableID string) (*poker.Table, error) {
 
 	// Register the table early so that any asynchronous snapshot operations
 	// triggered during restoration can successfully locate it.
-	s.mu.Lock()
-	s.tables[tableID] = table
-	s.mu.Unlock()
+	s.tables.Store(tableID, table)
 
 	// Load player states
 	dbPlayerStates, err := s.db.LoadPlayerStates(tableID)
@@ -237,67 +235,67 @@ func (s *Server) restoreGameState(table *poker.Table, dbTableState *db.TableStat
 	)
 
 	// Restore player state from database, including hands
-    game.ModifyPlayers(func(players []*poker.Player) {
-        for _, dbPlayerState := range dbPlayerStates {
-            for _, player := range players {
-                if player.ID() != dbPlayerState.PlayerID {
-                    continue
-                }
+	game.ModifyPlayers(func(players []*poker.Player) {
+		for _, dbPlayerState := range dbPlayerStates {
+			for _, player := range players {
+				if player.ID() != dbPlayerState.PlayerID {
+					continue
+				}
 
 				// Parse hand cards from JSON if available
-                var handCards []*pokerrpc.Card
-                if dbPlayerState.Hand != nil {
-                    if handJSON, ok := dbPlayerState.Hand.(string); ok && handJSON != "" && handJSON != "[]" {
-                        var cards []map[string]interface{}
-                        if err := json.Unmarshal([]byte(handJSON), &cards); err == nil {
-                            handCards = make([]*pokerrpc.Card, len(cards))
-                            for i, cardMap := range cards {
-                                handCards[i] = &pokerrpc.Card{
-                                    Suit:  cardMap["suit"].(string),
-                                    Value: cardMap["value"].(string),
-                                }
-                            }
-                            s.log.Debugf("Restored %d cards for player %s", len(handCards), dbPlayerState.PlayerID)
-                        } else {
-                            s.log.Errorf("Failed to unmarshal hand for player %s: %v", dbPlayerState.PlayerID, err)
-                        }
-                    }
-                }
+				var handCards []*pokerrpc.Card
+				if dbPlayerState.Hand != nil {
+					if handJSON, ok := dbPlayerState.Hand.(string); ok && handJSON != "" && handJSON != "[]" {
+						var cards []map[string]interface{}
+						if err := json.Unmarshal([]byte(handJSON), &cards); err == nil {
+							handCards = make([]*pokerrpc.Card, len(cards))
+							for i, cardMap := range cards {
+								handCards[i] = &pokerrpc.Card{
+									Suit:  cardMap["suit"].(string),
+									Value: cardMap["value"].(string),
+								}
+							}
+							s.log.Debugf("Restored %d cards for player %s", len(handCards), dbPlayerState.PlayerID)
+						} else {
+							s.log.Errorf("Failed to unmarshal hand for player %s: %v", dbPlayerState.PlayerID, err)
+						}
+					}
+				}
 
-                // Create gRPC Player from database state
-                restoreGRPCPlayer := &pokerrpc.Player{
-                    Id:              dbPlayerState.PlayerID,
-                    Name:            player.Name(), // Keep existing name
-                    Balance:         dbPlayerState.Balance,
-                    Hand:            handCards,
-                    CurrentBet:      dbPlayerState.CurrentBet,
-                    Folded:          dbPlayerState.HasFolded,
-                    IsTurn:          dbPlayerState.IsTurn,
-                    IsAllIn:         dbPlayerState.IsAllIn,
-                    IsDealer:        dbPlayerState.IsDealer,
-                    IsReady:         dbPlayerState.IsReady,
-                    HandDescription: dbPlayerState.HandDescription,
-                }
+				// Create gRPC Player from database state
+				restoreGRPCPlayer := &pokerrpc.Player{
+					Id:              dbPlayerState.PlayerID,
+					Name:            player.Name(), // Keep existing name
+					Balance:         dbPlayerState.Balance,
+					Hand:            handCards,
+					CurrentBet:      dbPlayerState.CurrentBet,
+					Folded:          dbPlayerState.HasFolded,
+					IsTurn:          dbPlayerState.IsTurn,
+					IsAllIn:         dbPlayerState.IsAllIn,
+					IsDealer:        dbPlayerState.IsDealer,
+					IsReady:         dbPlayerState.IsReady,
+					HandDescription: dbPlayerState.HandDescription,
+				}
 
-                // Restore base fields from saved state
-                player.Unmarshal(restoreGRPCPlayer)
+				// Restore base fields from saved state
+				player.Unmarshal(restoreGRPCPlayer)
 
-                // Restore the exact player state deterministically from DB value
-                if err := player.RestoreState(dbPlayerState.GameState); err != nil {
-                    s.log.Warnf("Unknown saved state '%s' for player %s: %v", dbPlayerState.GameState, dbPlayerState.PlayerID, err)
-                }
+				// Restore the exact player state deterministically from DB value
+				if err := player.RestoreState(dbPlayerState.GameState); err != nil {
+					s.log.Warnf("Unknown saved state '%s' for player %s: %v", dbPlayerState.GameState, dbPlayerState.PlayerID, err)
+				}
 
-                // Set additional fields that are not in gRPC Player
-                player.SetTableSeat(dbPlayerState.TableSeat)
-                player.SetStartingBalance(dbPlayerState.StartingBalance)
+				// Set additional fields that are not in gRPC Player
+				player.SetTableSeat(dbPlayerState.TableSeat)
+				player.SetStartingBalance(dbPlayerState.StartingBalance)
 
-                s.log.Debugf("Restored player %s: balance=%d, hasbet=%d, disconnected=%v",
-                    dbPlayerState.PlayerID, dbPlayerState.Balance, dbPlayerState.CurrentBet, player.IsDisconnected())
+				s.log.Debugf("Restored player %s: balance=%d, hasbet=%d, disconnected=%v",
+					dbPlayerState.PlayerID, dbPlayerState.Balance, dbPlayerState.CurrentBet, player.IsDisconnected())
 
-                break
-            }
-        }
-    })
+				break
+			}
+		}
+	})
 
 	// Reconstruct pot based on each player's saved bet so that GetPot() matches
 	// the persisted total. We do this outside the ModifyPlayers block to avoid
@@ -341,9 +339,7 @@ func (s *Server) loadAllTables() error {
 			continue
 		}
 
-		s.mu.Lock()
-		s.tables[tableID] = table
-		s.mu.Unlock()
+		s.tables.Store(tableID, table)
 
 		loadedCount++
 		s.log.Infof("Loaded table %s from database", tableID)

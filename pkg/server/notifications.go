@@ -28,25 +28,23 @@ func (s *Server) sendNotificationToPlayer(playerID string, notification *pokerrp
 // broadcastNotificationToAll sends a notification to all connected players
 // that currently have an active notification stream.
 func (s *Server) broadcastNotificationToAll(notification *pokerrpc.Notification) {
-    s.notificationMu.RLock()
-    for _, notifStream := range s.notificationStreams {
-        select {
-        case <-notifStream.done:
-            // Skip closed streams
-            continue
-        default:
-            // Best-effort send; ignore errors if client disconnected
-            _ = notifStream.stream.Send(notification)
-        }
-    }
-    s.notificationMu.RUnlock()
+	s.notificationMu.RLock()
+	for _, notifStream := range s.notificationStreams {
+		select {
+		case <-notifStream.done:
+			// Skip closed streams
+			continue
+		default:
+			// Best-effort send; ignore errors if client disconnected
+			_ = notifStream.stream.Send(notification)
+		}
+	}
+	s.notificationMu.RUnlock()
 }
 
 // broadcastNotificationToTable sends a notification to all players at a table
 func (s *Server) broadcastNotificationToTable(tableID string, notification *pokerrpc.Notification) {
-	s.mu.RLock()
-	table, exists := s.tables[tableID]
-	s.mu.RUnlock()
+	table, exists := s.getTable(tableID)
 
 	if !exists {
 		return
@@ -218,23 +216,4 @@ func (s *Server) sendGameStateUpdates(tableID string, playerGameStates map[strin
 			}
 		}
 	}()
-}
-
-// tablePlayerIDs returns the list of player IDs currently seated at the given
-// table. A short-lived read lock protects the map lookup; the table itself is
-// already thread-safe.
-func (s *Server) tablePlayerIDs(tableID string) []string {
-	s.mu.RLock()
-	tbl, ok := s.tables[tableID]
-	s.mu.RUnlock()
-	if !ok {
-		return nil
-	}
-
-	users := tbl.GetUsers()
-	ids := make([]string, 0, len(users))
-	for _, u := range users {
-		ids = append(ids, u.ID)
-	}
-	return ids
 }
