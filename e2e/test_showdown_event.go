@@ -1,4 +1,4 @@
-package main
+package e2e
 
 import (
 	"fmt"
@@ -154,7 +154,7 @@ func main() {
 
 	// Trigger phase advancement to reach showdown
 	fmt.Println("Advancing phase to trigger showdown...")
-	table.MaybeAdvancePhase()
+	table.MaybeCompleteBettingRound()
 
 	// Give the event processing goroutine time to process
 	time.Sleep(100 * time.Millisecond)

@@ -48,7 +48,7 @@ type Game struct {
 	communityCards []Card
 
 	// Game state
-	potManager     *PotManager
+	potManager     *potManager
 	currentBet     int64
 	round          int
 	betRound       int // Tracks which betting round (pre-flop, flop, turn, river)
@@ -189,7 +189,7 @@ func stateBlinds(entity *Game) GameStateFn {
 			return
 		}
 		// Skip if this player already has an equal or greater bet recorded (blind already posted).
-		if p.HasBet >= amount {
+		if p.CurrentBet >= amount {
 			return
 		}
 		if amount > p.Balance {
@@ -198,8 +198,8 @@ func stateBlinds(entity *Game) GameStateFn {
 			p.stateMachine.Dispatch(playerStateAllIn)
 		}
 		p.Balance -= amount
-		p.HasBet += amount
-		entity.potManager.AddBet(pos, amount, entity.players)
+		p.CurrentBet += amount
+		entity.potManager.addBet(pos, amount, entity.players)
 	}
 
 	// Post blinds, guarding against duplicates.
@@ -241,7 +241,7 @@ func stateFlop(entity *Game) GameStateFn {
 
 	// Reset bets for new betting round (table handles this)
 	entity.currentBet = 0
-	entity.potManager.ResetCurrentBets()
+	entity.potManager.currentBets = make(map[int]int64)
 
 	// Update phase to FLOP
 	entity.phase = pokerrpc.GamePhase_FLOP
@@ -264,7 +264,7 @@ func stateTurn(entity *Game) GameStateFn {
 
 	// Reset bets for new betting round (table handles this)
 	entity.currentBet = 0
-	entity.potManager.ResetCurrentBets()
+	entity.potManager.currentBets = make(map[int]int64)
 
 	// Update phase to TURN
 	entity.phase = pokerrpc.GamePhase_TURN
@@ -287,7 +287,7 @@ func stateRiver(entity *Game) GameStateFn {
 
 	// Reset bets for new betting round (table handles this)
 	entity.currentBet = 0
-	entity.potManager.ResetCurrentBets()
+	entity.potManager.currentBets = make(map[int]int64)
 
 	// Update phase to RIVER
 	entity.phase = pokerrpc.GamePhase_RIVER
@@ -322,7 +322,7 @@ func (g *Game) GetPot() int64 {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
-	return g.potManager.GetTotalPot()
+	return g.potManager.getTotalPot()
 }
 
 // StateFlop deals the flop (3 community cards)
@@ -409,12 +409,27 @@ func (g *Game) GetCurrentBet() int64 {
 	return g.currentBet
 }
 
-// AddToPotForPlayer adds the specified amount to the pot for a specific player
+// AddToPotForPlayer adds the specified amount to the pot for a specific
+// player.
 func (g *Game) AddToPotForPlayer(playerIndex int, amount int64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	g.potManager.AddBet(playerIndex, amount, g.players)
+	g.potManager.addBet(playerIndex, amount, g.players)
+}
+
+// RefundUncalledBets safely refunds any uncalled portion of the highest bet
+// for the current betting round. This guards against scenarios where betting
+// closes with one actionable player (e.g., heads-up all-in versus a non-caller)
+// and prevents creating an invalid side pot that only the all-in can win.
+func (g *Game) RefundUncalledBets() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.potManager == nil {
+		return fmt.Errorf("potManager is nil")
+	}
+	g.potManager.returnUncalledBet(g.players)
+	return nil
 }
 
 // GetCommunityCards returns a copy of the community cards slice.
@@ -616,22 +631,21 @@ func (g *Game) handlePlayerCall(playerID string) error {
 		return fmt.Errorf("not your turn to act")
 	}
 
-	if g.currentBet <= player.HasBet {
+	if g.currentBet <= player.CurrentBet {
 		return fmt.Errorf("nothing to call - use check instead")
 	}
 
-	delta := g.currentBet - player.HasBet
+	delta := g.currentBet - player.CurrentBet
 	if delta > player.Balance {
 		// Player cannot afford to call - make them all-in with remaining balance
 		g.log.Debugf("Player %s cannot afford to call %d (has %d), going all-in", player.ID, delta, player.Balance)
 		delta = player.Balance
 		player.stateMachine.Dispatch(playerStateAllIn)
 		player.LastAction = time.Now()
-
 	}
 
 	player.Balance -= delta
-	player.HasBet = g.currentBet
+	player.CurrentBet += delta
 	player.LastAction = time.Now()
 
 	// Update player state using state machine dispatch
@@ -640,7 +654,7 @@ func (g *Game) handlePlayerCall(playerID string) error {
 	// Find player index and add to pot
 	for i, p := range g.players {
 		if p.ID == playerID {
-			g.AddToPotForPlayer(i, delta)
+			g.potManager.addBet(i, delta, g.players)
 			break
 		}
 	}
@@ -669,9 +683,9 @@ func (g *Game) handlePlayerCheck(playerID string) error {
 		return fmt.Errorf("not your turn to act")
 	}
 
-	if player.HasBet < g.currentBet {
+	if player.CurrentBet < g.currentBet {
 		return fmt.Errorf("cannot check when there's a bet to call (player bet: %d, current bet: %d)",
-			player.HasBet, g.currentBet)
+			player.CurrentBet, g.currentBet)
 	}
 
 	player.LastAction = time.Now()
@@ -699,23 +713,23 @@ func (g *Game) handlePlayerBet(playerID string, amount int64) error {
 		return fmt.Errorf("not your turn to act")
 	}
 
-	if amount < player.HasBet {
+	if amount < player.CurrentBet {
 		return fmt.Errorf("cannot decrease bet")
 	}
 
-	delta := amount - player.HasBet
+	delta := amount - player.CurrentBet
 	if delta > 0 && delta > player.Balance {
 		// Player cannot afford the bet - make them all-in with remaining balance
 		g.log.Debugf("Player %s cannot afford to bet %d (has %d), going all-in", player.ID, delta, player.Balance)
 		delta = player.Balance
-		amount = player.HasBet + delta
+		amount = player.CurrentBet + delta
 		player.stateMachine.Dispatch(playerStateAllIn)
 	}
 
 	if delta > 0 {
 		player.Balance -= delta
 	}
-	player.HasBet = amount
+	player.CurrentBet = amount
 	player.LastAction = time.Now()
 
 	// Update player state using state machine dispatch
@@ -729,7 +743,7 @@ func (g *Game) handlePlayerBet(playerID string, amount int64) error {
 	if delta > 0 {
 		for i, p := range g.players {
 			if p.ID == playerID {
-				g.AddToPotForPlayer(i, delta)
+				g.potManager.addBet(i, delta, g.players)
 				break
 			}
 		}
@@ -813,10 +827,10 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 	g.log.Debugf("handleShowdown: entered showdown processing")
 
 	// Gather active (non-folded) players
-	activePlayers := make([]*Player, 0, len(g.players))
+	unfoldedPlayers := make([]*Player, 0, len(g.players))
 	for _, player := range g.players {
 		if player != nil && player.GetCurrentStateString() != "FOLDED" {
-			activePlayers = append(activePlayers, player)
+			unfoldedPlayers = append(unfoldedPlayers, player)
 		}
 	}
 
@@ -824,21 +838,31 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 	result := &ShowdownResult{
 		Winners:    make([]string, 0),
 		WinnerInfo: make([]*pokerrpc.Winner, 0),
-		TotalPot:   0, // Will be set after pot rebuilding
+		TotalPot:   0, // Will be set from snapshot BEFORE refunds/distribution for notifications
 	}
 
+	// Snapshot pot for notification BEFORE any refunds/distribution so
+	// events can reflect the headline amount that was pushed forward,
+	// even if some portion is uncalled and will be refunded.
+	potForNotification := g.potManager.getTotalPot()
+	result.TotalPot = potForNotification
+
+	// Now, ensure any uncalled portion from the last betting action is
+	// refunded before resolving pots to maintain correct side-pot structure
+	// and winner payouts.
+	g.potManager.returnUncalledBet(g.players)
+
 	// --- Uncontested (fold-win): build pots, award total, reset state
-	if len(activePlayers) == 1 {
-		winner := activePlayers[0]
+	if len(unfoldedPlayers) == 1 {
+		winner := unfoldedPlayers[0]
 		g.log.Infof("HERE ON ONE ACTIVE PLAYER: %s", winner.ID)
 
 		sum := int64(0)
-		for _, p := range g.potManager.Pots {
-			sum += p.Amount
+		for _, p := range g.potManager.pots {
+			sum += p.amount
 		}
 
-		// Total pot for the event
-		result.TotalPot = g.potManager.GetTotalPot()
+		// Total pot for the event already captured for notification
 
 		// --- Use delta accounting to populate result (avoids “empty winners”)
 		prev := make(map[string]int64, len(g.players))
@@ -848,7 +872,7 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 			}
 		}
 
-		g.potManager.DistributePots(g.players)
+		g.potManager.distributePots(g.players)
 
 		// Fill result from actual balance deltas (handles any future edge cases too)
 		totalWinnings := int64(0)
@@ -892,7 +916,7 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 	}
 
 	// --- True showdown: ensure board is fully dealt if multiple players remain
-	if len(activePlayers) >= 2 && len(g.communityCards) < 5 {
+	if len(unfoldedPlayers) >= 2 && len(g.communityCards) < 5 {
 		// Fast-forward dealing based on current phase/board size
 		// It's safe to call these as they lock internally.
 		switch g.phase {
@@ -916,7 +940,7 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 	}
 
 	// After auto-deal, validate again for safety
-	for _, p := range activePlayers {
+	for _, p := range unfoldedPlayers {
 		if len(p.Hand)+len(g.communityCards) < 5 {
 			return nil, fmt.Errorf("invalid showdown: player %s has insufficient cards (hole=%d, board=%d)",
 				p.ID, len(p.Hand), len(g.communityCards))
@@ -924,7 +948,7 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 	}
 
 	// Evaluate each active player's hand
-	for _, p := range activePlayers {
+	for _, p := range unfoldedPlayers {
 		hv, err := EvaluateHand(p.Hand, g.communityCards)
 		if err != nil {
 			return nil, fmt.Errorf("failed to evaluate hand for player %s: %w", p.ID, err)
@@ -934,12 +958,12 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 		g.log.Debugf("handleShowdown: player %s hand=%v description=%s", p.ID, p.Hand, p.HandDescription)
 	}
 
-	// Set TotalPot after rebuilding pots
-	result.TotalPot = g.potManager.GetTotalPot()
+	// Use the pre-refund snapshot for notification consistency
+	result.TotalPot = potForNotification
 
-	g.log.Debugf("handleShowdown: total pots=%d", len(g.potManager.Pots))
-	for i, pot := range g.potManager.Pots {
-		g.log.Debugf("handleShowdown: pot %d amount=%d eligible_players=%v", i, pot.Amount, pot.Eligibility)
+	g.log.Debugf("handleShowdown: total pots=%d", len(g.potManager.pots))
+	for i, pot := range g.potManager.pots {
+		g.log.Debugf("handleShowdown: pot %d amount=%d eligible_players=%v", i, pot.amount, pot.eligibility)
 	}
 
 	// Snapshot balances to compute exact deltas
@@ -952,7 +976,7 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 	}
 
 	// Distribute pots
-	if err := g.potManager.DistributePots(g.players); err != nil {
+	if err := g.potManager.distributePots(g.players); err != nil {
 		g.log.Errorf("Failed to distribute pots: %v", err)
 		return nil, err
 	}
@@ -996,15 +1020,8 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 	return result, nil
 }
 
-// MaybeAdvancePhase checks if betting round is finished and progresses the game phase (external API)
-func (g *Game) MaybeAdvancePhase() {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.maybeAdvancePhase()
-}
-
 // maybeAdvancePhase is the core logic without locking (for internal use)
-func (g *Game) maybeAdvancePhase() {
+func (g *Game) maybeCompleteBettingRound() {
 	// Don't advance during NEW_HAND_DEALING phase - this is managed by setupNewHandLocked()
 	// which handles the complete setup sequence and phase transitions internally
 	if g.phase == pokerrpc.GamePhase_NEW_HAND_DEALING {
@@ -1040,6 +1057,9 @@ func (g *Game) maybeAdvancePhase() {
 	// - activePlayers == 1: only one player could act, but with no opponent able to respond,
 	//   further betting isn't possible (e.g., heads-up where one is all-in, or multi-way with only one non-all-in).
 	if activePlayers == 0 || activePlayers == 1 {
+		// Before closing the round and fast-forwarding streets, refund any
+		// uncalled portion of the last bet to avoid creating a bogus side pot.
+		g.potManager.returnUncalledBet(g.players)
 		switch g.phase {
 		case pokerrpc.GamePhase_PRE_FLOP:
 			g.StateFlop()
@@ -1078,7 +1098,7 @@ func (g *Game) maybeAdvancePhase() {
 		if p.GetCurrentStateString() == "ALL_IN" {
 			continue
 		}
-		if p.HasBet != g.currentBet {
+		if p.CurrentBet != g.currentBet {
 			unmatchedPlayers++
 		}
 	}
@@ -1111,7 +1131,7 @@ func (g *Game) maybeAdvancePhase() {
 
 	// Reset for new betting round
 	for _, p := range g.players {
-		p.HasBet = 0
+		p.CurrentBet = 0
 	}
 	g.currentBet = 0
 	g.ResetActionsInRound() // Reset actions counter for new betting round
@@ -1131,11 +1151,26 @@ func (g *Game) maybeAdvancePhase() {
 	}
 }
 
+// MaybeCompleteBettingRound is the concurrency-safe wrapper that acquires the
+// game lock before executing the phase advancement logic.
+func (g *Game) MaybeCompleteBettingRound() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.maybeCompleteBettingRound()
+}
+
 // AdvanceToNextPlayer moves to the next active player (external API)
 func (g *Game) AdvanceToNextPlayer() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.advanceToNextPlayer()
+}
+
+// InitializeCurrentPlayer sets the current player with proper locking (external API)
+func (g *Game) InitializeCurrentPlayer() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.initializeCurrentPlayer()
 }
 
 // initializeCurrentPlayer sets the current player based on game phase and rules
@@ -1239,7 +1274,7 @@ func (g *Game) SetGameState(dealer, currentPlayer, round, betRound int, currentB
 	g.betRound = betRound
 	g.currentBet = currentBet
 	g.phase = phase
-	// Note: Pot will be restored through the PotManager when restoring player bets
+	// Note: Pot will be restored through the potManager when restoring player bets
 	// We can't directly set the pot value, but it will be calculated from player bets
 }
 
@@ -1256,6 +1291,13 @@ func (g *Game) SetAutoStartCallbacks(callbacks *AutoStartCallbacks) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.autoStartCallbacks = callbacks
+}
+
+// HasAutoStartCallbacks reports whether auto-start callbacks are configured.
+func (g *Game) HasAutoStartCallbacks() bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.autoStartCallbacks != nil
 }
 
 // scheduleAutoStart schedules automatic start of next hand after configured delay
@@ -1379,7 +1421,7 @@ func (g *Game) GetStateSnapshot() GameStateSnapshot {
 			IsReady:         player.IsReady,
 			Balance:         player.Balance,
 			StartingBalance: player.StartingBalance,
-			HasBet:          player.HasBet,
+			CurrentBet:      player.CurrentBet,
 			IsDealer:        player.IsDealer,
 			IsTurn:          player.IsTurn,
 			Hand:            make([]Card, len(player.Hand)),
@@ -1398,8 +1440,8 @@ func (g *Game) GetStateSnapshot() GameStateSnapshot {
 
 	// Calculate pot amount based on game phase
 	var potAmount int64
-	// During showdown, use GetTotalPot() after pots have been built
-	potAmount = g.potManager.GetTotalPot()
+	// During showdown, use getTotalPot() after pots have been built
+	potAmount = g.potManager.getTotalPot()
 
 	return GameStateSnapshot{
 		Dealer:         g.dealer,
@@ -1438,12 +1480,12 @@ func (g *Game) ForceSetPot(amount int64) {
 	}
 
 	// Ensure there is at least a main pot.
-	if len(g.potManager.Pots) == 0 {
-		g.potManager.Pots = []*Pot{NewPot(0)}
+	if len(g.potManager.pots) == 0 {
+		g.potManager.pots = []*pot{newPot(0)}
 	}
 
 	// Set the amount on the main pot directly.
-	g.potManager.Pots[0].Amount = amount
+	g.potManager.pots[0].amount = amount
 }
 
 // SetOnNewHandStartedCallback registers a callback to be executed each time a

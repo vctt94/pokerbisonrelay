@@ -7,11 +7,12 @@
 package pokerrpc
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -109,6 +110,7 @@ const (
 	NotificationType_CARDS_SHOWN        NotificationType = 20
 	NotificationType_CARDS_HIDDEN       NotificationType = 21
 	NotificationType_NEW_HAND_STARTED   NotificationType = 22
+	NotificationType_PLAYER_ALL_IN      NotificationType = 23
 )
 
 // Enum value maps for NotificationType.
@@ -137,6 +139,7 @@ var (
 		20: "CARDS_SHOWN",
 		21: "CARDS_HIDDEN",
 		22: "NEW_HAND_STARTED",
+		23: "PLAYER_ALL_IN",
 	}
 	NotificationType_value = map[string]int32{
 		"UNKNOWN":            0,
@@ -162,6 +165,7 @@ var (
 		"CARDS_SHOWN":        20,
 		"CARDS_HIDDEN":       21,
 		"NEW_HAND_STARTED":   22,
+		"PLAYER_ALL_IN":      23,
 	}
 )
 

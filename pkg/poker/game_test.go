@@ -9,6 +9,7 @@ import (
 
 	"github.com/decred/slog"
 	"github.com/stretchr/testify/require"
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
 )
 
 // createTestLogger creates a simple logger for testing
@@ -56,8 +57,8 @@ func TestNewGame(t *testing.T) {
 		if player.GetCurrentStateString() == "FOLDED" {
 			t.Errorf("Player %d: Expected not folded", i)
 		}
-		if player.HasBet != 0 {
-			t.Errorf("Player %d: Expected 0 bet, got %d", i, player.HasBet)
+		if player.CurrentBet != 0 {
+			t.Errorf("Player %d: Expected 0 bet, got %d", i, player.CurrentBet)
 		}
 	}
 
@@ -225,8 +226,8 @@ func TestShowdown(t *testing.T) {
 
 	// Set up pot
 	game.potManager = NewPotManager(2)
-	game.potManager.AddBet(0, 50, game.players) // Player 1 bet 50
-	game.potManager.AddBet(1, 50, game.players) // Player 2 bet 50
+	game.potManager.addBet(0, 50, game.players) // Player 1 bet 50
+	game.potManager.addBet(1, 50, game.players) // Player 2 bet 50
 
 	// Run the showdown
 	_, err = game.HandleShowdown()
@@ -308,8 +309,8 @@ func TestTieBreakerShowdown(t *testing.T) {
 
 	// Set up pot
 	game.potManager = NewPotManager(3)
-	game.potManager.AddBet(0, 50, game.players) // Player 1 bet 50
-	game.potManager.AddBet(1, 50, game.players) // Player 2 bet 50
+	game.potManager.addBet(0, 50, game.players) // Player 1 bet 50
+	game.potManager.addBet(1, 50, game.players) // Player 2 bet 50
 	// Player 3 folded, no bet
 
 	// Run the showdown
@@ -359,8 +360,8 @@ func TestSplitPotShowdown(t *testing.T) {
 	}
 
 	game.potManager = NewPotManager(2)
-	game.potManager.AddBet(0, 50, game.players)
-	game.potManager.AddBet(1, 50, game.players)
+	game.potManager.addBet(0, 50, game.players)
+	game.potManager.addBet(1, 50, game.players)
 
 	// Resolve showdown
 	res, err := game.handleShowdown()
@@ -390,13 +391,13 @@ func TestSidePotShowdown(t *testing.T) {
 	game.SetPlayers(users)
 
 	// Set balances to simulate all-in thresholds via bets recorded in pot manager
-	// We control through PotManager directly for test.
+	// We control through potManager directly for test.
 	game.potManager = NewPotManager(3)
 
 	// Bets: p3 short 30, p1 50, p2 50 → main 90 (all eligible), side 40 (p1,p2)
-	game.potManager.AddBet(0, 50, game.players)
-	game.potManager.AddBet(1, 50, game.players)
-	game.potManager.AddBet(2, 30, game.players)
+	game.potManager.addBet(0, 50, game.players)
+	game.potManager.addBet(1, 50, game.players)
+	game.potManager.addBet(2, 30, game.players)
 
 	// Hand strengths: p3 wins main, p1 wins side
 	game.players[0].stateMachine.Dispatch(playerStateInGame)
@@ -424,7 +425,7 @@ func TestSidePotShowdown(t *testing.T) {
 	// Pots are automatically built on each bet, no need to call BuildPotsFromTotals
 
 	// Distribute pots
-	game.potManager.DistributePots(game.players)
+	game.potManager.distributePots(game.players)
 
 	// Expected: p3 gets 90 (main), p1 gets 40 (side)
 	if game.players[2].Balance != 90 {
@@ -510,48 +511,152 @@ func TestAutoStartOnNewHandStarted(t *testing.T) {
 	mu.Unlock()
 }
 
+// Ensure that when multiple players are all-in pre-flop, the game
+// automatically deals remaining community cards and performs showdown
+// without panicking.
+func TestPreFlopAllInAutoDealShowdown(t *testing.T) {
+	cfg := GameConfig{
+		NumPlayers:     2,
+		StartingChips:  100,
+		SmallBlind:     10,
+		BigBlind:       20,
+		Seed:           1,
+		AutoStartDelay: 0,
+		TimeBank:       0,
+		Log:            createTestLogger(),
+	}
+	game, err := NewGame(cfg)
+	require.NoError(t, err)
+
+	users := []*User{
+		NewUser("p1", "p1", 0, 0),
+		NewUser("p2", "p2", 0, 1),
+	}
+	game.SetPlayers(users)
+
+	// Simulate pre-flop all-in by both players with some bets recorded
+	game.phase = pokerrpc.GamePhase_PRE_FLOP
+	game.communityCards = nil
+	game.potManager = NewPotManager(2)
+
+	// Put some chips in to form a pot
+	game.potManager.addBet(0, 50, game.players)
+	game.potManager.addBet(1, 50, game.players)
+
+	// Mark both players as all-in and not folded
+	game.players[0].stateMachine.Dispatch(playerStateAllIn)
+	game.players[1].stateMachine.Dispatch(playerStateAllIn)
+	game.players[0].LastAction = time.Now()
+	game.players[1].LastAction = time.Now()
+
+	// Call showdown; should auto-deal to 5 community cards and not error
+	res, err := game.handleShowdown()
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	if got := len(game.communityCards); got != 5 {
+		t.Fatalf("expected 5 community cards to be dealt, got %d", got)
+	}
+
+	// Total pot equals sum of bets (100)
+	require.EqualValues(t, int64(100), res.TotalPot)
+}
+
 // Ensure auto-start counts short-stacked players (>0 chips) as eligible and starts a new hand.
 func TestAutoStartAllowsShortStackAllIn(t *testing.T) {
-    cfg := GameConfig{
-        NumPlayers:     2,
-        StartingChips:  0,
-        SmallBlind:     10,
-        BigBlind:       20,
-        AutoStartDelay: 10 * time.Millisecond,
-        Log:            createTestLogger(),
-    }
-    game, err := NewGame(cfg)
-    require.NoError(t, err)
+	cfg := GameConfig{
+		NumPlayers:     2,
+		StartingChips:  0,
+		SmallBlind:     10,
+		BigBlind:       20,
+		AutoStartDelay: 10 * time.Millisecond,
+		Log:            createTestLogger(),
+	}
+	game, err := NewGame(cfg)
+	require.NoError(t, err)
 
-    users := []*User{
-        NewUser("short", "short", 0, 0),
-        NewUser("deep", "deep", 0, 1),
-    }
-    game.SetPlayers(users)
+	users := []*User{
+		NewUser("short", "short", 0, 0),
+		NewUser("deep", "deep", 0, 1),
+	}
+	game.SetPlayers(users)
 
-    // Simulate balances: short < big blind, deep >> big blind
-    game.players[0].Balance = 10  // short stack
-    game.players[1].Balance = 1990 // deep stack
+	// Simulate balances: short < big blind, deep >> big blind
+	game.players[0].Balance = 10   // short stack
+	game.players[1].Balance = 1990 // deep stack
 
-    startedCh := make(chan struct{}, 1)
+	startedCh := make(chan struct{}, 1)
 
-    game.SetAutoStartCallbacks(&AutoStartCallbacks{
-        MinPlayers: func() int { return 2 },
-        StartNewHand: func() error {
-            select {
-            case startedCh <- struct{}{}:
-            default:
-            }
-            return nil
-        },
-    })
+	game.SetAutoStartCallbacks(&AutoStartCallbacks{
+		MinPlayers: func() int { return 2 },
+		StartNewHand: func() error {
+			select {
+			case startedCh <- struct{}{}:
+			default:
+			}
+			return nil
+		},
+	})
 
-    game.ScheduleAutoStart()
+	game.ScheduleAutoStart()
 
-    select {
-    case <-startedCh:
-        // ok
-    case <-time.After(200 * time.Millisecond):
-        t.Fatal("expected auto-start to trigger with short-stacked player")
-    }
+	select {
+	case <-startedCh:
+		// ok
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected auto-start to trigger with short-stacked player")
+	}
+}
+
+// Verify that a short-stacked caller only contributes what they have, and
+// their HasBet is NOT force-set to currentBet.
+func TestCallShortStackAllInDoesNotForceMatchCurrentBet(t *testing.T) {
+	cfg := GameConfig{
+		NumPlayers:    2,
+		StartingChips: 0,
+		SmallBlind:    10,
+		BigBlind:      20,
+		Log:           createTestLogger(),
+	}
+	g, err := NewGame(cfg)
+	if err != nil {
+		t.Fatalf("NewGame error: %v", err)
+	}
+
+	users := []*User{
+		NewUser("sb", "sb", 0, 0),
+		NewUser("bb", "bb", 0, 1),
+	}
+	g.SetPlayers(users)
+
+	// Simulate pre-flop state:
+	// - currentBet is the big blind (20)
+	// - SB has already posted 10 and only has 5 left
+	// - BB has posted 20
+	g.currentBet = 20
+	g.players[0].CurrentBet = 10
+	g.players[0].Balance = 5
+	g.players[1].CurrentBet = 20
+	g.players[1].Balance = 1000
+	g.currentPlayer = 0 // SB to act
+
+	// SB tries to call but cannot fully match; should go all-in for +5 only.
+	if err := g.handlePlayerCall("sb"); err != nil {
+		t.Fatalf("handlePlayerCall error: %v", err)
+	}
+
+	if g.players[0].Balance != 0 {
+		t.Fatalf("SB expected balance 0 after all-in call, got %d", g.players[0].Balance)
+	}
+	if g.players[0].CurrentBet != 15 {
+		t.Fatalf("SB expected CurrentBet 15 after all-in call, got %d", g.players[0].CurrentBet)
+	}
+	if got := g.players[0].GetCurrentStateString(); got != "ALL_IN" {
+		t.Fatalf("SB expected state ALL_IN, got %s", got)
+	}
+
+	// The table-wide currentBet remains the big blind (20)
+	if g.currentBet != 20 {
+		t.Fatalf("expected table currentBet to remain 20, got %d", g.currentBet)
+	}
 }

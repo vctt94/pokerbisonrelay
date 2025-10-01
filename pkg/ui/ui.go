@@ -381,7 +381,7 @@ func (m *PokerUI) stateBetInput(ui *PokerUI, msg tea.Msg) (stateFn, tea.Cmd) {
 			if err != nil {
 				return m.stateBetInput, nil // Stay in bet input if invalid amount
 			}
-			return m.stateActiveGame, m.dispatcher.betCmd(amount)
+			return m.stateActiveGame, m.dispatcher.raiseCmd(amount)
 		case "q":
 			m.betAmount = ""
 			m.currentView = "activeGame"

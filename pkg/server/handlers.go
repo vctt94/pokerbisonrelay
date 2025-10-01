@@ -44,11 +44,13 @@ func (nh *NotificationHandler) HandleEvent(event *GameEvent) {
 		nh.handlePlayerJoined(event)
 	case pokerrpc.NotificationType_PLAYER_LEFT:
 		nh.handlePlayerLeft(event)
-	case pokerrpc.NotificationType_NEW_HAND_STARTED:
-		nh.handleNewHandStarted(event)
-	case pokerrpc.NotificationType_SHOWDOWN_RESULT:
-		nh.handleShowdownResult(event)
-	}
+    case pokerrpc.NotificationType_NEW_HAND_STARTED:
+        nh.handleNewHandStarted(event)
+    case pokerrpc.NotificationType_SHOWDOWN_RESULT:
+        nh.handleShowdownResult(event)
+    case pokerrpc.NotificationType_PLAYER_ALL_IN:
+        nh.handlePlayerAllIn(event)
+    }
 }
 
 func (nh *NotificationHandler) handleTableCreated(event *GameEvent) {
@@ -216,6 +218,21 @@ func (nh *NotificationHandler) handleShowdownResult(event *GameEvent) {
 	nh.server.notifyPlayers(event.PlayerIDs, notification)
 }
 
+func (nh *NotificationHandler) handlePlayerAllIn(event *GameEvent) {
+    pl, ok := event.Payload.(PlayerAllInPayload)
+    if !ok {
+        nh.server.log.Warnf("PLAYER_ALL_IN without PlayerAllInPayload; skipping (table=%s)", event.TableID)
+        return
+    }
+    notification := &pokerrpc.Notification{
+        Type:     pokerrpc.NotificationType_PLAYER_ALL_IN,
+        PlayerId: pl.PlayerID,
+        TableId:  event.TableID,
+        Amount:   pl.Amount,
+    }
+    nh.server.notifyPlayers(event.PlayerIDs, notification)
+}
+
 // ------------------------ Game State Handler ------------------------
 
 type GameStateHandler struct {
@@ -284,6 +301,7 @@ func (gsh *GameStateHandler) buildGameUpdateFromSnapshot(tableSnapshot *TableSna
 			Balance:    ps.Balance,
 			IsReady:    ps.IsReady,
 			Folded:     ps.HasFolded,
+			IsAllIn:    ps.IsAllIn,
 			CurrentBet: ps.HasBet,
 		}
 

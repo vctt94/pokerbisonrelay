@@ -13,20 +13,21 @@ import (
 
 // buildGameState creates a GameUpdate for the requesting player
 func (s *Server) buildGameState(tableID, requestingPlayerID string) (*pokerrpc.GameUpdate, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+    // Acquire server lock only to fetch table pointer, then release before
+    // interacting with the table to avoid lock coupling.
+    s.mu.RLock()
+    table, ok := s.tables[tableID]
+    s.mu.RUnlock()
+    if !ok {
+        return nil, status.Error(codes.NotFound, "table not found")
+    }
 
-	table, ok := s.tables[tableID]
-	if !ok {
-		return nil, status.Error(codes.NotFound, "table not found")
-	}
+    // Process any player timeouts before building the state
+    table.HandleTimeouts()
 
-	// Process any player timeouts before building the state
-	table.HandleTimeouts()
+    game := table.GetGame()
 
-	game := table.GetGame()
-
-	return s.buildGameStateForPlayer(table, game, requestingPlayerID), nil
+    return s.buildGameStateForPlayer(table, game, requestingPlayerID), nil
 }
 
 // saveTableState persists the current table state to the database
@@ -98,7 +99,7 @@ func (s *Server) saveTableState(tableID string) error {
 				IsReady:         player.IsReady,
 				Balance:         player.Balance,
 				StartingBalance: player.StartingBalance,
-				HasBet:          player.HasBet,
+				CurrentBet:      player.CurrentBet,
 				HasFolded:       player.GetCurrentStateString() == "FOLDED",
 				IsAllIn:         player.GetCurrentStateString() == "ALL_IN",
 				IsDealer:        player.IsDealer,

@@ -117,7 +117,7 @@ func TestPlayerStateMachine_FoldFromDifferentStates(t *testing.T) {
 			setup: func(p *Player) {
 				// Set up all-in conditions: balance = 0 and has bet
 				p.Balance = 0
-				p.HasBet = 100
+				p.CurrentBet = 100
 				p.SetGameState("IN_GAME")
 				p.stateMachine.Dispatch(playerStateAllIn)
 			},
@@ -180,7 +180,7 @@ func TestTryFold_PreventsFoldWhenAllIn(t *testing.T) {
 	player := NewPlayer("test-player", "Test Player", 1000)
 	// Set up all-in conditions: balance = 0 and has bet
 	player.Balance = 0
-	player.HasBet = 100
+	player.CurrentBet = 100
 	player.SetGameState("IN_GAME")
 	player.stateMachine.Dispatch(playerStateAllIn)
 

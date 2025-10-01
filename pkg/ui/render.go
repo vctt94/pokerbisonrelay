@@ -265,7 +265,7 @@ func (r *Renderer) RenderActiveGame() string {
 	s += r.renderYourCardsAndGameInfo() + "\n"
 
 	// SHOWDOWN RESULTS (if in showdown phase)
-	if r.ui.gamePhase == pokerrpc.GamePhase_SHOWDOWN {
+    if r.ui.gamePhase == pokerrpc.GamePhase_SHOWDOWN {
 		s += r.renderShowdownResults() + "\n"
 	}
 
@@ -513,8 +513,10 @@ func (r *Renderer) formatPlayerInfo(player *pokerrpc.Player) string {
 	info = append(info, fmt.Sprintf("Chips: %d", player.Balance))
 
 	// Current bet
-	if player.CurrentBet > 0 {
-		info = append(info, fmt.Sprintf("Bet: %d", player.CurrentBet))
+    if player.CurrentBet > 0 {
+        // Clarify that this is the total committed this round (absolute),
+        // not the delta of the last action.
+        info = append(info, fmt.Sprintf("Bet (total this street): %d", player.CurrentBet))
 	}
 
 	// Status indicators - clean and clear

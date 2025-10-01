@@ -247,7 +247,7 @@ func (s *Server) restoreGameState(table *poker.Table, dbTableState *db.TableStat
 				// Restore game state fields
 				player.Balance = dbPlayerState.Balance
 				player.StartingBalance = dbPlayerState.StartingBalance
-				player.HasBet = dbPlayerState.HasBet
+				player.CurrentBet = dbPlayerState.CurrentBet
 				player.IsDealer = dbPlayerState.IsDealer
 				player.IsTurn = dbPlayerState.IsTurn
 				player.HandDescription = dbPlayerState.HandDescription
@@ -271,7 +271,7 @@ func (s *Server) restoreGameState(table *poker.Table, dbTableState *db.TableStat
 				player.IsReady = dbPlayerState.IsReady
 
 				s.log.Debugf("Restored player %s: balance=%d, hasbet=%d,  disconnected=%v",
-					player.ID, player.Balance, player.HasBet, player.IsDisconnected)
+					player.ID, player.Balance, player.CurrentBet, player.IsDisconnected)
 
 				break
 			}
@@ -282,8 +282,8 @@ func (s *Server) restoreGameState(table *poker.Table, dbTableState *db.TableStat
 	// the persisted total. We do this outside the ModifyPlayers block to avoid
 	// holding the game write-lock for the additional potManager updates.
 	for idx, p := range game.GetPlayers() {
-		if p.HasBet > 0 {
-			game.AddToPotForPlayer(idx, p.HasBet)
+		if p.CurrentBet > 0 {
+			game.AddToPotForPlayer(idx, p.CurrentBet)
 		}
 	}
 

@@ -26,7 +26,6 @@ type Player struct {
 	Balance         int64 // Current in-game chips balance for active hand
 	StartingBalance int64 // Chips balance at start of current hand (for calculations)
 	Hand            []Card
-	HasBet          int64 // Current bet amount in this betting round
 	CurrentBet      int64 // Current bet amount in this betting round
 	IsDealer        bool
 	IsTurn          bool
@@ -49,7 +48,7 @@ func NewPlayer(id, name string, balance int64) *Player {
 		StartingBalance: balance,
 		TableSeat:       -1,
 		Hand:            make([]Card, 0, 2),
-		HasBet:          0,
+		CurrentBet:      0,
 		LastAction:      time.Now(),
 		IsReady:         false,
 		IsDealer:        false,
@@ -79,7 +78,7 @@ func playerStateAtTable(entity *Player) PlayerStateFn {
 // playerStateInGame represents the player actively in a game
 func playerStateInGame(entity *Player) PlayerStateFn {
 	// Update all-in status based on balance and bet
-	if entity.Balance == 0 && entity.HasBet > 0 {
+	if entity.Balance == 0 && entity.CurrentBet > 0 {
 		// Player is all-in, transition to all-in state
 		return playerStateAllIn
 	}
@@ -100,7 +99,7 @@ func playerStateInGame(entity *Player) PlayerStateFn {
 // playerStateFolded represents the player having folded
 func playerStateFolded(entity *Player) PlayerStateFn {
 	// Check if player is all-in - if so, ignore the fold attempt
-	if entity.Balance == 0 && entity.HasBet > 0 {
+	if entity.Balance == 0 && entity.CurrentBet > 0 {
 		// Player is all-in, cannot fold, return to all-in state
 		return playerStateAllIn
 	}
@@ -146,7 +145,7 @@ func (p *Player) ResetForNewHand(startingChips int64) {
 	p.Hand = make([]Card, 0, 2)
 	p.Balance = startingChips
 	p.StartingBalance = startingChips
-	p.HasBet = 0
+	p.CurrentBet = 0
 	p.IsDealer = false
 	p.IsTurn = false
 	p.HandValue = nil
@@ -215,7 +214,7 @@ func (p *Player) GetCurrentStateString() string {
 // This method enforces the rule that players cannot fold while all-in
 func (p *Player) TryFold() bool {
 	// Check if player is all-in - if so, fold is not allowed
-	if p.Balance == 0 && p.HasBet > 0 {
+	if p.Balance == 0 && p.CurrentBet > 0 {
 		return false
 	}
 

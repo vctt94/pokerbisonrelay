@@ -54,7 +54,7 @@ type PlayerState struct {
 	// Game state
 	Balance         int64
 	StartingBalance int64
-	HasBet          int64
+	CurrentBet      int64
 	HasFolded       bool
 	IsAllIn         bool
 	IsDealer        bool
@@ -300,7 +300,7 @@ func (db *DB) SavePlayerState(tableID string, playerState *PlayerState) error {
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		playerState.PlayerID, tableID, playerState.TableSeat, playerState.IsReady,
-		playerState.Balance, playerState.StartingBalance, playerState.HasBet, playerState.HasFolded,
+		playerState.Balance, playerState.StartingBalance, playerState.CurrentBet, playerState.HasFolded,
 		playerState.IsAllIn, playerState.IsDealer, playerState.IsTurn, playerState.GameState,
 		string(handJSON), playerState.HandDescription, time.Now(),
 	)
@@ -327,7 +327,7 @@ func (db *DB) LoadPlayerStates(tableID string) ([]*PlayerState, error) {
 
 		err := rows.Scan(
 			&ps.PlayerID, &ps.TableID, &ps.TableSeat, &ps.IsReady,
-			&ps.Balance, &ps.StartingBalance, &ps.HasBet, &ps.HasFolded, &ps.IsAllIn,
+			&ps.Balance, &ps.StartingBalance, &ps.CurrentBet, &ps.HasFolded, &ps.IsAllIn,
 			&ps.IsDealer, &ps.IsTurn, &ps.GameState, &handJSON, &ps.HandDescription,
 			&ps.LastAction,
 		)
@@ -445,7 +445,7 @@ func (db *DB) SaveSnapshot(tableState *TableState, playerStates []*PlayerState) 
 		handJSON, _ := json.Marshal(ps.Hand)
 		_, err = stmt.Exec(
 			ps.PlayerID, tableState.ID, ps.TableSeat, ps.IsReady,
-			ps.Balance, ps.StartingBalance, ps.HasBet, ps.HasFolded, ps.IsAllIn,
+			ps.Balance, ps.StartingBalance, ps.CurrentBet, ps.HasFolded, ps.IsAllIn,
 			ps.IsDealer, ps.IsTurn, ps.GameState, string(handJSON), ps.HandDescription, time.Now(),
 		)
 		if err != nil {

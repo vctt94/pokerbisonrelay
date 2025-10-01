@@ -94,7 +94,7 @@ func (s *Server) collectPlayerSnapshot(user *poker.User, game *poker.Game) *Play
 				snapshot.IsTurn = player.IsTurn
 				snapshot.GameState = player.GetCurrentStateString()
 				snapshot.HandDescription = player.HandDescription
-				snapshot.HasBet = player.HasBet
+				snapshot.HasBet = player.CurrentBet
 				snapshot.StartingBalance = player.StartingBalance
 
 				// Deep copy hand cards to ensure immutability

@@ -339,18 +339,18 @@ func (t *Table) handleShowdown() error {
 
 	// Remove busted players (0 chips) and count remaining players
 	playersToRemove := make([]string, 0)
-
-	for _, u := range t.users {
-		// Find player's current chip balance
-		var playerBalance int64 = 0
-		for _, player := range t.game.players {
-			if player.ID == u.ID {
-				playerBalance = player.Balance
-				break
-			}
+	snap := t.game.GetStateSnapshot()
+	// Build quick lookup of balances by player ID
+	balances := make(map[string]int64, len(snap.Players))
+	for _, p := range snap.Players {
+		if p != nil {
+			balances[p.ID] = p.Balance
 		}
+	}
 
-		if playerBalance == 0 {
+	t.mu.Lock()
+	for _, u := range t.users {
+		if balances[u.ID] == 0 {
 			playersToRemove = append(playersToRemove, u.ID)
 		}
 	}
@@ -360,6 +360,7 @@ func (t *Table) handleShowdown() error {
 	if t.shouldGameEnd() {
 		t.log.Infof("Game should end, calling endGame()")
 		t.endGame()
+		t.mu.Unlock()
 		return nil
 	}
 
@@ -381,13 +382,10 @@ func (t *Table) handleShowdown() error {
 	// Schedule auto-start of the next hand strictly after showdown resolution
 	if t.config.AutoStartDelay > 0 {
 		t.log.Debugf("Scheduling auto-start for new hand with delay %v", t.config.AutoStartDelay)
-		// Provide callbacks if not already set
-		if t.game.autoStartCallbacks == nil {
-			// This is safe because we hold the table lock and SetAutoStartCallbacks locks the game.
+		// Provide callbacks if not already set (check with game lock)
+		if !t.game.HasAutoStartCallbacks() {
 			t.game.SetAutoStartCallbacks(&AutoStartCallbacks{
 				MinPlayers: func() int {
-					// In tournament mode, allow continuation with fewer players if at least 2 remain
-					// Otherwise, use the configured minimum
 					remainingPlayers := len(t.users)
 					if remainingPlayers >= 2 {
 						return 2 // Allow heads-up play
@@ -398,9 +396,9 @@ func (t *Table) handleShowdown() error {
 				OnNewHandStarted: nil,
 			})
 		}
-		// Call internal scheduler without holding the game lock to avoid deadlocks
 		t.game.ScheduleAutoStart()
 	}
+	t.mu.Unlock()
 	return nil
 }
 
@@ -606,7 +604,7 @@ func (t *Table) setupNewHand(activePlayers []*User) error {
 	t.log.Debugf("setupNewHand: Phase 3 - Transitioning to PRE_FLOP and setting current player")
 	t.game.phase = pokerrpc.GamePhase_PRE_FLOP
 	t.initializeCurrentPlayer()
-	t.log.Debugf("setupNewHand: Current player set to %s (index %d)", t.currentPlayerID(), t.game.currentPlayer)
+	t.log.Debugf("setupNewHand: Current player set to %s (index %d)", t.currentPlayerID(), t.game.GetCurrentPlayer())
 
 	// Start the timeout clock for the first current player
 	if t.game.currentPlayer >= 0 && t.game.currentPlayer < len(t.game.players) {
@@ -666,11 +664,15 @@ func (t *Table) GetBigBlind() int64 {
 
 // MakeBet handles betting by delegating to the Game layer
 func (t *Table) MakeBet(userID string, amount int64) error {
+	if amount < 0 {
+		return fmt.Errorf("amount cannot be negative")
+	}
+
 	t.mu.Lock()
-	defer t.mu.Unlock()
 
 	user := t.users[userID]
 	if user == nil {
+		t.mu.Unlock()
 		return fmt.Errorf("user not found")
 	}
 
@@ -678,22 +680,24 @@ func (t *Table) MakeBet(userID string, amount int64) error {
 	if t.isGameActive() && t.game != nil {
 		currentPlayerID := t.currentPlayerID()
 		t.log.Debugf("MakeBet: userID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v, amount=%d",
-			userID, currentPlayerID, t.game.currentPlayer, t.game.phase, amount)
+			userID, currentPlayerID, t.game.GetCurrentPlayer(), t.game.GetPhase(), amount)
 		if currentPlayerID != userID {
+			t.mu.Unlock()
 			return fmt.Errorf("not your turn to act")
 		}
 
-		// Delegate to Game layer - this handles all the betting logic
-		err := t.game.handlePlayerBet(userID, amount)
-		if err != nil {
+		// Delegate to Game layer - this handles all the betting logic (locks internally)
+		if err := t.game.HandlePlayerBet(userID, amount); err != nil {
+			t.mu.Unlock()
 			return err
 		}
-
-		// Check if this action completes the betting round
-		t.MaybeAdvancePhase()
 	}
 
 	t.lastAction = time.Now()
+	t.mu.Unlock()
+
+	// Check if this action completes the betting round (outside table lock)
+	t.MaybeCompleteBettingRound()
 	return nil
 }
 
@@ -739,32 +743,47 @@ func (t *Table) HandleTimeouts() {
 	now := time.Now()
 
 	t.mu.Lock()
-	defer t.mu.Unlock()
 
 	// Only timeout the current player
 	currentPlayerID := ""
 	if t.game.currentPlayer >= 0 && t.game.currentPlayer < len(t.game.players) {
-		currentPlayerID = t.game.players[t.game.currentPlayer].ID
+		// Prefer snapshot to avoid racy access to game internals
+		snap := t.game.GetStateSnapshot()
+		if snap.CurrentPlayer >= 0 && snap.CurrentPlayer < len(snap.Players) && snap.Players[snap.CurrentPlayer] != nil {
+			currentPlayerID = snap.Players[snap.CurrentPlayer].ID
+		}
 	}
 
 	if currentPlayerID == "" {
+		t.mu.Unlock()
 		return // No current player to timeout
 	}
 
-	// The current player is already in our unified player state
-	currentPlayer := t.game.players[t.game.currentPlayer]
-	if currentPlayer.GetCurrentStateString() == "FOLDED" || currentPlayer.GetCurrentStateString() == "ALL_IN" {
+	// The current player is in the unified player state (use actual pointer via index)
+	snap := t.game.GetStateSnapshot()
+	if snap.CurrentPlayer < 0 || snap.CurrentPlayer >= len(snap.Players) || snap.Players[snap.CurrentPlayer] == nil {
+		t.mu.Unlock()
 		return
 	}
+	// Access the actual player pointer for mutation
+	currentIdx := snap.CurrentPlayer
+	currentPlayer := t.game.players[currentIdx]
+	if currentPlayer.GetCurrentStateString() == "FOLDED" || currentPlayer.GetCurrentStateString() == "ALL_IN" {
+		t.mu.Unlock()
+		return
+	}
+
+	// Whether we should check completion after releasing the table lock
+	shouldCheckCompletion := false
 
 	// Check if current player has timed out
 	if now.Sub(currentPlayer.LastAction) > t.config.TimeBank {
 		// Try to auto-check first, if not possible then auto-fold
-		currentBet := t.game.currentBet
+		currentBet := snap.CurrentBet
 
 		// A check is valid if the player's current bet equals the current bet
 		// (meaning they don't need to put any additional money in)
-		if currentPlayer.HasBet == currentBet {
+		if currentPlayer.CurrentBet == currentBet {
 			// Auto-check: essentially a bet of the current amount
 			// This doesn't change the bet amounts but advances the action
 			currentPlayer.LastAction = now
@@ -776,7 +795,7 @@ func (t *Table) HandleTimeouts() {
 			t.advanceToNextPlayer()
 		} else {
 			// Auto-fold the current player - they cannot check because they need to call/raise
-			// This covers the case where currentPlayer.HasBet < currentBet (player needs to call)
+			// This covers the case where currentPlayer.CurrentBet < currentBet (player needs to call)
 			currentPlayer.stateMachine.Dispatch(playerStateFolded)
 			currentPlayer.LastAction = now
 
@@ -784,27 +803,94 @@ func (t *Table) HandleTimeouts() {
 			t.advanceToNextPlayer()
 		}
 
-		// Check if this action completes the betting round
-		t.MaybeAdvancePhase()
+		// Defer the completion check to run outside the table lock
+		shouldCheckCompletion = true
+	}
+
+	t.mu.Unlock()
+
+	if shouldCheckCompletion {
+		t.MaybeCompleteBettingRound()
 	}
 }
 
-// MaybeAdvancePhase delegates to Game layer for phase advancement logic
-func (t *Table) MaybeAdvancePhase() {
+// MaybeCompleteBettingRound delegates to Game layer for phase advancement logic
+func (t *Table) MaybeCompleteBettingRound() error {
 	if !t.isGameActive() || t.game == nil {
-		return
+		return nil
 	}
 
-	// Delegate to Game layer - this handles all the phase advancement logic
-	t.log.Debugf("table.maybeAdvancePhase: delegating (phase=%v actionsInRound=%d currentBet=%d)", t.game.phase, t.game.GetActionsInRound(), t.game.GetCurrentBet())
-	t.game.maybeAdvancePhase()
+	// Compute actionable counts from a safe snapshot to avoid data races.
+	snapshot := t.game.GetStateSnapshot()
+	alivePlayers := 0
+	activePlayers := 0
+	for _, p := range snapshot.Players {
+		if p == nil {
+			continue
+		}
+		if p.GetCurrentStateString() != "FOLDED" {
+			alivePlayers++
+			if p.GetCurrentStateString() != "ALL_IN" {
+				activePlayers++
+			}
+		}
+	}
+
+	var err error
+
+	if alivePlayers > 1 && (activePlayers == 0 || activePlayers == 1) {
+		// Step through missing streets asynchronously with small gaps so
+		// snapshots captured by the server reflect each intermediate phase.
+		startPhase := t.game.GetPhase()
+		tableID := t.config.ID
+		ap := activePlayers
+		al := alivePlayers
+		go func() {
+			// Refund any uncalled portion before we reset current bets by dealing
+			// additional streets. This avoids creating invalid side pots that only
+			// the all-in player is eligible to win.
+			if localErr := t.game.RefundUncalledBets(); localErr != nil {
+				t.log.Errorf("table.maybeAdvancePhase: failed to refund uncalled bets: %v", localErr)
+			}
+			step := func(do func(), note string) {
+				do()
+				t.log.Debugf("table.maybeAdvancePhase: broadcast %s", note)
+				t.PublishEvent(pokerrpc.NotificationType_NEW_ROUND, tableID, nil)
+				time.Sleep(1 * time.Second)
+			}
+			switch startPhase {
+			case pokerrpc.GamePhase_PRE_FLOP:
+				step(t.game.StateFlop, "FLOP")
+				step(t.game.StateTurn, "TURN")
+				step(t.game.StateRiver, "RIVER")
+			case pokerrpc.GamePhase_FLOP:
+				step(t.game.StateTurn, "TURN")
+				step(t.game.StateRiver, "RIVER")
+			case pokerrpc.GamePhase_TURN:
+				step(t.game.StateRiver, "RIVER")
+			}
+			t.log.Debugf("table.maybeAdvancePhase: betting closed (alive=%d active=%d), proceeding to SHOWDOWN with broadcasts", al, ap)
+			// Proceed to showdown (phase will be set by game logic inside handleShowdown).
+			_ = t.handleShowdown()
+		}()
+		return nil
+	}
+
+	// Otherwise, delegate to Game layer for normal progression
+	t.log.Debugf("table.maybeAdvancePhase: delegating (phase=%v actionsInRound=%d currentBet=%d)", t.game.GetPhase(), t.game.GetActionsInRound(), t.game.GetCurrentBet())
+	t.game.maybeCompleteBettingRound()
 
 	// Handle showdown if we reached that phase
-	if t.game.phase == pokerrpc.GamePhase_SHOWDOWN {
+	if t.game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN {
 		t.log.Debugf("table.maybeAdvancePhase: entering SHOWDOWN, handling showdown")
-		t.handleShowdown()
+		err = t.handleShowdown()
+		if err != nil {
+			t.log.Errorf("table.maybeAdvancePhase: failed to handle showdown: %v", err)
+			return err
+		}
 	}
 
+	return err
 }
 
 // GetGame returns the current game (can be nil)
@@ -829,27 +915,42 @@ func (t *Table) GetCurrentBet() int64 {
 	if t.game == nil {
 		return 0
 	}
-	return t.game.currentBet
+	return t.game.GetCurrentBet()
 }
 
 // GetCurrentPlayerID returns the ID of the player whose turn it is
 func (t *Table) GetCurrentPlayerID() string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.currentPlayerID()
+	// Safely derive from a snapshot
+	if t.game == nil {
+		return ""
+	}
+	snap := t.game.GetStateSnapshot()
+	if snap.CurrentPlayer < 0 || snap.CurrentPlayer >= len(snap.Players) {
+		return ""
+	}
+	p := snap.Players[snap.CurrentPlayer]
+	if p == nil {
+		return ""
+	}
+	return p.ID
 }
 
 // currentPlayerID returns the current player ID without acquiring locks (private helper)
 func (t *Table) currentPlayerID() string {
-	if t.game == nil || len(t.game.players) == 0 {
+	if t.game == nil {
 		return ""
 	}
-
-	if t.game.currentPlayer < 0 || t.game.currentPlayer >= len(t.game.players) {
+	snap := t.game.GetStateSnapshot()
+	if snap.CurrentPlayer < 0 || snap.CurrentPlayer >= len(snap.Players) {
 		return ""
 	}
-
-	return t.game.players[t.game.currentPlayer].ID
+	p := snap.Players[snap.CurrentPlayer]
+	if p == nil {
+		return ""
+	}
+	return p.ID
 }
 
 // advanceToNextPlayer delegates to Game layer
@@ -857,7 +958,7 @@ func (t *Table) advanceToNextPlayer() {
 	if t.game == nil {
 		return
 	}
-	t.game.advanceToNextPlayer()
+	t.game.AdvanceToNextPlayer()
 }
 
 // initializeCurrentPlayer delegates to Game layer
@@ -865,16 +966,16 @@ func (t *Table) initializeCurrentPlayer() {
 	if t.game == nil {
 		return
 	}
-	t.game.initializeCurrentPlayer()
+	t.game.InitializeCurrentPlayer()
 }
 
 // HandleFold handles folding by delegating to the Game layer
 func (t *Table) HandleFold(userID string) error {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 
 	user := t.users[userID]
 	if user == nil {
+		t.mu.Unlock()
 		return fmt.Errorf("user not found")
 	}
 
@@ -882,32 +983,34 @@ func (t *Table) HandleFold(userID string) error {
 	if t.isGameActive() && t.game != nil {
 		currentPlayerID := t.currentPlayerID()
 		t.log.Debugf("HandleFold: userID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v",
-			userID, currentPlayerID, t.game.currentPlayer, t.game.phase)
+			userID, currentPlayerID, t.game.GetCurrentPlayer(), t.game.GetPhase())
 		if currentPlayerID != userID {
+			t.mu.Unlock()
 			return fmt.Errorf("not your turn to act")
 		}
 
-		// Delegate to Game layer - this handles all the folding logic
-		err := t.game.handlePlayerFold(userID)
-		if err != nil {
+		// Delegate to Game layer - this handles all the folding logic (locks internally)
+		if err := t.game.HandlePlayerFold(userID); err != nil {
+			t.mu.Unlock()
 			return err
 		}
-
-		// Check if this action completes the betting round
-		t.MaybeAdvancePhase()
 	}
 
 	t.lastAction = time.Now()
+	t.mu.Unlock()
+
+	// Check if this action completes the betting round (outside table lock)
+	t.MaybeCompleteBettingRound()
 	return nil
 }
 
 // HandleCall handles call actions by delegating to the Game layer
 func (t *Table) HandleCall(userID string) error {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 
 	user := t.users[userID]
 	if user == nil {
+		t.mu.Unlock()
 		return fmt.Errorf("user not found")
 	}
 
@@ -915,34 +1018,36 @@ func (t *Table) HandleCall(userID string) error {
 	if t.isGameActive() && t.game != nil {
 		currentPlayerID := t.currentPlayerID()
 		t.log.Debugf("HandleCall: userID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v",
-			userID, currentPlayerID, t.game.currentPlayer, t.game.phase)
+			userID, currentPlayerID, t.game.GetCurrentPlayer(), t.game.GetPhase())
 		if currentPlayerID != userID {
+			t.mu.Unlock()
 			return fmt.Errorf("not your turn to act")
 		}
 
-		// Delegate to Game layer - this handles all the calling logic
-		err := t.game.handlePlayerCall(userID)
-		if err != nil {
+		// Delegate to Game layer - this handles all the calling logic (locks internally)
+		if err := t.game.HandlePlayerCall(userID); err != nil {
+			t.mu.Unlock()
 			return err
 		}
 
 		t.log.Debugf("HandleCall: user %s called; actionsInRound=%d currentBet=%d", userID, t.game.GetActionsInRound(), t.game.GetCurrentBet())
-
-		// Check if this action completes the betting round
-		t.MaybeAdvancePhase()
 	}
 
 	t.lastAction = time.Now()
+	t.mu.Unlock()
+
+	// Check if this action completes the betting round (outside table lock)
+	t.MaybeCompleteBettingRound()
 	return nil
 }
 
 // HandleCheck handles check actions by delegating to the Game layer
 func (t *Table) HandleCheck(userID string) error {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 
 	user := t.users[userID]
 	if user == nil {
+		t.mu.Unlock()
 		return fmt.Errorf("user not found")
 	}
 
@@ -950,24 +1055,30 @@ func (t *Table) HandleCheck(userID string) error {
 	if t.isGameActive() && t.game != nil {
 		currentPlayerID := t.currentPlayerID()
 		t.log.Debugf("HandleCheck: userID=%s, currentPlayerID=%s, currentPlayer=%d, gamePhase=%v",
-			userID, currentPlayerID, t.game.currentPlayer, t.game.phase)
+			userID, currentPlayerID, t.game.GetCurrentPlayer(), t.game.GetPhase())
 		if currentPlayerID != userID {
+			t.mu.Unlock()
 			return fmt.Errorf("not your turn to act")
 		}
 
-		// Delegate to Game layer - this handles all the checking logic
-		err := t.game.handlePlayerCheck(userID)
-		if err != nil {
+		// Delegate to Game layer - this handles all the checking logic (locks internally)
+		if err := t.game.HandlePlayerCheck(userID); err != nil {
+			t.mu.Unlock()
 			return err
 		}
 
 		t.log.Debugf("HandleCheck: user %s checked; actionsInRound=%d currentBet=%d", userID, t.game.GetActionsInRound(), t.game.GetCurrentBet())
-
-		// Check if this action completes the betting round
-		t.MaybeAdvancePhase()
 	}
 
 	t.lastAction = time.Now()
+	t.mu.Unlock()
+
+	// Check if this action completes the betting round (outside table lock)
+	err := t.MaybeCompleteBettingRound()
+	if err != nil {
+		t.log.Errorf("HandleCheck: failed to complete betting round: %v", err)
+		return err
+	}
 	return nil
 }
 
@@ -1009,8 +1120,8 @@ func (t *Table) postBlindsFromGame() error {
 		}
 
 		player.Balance -= smallBlindAmount
-		player.HasBet = smallBlindAmount
-		t.game.potManager.AddBet(smallBlindPos, smallBlindAmount, t.game.players)
+		player.CurrentBet = smallBlindAmount
+		t.game.potManager.addBet(smallBlindPos, smallBlindAmount, t.game.players)
 
 		// Send small blind notification
 		// DISABLED: Notification callbacks cause deadlocks - server handles notifications directly
@@ -1031,8 +1142,8 @@ func (t *Table) postBlindsFromGame() error {
 		}
 
 		player.Balance -= bigBlindAmount
-		player.HasBet = bigBlindAmount
-		t.game.potManager.AddBet(bigBlindPos, bigBlindAmount, t.game.players)
+		player.CurrentBet = bigBlindAmount
+		t.game.potManager.addBet(bigBlindPos, bigBlindAmount, t.game.players)
 		t.game.currentBet = bigBlindAmount // Set current bet to big blind amount
 
 		// Send big blind notification
@@ -1223,7 +1334,7 @@ func (t *Table) getGamePhase() pokerrpc.GamePhase {
 	if t.game == nil {
 		return pokerrpc.GamePhase_WAITING
 	}
-	return t.game.phase
+	return t.game.GetPhase()
 }
 
 // SetUserDCRAccountBalance safely updates the DCRAccountBalance of a user seated at the table.
