@@ -161,7 +161,7 @@ func createTables(db *sql.DB) error {
 			is_all_in BOOLEAN NOT NULL DEFAULT FALSE,
 			is_dealer BOOLEAN NOT NULL DEFAULT FALSE,
 			is_turn BOOLEAN NOT NULL DEFAULT FALSE,
-			game_state TEXT NOT NULL DEFAULT 'AT_TABLE',
+			game_state TEXT NOT NULL CHECK (game_state IN ('AT_TABLE','IN_GAME','ALL_IN','FOLDED','LEFT')) DEFAULT 'AT_TABLE',
 			hand TEXT DEFAULT '[]',
 			hand_description TEXT DEFAULT '',
 			last_action TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

@@ -189,16 +189,16 @@ func stateBlinds(entity *Game) GameStateFn {
 			return
 		}
 		// Skip if this player already has an equal or greater bet recorded (blind already posted).
-		if p.CurrentBet >= amount {
+		if p.currentBet >= amount {
 			return
 		}
-		if amount > p.Balance {
+		if amount > p.balance {
 			// Player cannot cover blind – treat as all-in of remaining balance.
-			amount = p.Balance
+			amount = p.balance
 			p.stateMachine.Dispatch(playerStateAllIn)
 		}
-		p.Balance -= amount
-		p.CurrentBet += amount
+		p.balance -= amount
+		p.currentBet += amount
 		entity.potManager.addBet(pos, amount, entity.players)
 	}
 
@@ -484,9 +484,9 @@ func (g *Game) SetPlayers(users []*User) {
 		player := NewPlayer(user.ID, user.Name, g.config.StartingChips)
 
 		// Copy table-level state from user
-		player.TableSeat = user.TableSeat
-		player.IsReady = user.IsReady
-		player.LastAction = time.Now() // Set current time since User doesn't have LastAction
+		player.tableSeat = user.TableSeat
+		player.isReady = user.IsReady
+		player.lastAction = time.Now() // Set current time since User doesn't have LastAction
 
 		g.players[i] = player
 	}
@@ -586,7 +586,7 @@ func (g *Game) handlePlayerFold(playerID string) error {
 	}
 
 	player.stateMachine.Dispatch(playerStateFolded)
-	player.LastAction = time.Now()
+	player.lastAction = time.Now()
 	g.updatePlayerState(player)
 	g.actionsInRound++
 
@@ -631,29 +631,29 @@ func (g *Game) handlePlayerCall(playerID string) error {
 		return fmt.Errorf("not your turn to act")
 	}
 
-	if g.currentBet <= player.CurrentBet {
+	if g.currentBet <= player.currentBet {
 		return fmt.Errorf("nothing to call - use check instead")
 	}
 
-	delta := g.currentBet - player.CurrentBet
-	if delta > player.Balance {
+	delta := g.currentBet - player.currentBet
+	if delta > player.balance {
 		// Player cannot afford to call - make them all-in with remaining balance
-		g.log.Debugf("Player %s cannot afford to call %d (has %d), going all-in", player.ID, delta, player.Balance)
-		delta = player.Balance
+		g.log.Debugf("Player %s cannot afford to call %d (has %d), going all-in", player.id, delta, player.balance)
+		delta = player.balance
 		player.stateMachine.Dispatch(playerStateAllIn)
-		player.LastAction = time.Now()
+		player.lastAction = time.Now()
 	}
 
-	player.Balance -= delta
-	player.CurrentBet += delta
-	player.LastAction = time.Now()
+	player.balance -= delta
+	player.currentBet += delta
+	player.lastAction = time.Now()
 
 	// Update player state using state machine dispatch
 	g.updatePlayerState(player)
 
 	// Find player index and add to pot
 	for i, p := range g.players {
-		if p.ID == playerID {
+		if p.id == playerID {
 			g.potManager.addBet(i, delta, g.players)
 			break
 		}
@@ -683,12 +683,12 @@ func (g *Game) handlePlayerCheck(playerID string) error {
 		return fmt.Errorf("not your turn to act")
 	}
 
-	if player.CurrentBet < g.currentBet {
+	if player.currentBet < g.currentBet {
 		return fmt.Errorf("cannot check when there's a bet to call (player bet: %d, current bet: %d)",
-			player.CurrentBet, g.currentBet)
+			player.currentBet, g.currentBet)
 	}
 
-	player.LastAction = time.Now()
+	player.lastAction = time.Now()
 	g.actionsInRound++
 	g.advanceToNextPlayer()
 
@@ -713,24 +713,24 @@ func (g *Game) handlePlayerBet(playerID string, amount int64) error {
 		return fmt.Errorf("not your turn to act")
 	}
 
-	if amount < player.CurrentBet {
+	if amount < player.currentBet {
 		return fmt.Errorf("cannot decrease bet")
 	}
 
-	delta := amount - player.CurrentBet
-	if delta > 0 && delta > player.Balance {
+	delta := amount - player.currentBet
+	if delta > 0 && delta > player.balance {
 		// Player cannot afford the bet - make them all-in with remaining balance
-		g.log.Debugf("Player %s cannot afford to bet %d (has %d), going all-in", player.ID, delta, player.Balance)
-		delta = player.Balance
-		amount = player.CurrentBet + delta
+		g.log.Debugf("Player %s cannot afford to bet %d (has %d), going all-in", player.id, delta, player.balance)
+		delta = player.balance
+		amount = player.currentBet + delta
 		player.stateMachine.Dispatch(playerStateAllIn)
 	}
 
 	if delta > 0 {
-		player.Balance -= delta
+		player.balance -= delta
 	}
-	player.CurrentBet = amount
-	player.LastAction = time.Now()
+	player.currentBet = amount
+	player.lastAction = time.Now()
 
 	// Update player state using state machine dispatch
 	g.updatePlayerState(player)
@@ -742,7 +742,7 @@ func (g *Game) handlePlayerBet(playerID string, amount int64) error {
 	// Find player index and add to pot
 	if delta > 0 {
 		for i, p := range g.players {
-			if p.ID == playerID {
+			if p.id == playerID {
 				g.potManager.addBet(i, delta, g.players)
 				break
 			}
@@ -769,7 +769,7 @@ func (g *Game) updatePlayerState(player *Player) {
 // getPlayerByID finds a player by ID
 func (g *Game) getPlayerByID(playerID string) *Player {
 	for _, p := range g.players {
-		if p.ID == playerID {
+		if p.id == playerID {
 			return p
 		}
 	}
@@ -781,7 +781,7 @@ func (g *Game) currentPlayerID() string {
 	if g.currentPlayer < 0 || g.currentPlayer >= len(g.players) {
 		return ""
 	}
-	return g.players[g.currentPlayer].ID
+	return g.players[g.currentPlayer].id
 }
 
 // advanceToNextPlayer moves to the next active player
@@ -855,7 +855,7 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 	// --- Uncontested (fold-win): build pots, award total, reset state
 	if len(unfoldedPlayers) == 1 {
 		winner := unfoldedPlayers[0]
-		g.log.Infof("HERE ON ONE ACTIVE PLAYER: %s", winner.ID)
+		g.log.Infof("HERE ON ONE ACTIVE PLAYER: %s", winner.id)
 
 		sum := int64(0)
 		for _, p := range g.potManager.pots {
@@ -868,7 +868,7 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 		prev := make(map[string]int64, len(g.players))
 		for _, p := range g.players {
 			if p != nil {
-				prev[p.ID] = p.Balance
+				prev[p.id] = p.balance
 			}
 		}
 
@@ -880,26 +880,26 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 			if p == nil {
 				continue
 			}
-			delta := p.Balance - prev[p.ID]
+			delta := p.balance - prev[p.id]
 			if delta > 0 {
-				result.Winners = append(result.Winners, p.ID)
+				result.Winners = append(result.Winners, p.id)
 
 				// Best hand (use hole cards if board < 5)
 				var best []Card
-				if len(p.Hand)+len(g.communityCards) >= 5 {
-					hv, err := EvaluateHand(p.Hand, g.communityCards)
+				if len(p.hand)+len(g.communityCards) >= 5 {
+					hv, err := EvaluateHand(p.hand, g.communityCards)
 					if err != nil {
-						return nil, fmt.Errorf("failed to evaluate hand for player %s: %w", p.ID, err)
+						return nil, fmt.Errorf("failed to evaluate hand for player %s: %w", p.id, err)
 					}
-					p.HandValue = &hv
-					p.HandDescription = GetHandDescription(hv)
+					p.handValue = &hv
+					p.handDescription = GetHandDescription(hv)
 					best = hv.BestHand
 				} else {
-					best = p.Hand
+					best = p.hand
 				}
 
 				result.WinnerInfo = append(result.WinnerInfo, &pokerrpc.Winner{
-					PlayerId: p.ID,
+					PlayerId: p.id,
 					BestHand: CreateHandFromCards(best),
 					Winnings: delta,
 				})
@@ -941,21 +941,21 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 
 	// After auto-deal, validate again for safety
 	for _, p := range unfoldedPlayers {
-		if len(p.Hand)+len(g.communityCards) < 5 {
+		if len(p.hand)+len(g.communityCards) < 5 {
 			return nil, fmt.Errorf("invalid showdown: player %s has insufficient cards (hole=%d, board=%d)",
-				p.ID, len(p.Hand), len(g.communityCards))
+				p.id, len(p.hand), len(g.communityCards))
 		}
 	}
 
 	// Evaluate each active player's hand
 	for _, p := range unfoldedPlayers {
-		hv, err := EvaluateHand(p.Hand, g.communityCards)
+		hv, err := EvaluateHand(p.hand, g.communityCards)
 		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate hand for player %s: %w", p.ID, err)
+			return nil, fmt.Errorf("failed to evaluate hand for player %s: %w", p.id, err)
 		}
-		p.HandValue = &hv
-		p.HandDescription = GetHandDescription(hv)
-		g.log.Debugf("handleShowdown: player %s hand=%v description=%s", p.ID, p.Hand, p.HandDescription)
+		p.handValue = &hv
+		p.handDescription = GetHandDescription(hv)
+		g.log.Debugf("handleShowdown: player %s hand=%v description=%s", p.id, p.hand, p.handDescription)
 	}
 
 	// Use the pre-refund snapshot for notification consistency
@@ -970,8 +970,8 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 	prev := make(map[string]int64, len(g.players))
 	for _, p := range g.players {
 		if p != nil {
-			prev[p.ID] = p.Balance
-			g.log.Debugf("handleShowdown: player %s balance before distribution=%d", p.ID, p.Balance)
+			prev[p.id] = p.balance
+			g.log.Debugf("handleShowdown: player %s balance before distribution=%d", p.id, p.balance)
 		}
 	}
 
@@ -986,20 +986,20 @@ func (g *Game) handleShowdown() (*ShowdownResult, error) {
 		if p == nil {
 			continue
 		}
-		delta := p.Balance - prev[p.ID]
-		g.log.Debugf("handleShowdown: player %s balance after distribution=%d delta=%d", p.ID, p.Balance, delta)
+		delta := p.balance - prev[p.id]
+		g.log.Debugf("handleShowdown: player %s balance after distribution=%d delta=%d", p.id, p.balance, delta)
 		if delta > 0 {
-			result.Winners = append(result.Winners, p.ID)
+			result.Winners = append(result.Winners, p.id)
 			var handRank pokerrpc.HandRank
 			var best []Card
-			if p.HandValue != nil {
-				handRank = p.HandValue.HandRank
-				best = p.HandValue.BestHand
+			if p.handValue != nil {
+				handRank = p.handValue.HandRank
+				best = p.handValue.BestHand
 			} else {
-				best = p.Hand
+				best = p.hand
 			}
 			result.WinnerInfo = append(result.WinnerInfo, &pokerrpc.Winner{
-				PlayerId: p.ID,
+				PlayerId: p.id,
 				HandRank: handRank,
 				BestHand: CreateHandFromCards(best),
 				Winnings: delta,
@@ -1098,7 +1098,7 @@ func (g *Game) maybeCompleteBettingRound() {
 		if p.GetCurrentStateString() == "ALL_IN" {
 			continue
 		}
-		if p.CurrentBet != g.currentBet {
+		if p.currentBet != g.currentBet {
 			unmatchedPlayers++
 		}
 	}
@@ -1131,7 +1131,7 @@ func (g *Game) maybeCompleteBettingRound() {
 
 	// Reset for new betting round
 	for _, p := range g.players {
-		p.CurrentBet = 0
+		p.currentBet = 0
 	}
 	g.currentBet = 0
 	g.ResetActionsInRound() // Reset actions counter for new betting round
@@ -1140,13 +1140,13 @@ func (g *Game) maybeCompleteBettingRound() {
 	g.initializeCurrentPlayer()
 	if g.currentPlayer >= 0 && g.currentPlayer < len(g.players) {
 		g.log.Debug("maybeAdvancePhase: new round currentPlayer=%d id=%s",
-			g.currentPlayer, g.players[g.currentPlayer].ID)
+			g.currentPlayer, g.players[g.currentPlayer].id)
 	}
 
 	// Set the new current player's LastAction to now for the new betting round
 	if g.currentPlayer >= 0 && g.currentPlayer < len(g.players) {
 		if g.players[g.currentPlayer].GetCurrentStateString() != "FOLDED" {
-			g.players[g.currentPlayer].LastAction = time.Now()
+			g.players[g.currentPlayer].lastAction = time.Now()
 		}
 	}
 }
@@ -1345,16 +1345,16 @@ func (g *Game) scheduleAutoStart() {
 		for _, player := range g.players {
 			// Count players who have any chips left. Short stacks will auto-post
 			// blinds all-in when needed during hand setup.
-			if player.Balance > 0 {
+			if player.balance > 0 {
 				readyCount++
 				// Log explicitly that short stacks are still eligible for auto-start.
-				if player.Balance < g.config.BigBlind {
-					log.Debugf("Player %s ready for auto-start (short stack all-in): balance=%d < bigBlind=%d", player.ID, player.Balance, g.config.BigBlind)
+				if player.balance < g.config.BigBlind {
+					log.Debugf("Player %s ready for auto-start (short stack all-in): balance=%d < bigBlind=%d", player.id, player.balance, g.config.BigBlind)
 				} else {
-					log.Debugf("Player %s ready for auto-start: balance=%d >= bigBlind=%d", player.ID, player.Balance, g.config.BigBlind)
+					log.Debugf("Player %s ready for auto-start: balance=%d >= bigBlind=%d", player.id, player.balance, g.config.BigBlind)
 				}
 			} else {
-				log.Debugf("Player %s not ready for auto-start: balance=0", player.ID)
+				log.Debugf("Player %s not ready for auto-start: balance=0", player.id)
 			}
 		}
 
@@ -1415,22 +1415,22 @@ func (g *Game) GetStateSnapshot() GameStateSnapshot {
 	for i, player := range g.players {
 		// Create a copy of the player to avoid race conditions
 		playerCopy := &Player{
-			ID:              player.ID,
-			Name:            player.Name,
-			TableSeat:       player.TableSeat,
-			IsReady:         player.IsReady,
-			Balance:         player.Balance,
-			StartingBalance: player.StartingBalance,
-			CurrentBet:      player.CurrentBet,
-			IsDealer:        player.IsDealer,
-			IsTurn:          player.IsTurn,
-			Hand:            make([]Card, len(player.Hand)),
-			HandDescription: player.HandDescription,
-			HandValue:       player.HandValue,
-			LastAction:      player.LastAction,
+			id:              player.id,
+			name:            player.name,
+			tableSeat:       player.tableSeat,
+			isReady:         player.isReady,
+			balance:         player.balance,
+			startingBalance: player.startingBalance,
+			currentBet:      player.currentBet,
+			isDealer:        player.isDealer,
+			isTurn:          player.isTurn,
+			hand:            make([]Card, len(player.hand)),
+			handDescription: player.handDescription,
+			handValue:       player.handValue,
+			lastAction:      player.lastAction,
 		}
 		// Copy the hand cards
-		copy(playerCopy.Hand, player.Hand)
+		copy(playerCopy.hand, player.hand)
 		playersCopy[i] = playerCopy
 	}
 

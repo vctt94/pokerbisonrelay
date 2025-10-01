@@ -231,8 +231,8 @@ func (s *Server) LeaveTable(ctx context.Context, req *pokerrpc.LeaveTableRequest
 		// Find player in game to get their chip balance
 		game := table.GetGame()
 		for _, player := range game.GetPlayers() {
-			if player.ID == req.PlayerId {
-				playerChips = player.Balance
+			if player.ID() == req.PlayerId {
+				playerChips = player.Balance()
 				break
 			}
 		}
@@ -323,7 +323,6 @@ func (s *Server) LeaveTable(ctx context.Context, req *pokerrpc.LeaveTableRequest
 		s.saveMu.Lock()
 		delete(s.saveMutexes, req.TableId)
 		s.saveMu.Unlock()
-
 
 		// Publish TABLE_REMOVED event so clients can remove it from their lists.
 		evt, err := s.buildGameEvent(

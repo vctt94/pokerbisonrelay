@@ -51,14 +51,14 @@ func TestNewGame(t *testing.T) {
 
 	// Check initial player state
 	for i, player := range game.players {
-		if player.Balance != 1000 {
-			t.Errorf("Player %d: Expected 1000 balance, got %d", i, player.Balance)
+		if player.balance != 1000 {
+			t.Errorf("Player %d: Expected 1000 balance, got %d", i, player.balance)
 		}
 		if player.GetCurrentStateString() == "FOLDED" {
 			t.Errorf("Player %d: Expected not folded", i)
 		}
-		if player.CurrentBet != 0 {
-			t.Errorf("Player %d: Expected 0 bet, got %d", i, player.CurrentBet)
+		if player.currentBet != 0 {
+			t.Errorf("Player %d: Expected 0 bet, got %d", i, player.currentBet)
 		}
 	}
 
@@ -111,14 +111,14 @@ func TestDealCards(t *testing.T) {
 			if !ok {
 				t.Fatalf("Failed to draw card from deck")
 			}
-			player.Hand = append(player.Hand, card)
+			player.hand = append(player.hand, card)
 		}
 	}
 
 	// Check each player has 2 cards
 	for i, player := range game.players {
-		if len(player.Hand) != 2 {
-			t.Errorf("Player %d: Expected 2 cards, got %d", i, len(player.Hand))
+		if len(player.hand) != 2 {
+			t.Errorf("Player %d: Expected 2 cards, got %d", i, len(player.hand))
 		}
 	}
 
@@ -153,7 +153,7 @@ func TestCommunityCards(t *testing.T) {
 			if !ok {
 				t.Fatalf("Failed to draw card from deck")
 			}
-			player.Hand = append(player.Hand, card)
+			player.hand = append(player.hand, card)
 		}
 	}
 
@@ -204,13 +204,13 @@ func TestShowdown(t *testing.T) {
 	player2 := game.players[1]
 
 	// Player 1 has a pair of Aces
-	player1.Hand = []Card{
+	player1.hand = []Card{
 		{suit: Hearts, value: Ace},
 		{suit: Spades, value: Ace},
 	}
 
 	// Player 2 has King-Queen
-	player2.Hand = []Card{
+	player2.hand = []Card{
 		{suit: Hearts, value: King},
 		{suit: Spades, value: Queen},
 	}
@@ -236,22 +236,22 @@ func TestShowdown(t *testing.T) {
 	}
 
 	// Player 1 should win with pair of Aces
-	if player1.Balance != 100 {
-		t.Errorf("Expected player 1 to win with pot of 100, got %d", player1.Balance)
+	if player1.balance != 100 {
+		t.Errorf("Expected player 1 to win with pot of 100, got %d", player1.balance)
 	}
 
 	// Player 2 should not win anything
-	if player2.Balance != 0 {
-		t.Errorf("Expected player 2 to not win anything, got %d", player2.Balance)
+	if player2.balance != 0 {
+		t.Errorf("Expected player 2 to not win anything, got %d", player2.balance)
 	}
 
 	// Check hand descriptions
-	if !strings.Contains(player1.HandDescription, "Pair") {
-		t.Errorf("Expected pair description, got %s", player1.HandDescription)
+	if !strings.Contains(player1.handDescription, "Pair") {
+		t.Errorf("Expected pair description, got %s", player1.handDescription)
 	}
 
-	if !strings.Contains(player2.HandDescription, "High Card") {
-		t.Errorf("Expected high card description, got %s", player2.HandDescription)
+	if !strings.Contains(player2.handDescription, "High Card") {
+		t.Errorf("Expected high card description, got %s", player2.handDescription)
 	}
 }
 
@@ -280,17 +280,17 @@ func TestTieBreakerShowdown(t *testing.T) {
 	player3 := game.players[2]
 
 	// All players have a pair of Aces but with different kickers
-	player1.Hand = []Card{
+	player1.hand = []Card{
 		{suit: Hearts, value: Ace},
 		{suit: Spades, value: Ace},
 	}
 
-	player2.Hand = []Card{
+	player2.hand = []Card{
 		{suit: Clubs, value: Ace},
 		{suit: Diamonds, value: Ace},
 	}
 
-	player3.Hand = []Card{
+	player3.hand = []Card{
 		{suit: Hearts, value: King},
 		{suit: Spades, value: King}, // Lower pair
 	}
@@ -320,17 +320,17 @@ func TestTieBreakerShowdown(t *testing.T) {
 	}
 
 	// Players 1 and 2 should tie and split the pot (50 each)
-	if player1.Balance != 50 {
-		t.Errorf("Expected player 1 to win 50 (half pot), got %d", player1.Balance)
+	if player1.balance != 50 {
+		t.Errorf("Expected player 1 to win 50 (half pot), got %d", player1.balance)
 	}
 
-	if player2.Balance != 50 {
-		t.Errorf("Expected player 2 to win 50 (half pot), got %d", player2.Balance)
+	if player2.balance != 50 {
+		t.Errorf("Expected player 2 to win 50 (half pot), got %d", player2.balance)
 	}
 
 	// Player 3 should not win anything (folded)
-	if player3.Balance != 0 {
-		t.Errorf("Expected player 3 to not win anything (folded), got %d", player3.Balance)
+	if player3.balance != 0 {
+		t.Errorf("Expected player 3 to not win anything (folded), got %d", player3.balance)
 	}
 }
 
@@ -347,8 +347,8 @@ func TestSplitPotShowdown(t *testing.T) {
 	game.SetPlayers(users)
 
 	// Force hands that don't improve beyond board
-	game.players[0].Hand = []Card{{suit: Hearts, value: Two}, {suit: Clubs, value: Three}}
-	game.players[1].Hand = []Card{{suit: Diamonds, value: Four}, {suit: Spades, value: Five}}
+	game.players[0].hand = []Card{{suit: Hearts, value: Two}, {suit: Clubs, value: Three}}
+	game.players[1].hand = []Card{{suit: Diamonds, value: Four}, {suit: Spades, value: Five}}
 
 	// Board: Straight 10-J-Q-K-A (broadway) split; use 10,J,Q,K,A in mixed suits
 	game.communityCards = []Card{
@@ -369,11 +369,11 @@ func TestSplitPotShowdown(t *testing.T) {
 	require.NotNil(t, res)
 
 	// Both players should split 100 → 50 each
-	if game.players[0].Balance != 50 {
-		t.Fatalf("p1 expected 50, got %d", game.players[0].Balance)
+	if game.players[0].balance != 50 {
+		t.Fatalf("p1 expected 50, got %d", game.players[0].balance)
 	}
-	if game.players[1].Balance != 50 {
-		t.Fatalf("p2 expected 50, got %d", game.players[1].Balance)
+	if game.players[1].balance != 50 {
+		t.Fatalf("p2 expected 50, got %d", game.players[1].balance)
 	}
 }
 
@@ -418,9 +418,9 @@ func TestSidePotShowdown(t *testing.T) {
 		t.Fatalf("EvaluateHand() error = %v", err)
 	}
 
-	game.players[0].HandValue = &hv1
-	game.players[1].HandValue = &hv2
-	game.players[2].HandValue = &hv3
+	game.players[0].handValue = &hv1
+	game.players[1].handValue = &hv2
+	game.players[2].handValue = &hv3
 
 	// Pots are automatically built on each bet, no need to call BuildPotsFromTotals
 
@@ -428,14 +428,14 @@ func TestSidePotShowdown(t *testing.T) {
 	game.potManager.distributePots(game.players)
 
 	// Expected: p3 gets 90 (main), p1 gets 40 (side)
-	if game.players[2].Balance != 90 {
-		t.Fatalf("p3 expected 90 from main pot, got %d", game.players[2].Balance)
+	if game.players[2].balance != 90 {
+		t.Fatalf("p3 expected 90 from main pot, got %d", game.players[2].balance)
 	}
-	if game.players[0].Balance != 40 {
-		t.Fatalf("p1 expected 40 from side pot, got %d", game.players[0].Balance)
+	if game.players[0].balance != 40 {
+		t.Fatalf("p1 expected 40 from side pot, got %d", game.players[0].balance)
 	}
-	if game.players[1].Balance != 0 {
-		t.Fatalf("p2 expected 0, got %d", game.players[1].Balance)
+	if game.players[1].balance != 0 {
+		t.Fatalf("p2 expected 0, got %d", game.players[1].balance)
 	}
 }
 
@@ -546,8 +546,8 @@ func TestPreFlopAllInAutoDealShowdown(t *testing.T) {
 	// Mark both players as all-in and not folded
 	game.players[0].stateMachine.Dispatch(playerStateAllIn)
 	game.players[1].stateMachine.Dispatch(playerStateAllIn)
-	game.players[0].LastAction = time.Now()
-	game.players[1].LastAction = time.Now()
+	game.players[0].lastAction = time.Now()
+	game.players[1].lastAction = time.Now()
 
 	// Call showdown; should auto-deal to 5 community cards and not error
 	res, err := game.handleShowdown()
@@ -582,8 +582,8 @@ func TestAutoStartAllowsShortStackAllIn(t *testing.T) {
 	game.SetPlayers(users)
 
 	// Simulate balances: short < big blind, deep >> big blind
-	game.players[0].Balance = 10   // short stack
-	game.players[1].Balance = 1990 // deep stack
+	game.players[0].balance = 10   // short stack
+	game.players[1].balance = 1990 // deep stack
 
 	startedCh := make(chan struct{}, 1)
 
@@ -634,10 +634,10 @@ func TestCallShortStackAllInDoesNotForceMatchCurrentBet(t *testing.T) {
 	// - SB has already posted 10 and only has 5 left
 	// - BB has posted 20
 	g.currentBet = 20
-	g.players[0].CurrentBet = 10
-	g.players[0].Balance = 5
-	g.players[1].CurrentBet = 20
-	g.players[1].Balance = 1000
+	g.players[0].currentBet = 10
+	g.players[0].balance = 5
+	g.players[1].currentBet = 20
+	g.players[1].balance = 1000
 	g.currentPlayer = 0 // SB to act
 
 	// SB tries to call but cannot fully match; should go all-in for +5 only.
@@ -645,11 +645,11 @@ func TestCallShortStackAllInDoesNotForceMatchCurrentBet(t *testing.T) {
 		t.Fatalf("handlePlayerCall error: %v", err)
 	}
 
-	if g.players[0].Balance != 0 {
-		t.Fatalf("SB expected balance 0 after all-in call, got %d", g.players[0].Balance)
+	if g.players[0].balance != 0 {
+		t.Fatalf("SB expected balance 0 after all-in call, got %d", g.players[0].balance)
 	}
-	if g.players[0].CurrentBet != 15 {
-		t.Fatalf("SB expected CurrentBet 15 after all-in call, got %d", g.players[0].CurrentBet)
+	if g.players[0].currentBet != 15 {
+		t.Fatalf("SB expected currentBet 15 after all-in call, got %d", g.players[0].currentBet)
 	}
 	if got := g.players[0].GetCurrentStateString(); got != "ALL_IN" {
 		t.Fatalf("SB expected state ALL_IN, got %s", got)

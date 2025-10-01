@@ -39,6 +39,28 @@ class GamePhase extends $pb.ProtobufEnum {
   const GamePhase._($core.int v, $core.String n) : super(v, n);
 }
 
+/// PlayerState captures the per-player state machine state.
+class PlayerState extends $pb.ProtobufEnum {
+  static const PlayerState PLAYER_STATE_AT_TABLE = PlayerState._(0, _omitEnumNames ? '' : 'PLAYER_STATE_AT_TABLE');
+  static const PlayerState PLAYER_STATE_IN_GAME = PlayerState._(1, _omitEnumNames ? '' : 'PLAYER_STATE_IN_GAME');
+  static const PlayerState PLAYER_STATE_ALL_IN = PlayerState._(2, _omitEnumNames ? '' : 'PLAYER_STATE_ALL_IN');
+  static const PlayerState PLAYER_STATE_FOLDED = PlayerState._(3, _omitEnumNames ? '' : 'PLAYER_STATE_FOLDED');
+  static const PlayerState PLAYER_STATE_LEFT = PlayerState._(4, _omitEnumNames ? '' : 'PLAYER_STATE_LEFT');
+
+  static const $core.List<PlayerState> values = <PlayerState> [
+    PLAYER_STATE_AT_TABLE,
+    PLAYER_STATE_IN_GAME,
+    PLAYER_STATE_ALL_IN,
+    PLAYER_STATE_FOLDED,
+    PLAYER_STATE_LEFT,
+  ];
+
+  static final $core.Map<$core.int, PlayerState> _byValue = $pb.ProtobufEnum.initByValue(values);
+  static PlayerState? valueOf($core.int value) => _byValue[value];
+
+  const PlayerState._($core.int v, $core.String n) : super(v, n);
+}
+
 class NotificationType extends $pb.ProtobufEnum {
   static const NotificationType UNKNOWN = NotificationType._(0, _omitEnumNames ? '' : 'UNKNOWN');
   static const NotificationType PLAYER_JOINED = NotificationType._(1, _omitEnumNames ? '' : 'PLAYER_JOINED');
@@ -63,6 +85,7 @@ class NotificationType extends $pb.ProtobufEnum {
   static const NotificationType CARDS_SHOWN = NotificationType._(20, _omitEnumNames ? '' : 'CARDS_SHOWN');
   static const NotificationType CARDS_HIDDEN = NotificationType._(21, _omitEnumNames ? '' : 'CARDS_HIDDEN');
   static const NotificationType NEW_HAND_STARTED = NotificationType._(22, _omitEnumNames ? '' : 'NEW_HAND_STARTED');
+  static const NotificationType PLAYER_ALL_IN = NotificationType._(23, _omitEnumNames ? '' : 'PLAYER_ALL_IN');
 
   static const $core.List<NotificationType> values = <NotificationType> [
     UNKNOWN,
@@ -88,6 +111,7 @@ class NotificationType extends $pb.ProtobufEnum {
     CARDS_SHOWN,
     CARDS_HIDDEN,
     NEW_HAND_STARTED,
+    PLAYER_ALL_IN,
   ];
 
   static final $core.Map<$core.int, NotificationType> _byValue = $pb.ProtobufEnum.initByValue(values);

@@ -61,6 +61,15 @@ enum GamePhase {
   SHOWDOWN = 6;
 }
 
+// PlayerState captures the per-player state machine state.
+enum PlayerState {
+  PLAYER_STATE_AT_TABLE = 0;
+  PLAYER_STATE_IN_GAME  = 1;
+  PLAYER_STATE_ALL_IN   = 2;
+  PLAYER_STATE_FOLDED   = 3;
+  PLAYER_STATE_LEFT     = 4;
+}
+
 enum NotificationType {
   UNKNOWN = 0;
   PLAYER_JOINED = 1;
@@ -85,6 +94,7 @@ enum NotificationType {
   CARDS_SHOWN = 20;
   CARDS_HIDDEN = 21;
   NEW_HAND_STARTED = 22;
+  PLAYER_ALL_IN = 23;
 }
 
 enum HandRank {
@@ -330,6 +340,7 @@ message Player {
   bool is_dealer = 9;
   bool is_ready = 10;
   string hand_description = 11; // Hand evaluation description (available during showdown)
+  PlayerState player_state = 12; // Canonical player state (enum)
 }
 
 message Card {

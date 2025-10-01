@@ -86,21 +86,27 @@ func (s *Server) collectPlayerSnapshot(user *poker.User, game *poker.Game) *Play
 	// If game exists and player is in it, get game-specific data
 	if game != nil {
 		for _, player := range game.GetPlayers() {
-			if player.ID == user.ID {
-				snapshot.Balance = player.Balance
-				snapshot.HasFolded = player.GetCurrentStateString() == "FOLDED"
-				snapshot.IsAllIn = player.GetCurrentStateString() == "ALL_IN"
-				snapshot.IsDealer = player.IsDealer
-				snapshot.IsTurn = player.IsTurn
+			grpcPlayer := player.Marshal()
+			if grpcPlayer.Id == user.ID {
+				snapshot.Balance = grpcPlayer.Balance
+				snapshot.HasFolded = grpcPlayer.Folded
+				snapshot.IsAllIn = grpcPlayer.IsAllIn
+				snapshot.IsDealer = grpcPlayer.IsDealer
+				snapshot.IsTurn = grpcPlayer.IsTurn
 				snapshot.GameState = player.GetCurrentStateString()
-				snapshot.HandDescription = player.HandDescription
-				snapshot.HasBet = player.CurrentBet
-				snapshot.StartingBalance = player.StartingBalance
+				snapshot.HandDescription = grpcPlayer.HandDescription
+				snapshot.HasBet = grpcPlayer.CurrentBet
+				snapshot.StartingBalance = player.StartingBalance()
 
 				// Deep copy hand cards to ensure immutability
-				if len(player.Hand) > 0 {
-					snapshot.Hand = make([]poker.Card, len(player.Hand))
-					copy(snapshot.Hand, player.Hand)
+				if len(grpcPlayer.Hand) > 0 {
+					snapshot.Hand = make([]poker.Card, len(grpcPlayer.Hand))
+					for i, grpcCard := range grpcPlayer.Hand {
+						snapshot.Hand[i] = poker.NewCardFromSuitValue(
+							poker.Suit(grpcCard.Suit),
+							poker.Value(grpcCard.Value),
+						)
+					}
 				}
 				break
 			}
@@ -124,7 +130,8 @@ func (s *Server) collectGameSnapshot(game *poker.Game) *GameSnapshot {
 
 	// Get current player
 	if currentPlayerObj := game.GetCurrentPlayerObject(); currentPlayerObj != nil {
-		snapshot.CurrentPlayer = currentPlayerObj.ID
+		grpcPlayer := currentPlayerObj.Marshal()
+		snapshot.CurrentPlayer = grpcPlayer.Id
 	}
 
 	// Deep copy community cards to ensure immutability

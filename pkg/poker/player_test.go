@@ -40,7 +40,7 @@ func TestPlayerStateMachine_FoldStateTransition(t *testing.T) {
 	player := NewPlayer("test-player", "Test Player", 1000)
 
 	// Start in IN_GAME state
-	player.SetGameState("IN_GAME")
+	player.stateMachine.Dispatch(playerStateInGame)
 	assert.Equal(t, "IN_GAME", player.GetCurrentStateString())
 	assert.False(t, player.GetCurrentStateString() == "FOLDED")
 
@@ -99,7 +99,7 @@ func TestPlayerStateMachine_FoldFromDifferentStates(t *testing.T) {
 		{
 			name: "Fold from AT_TABLE",
 			setup: func(p *Player) {
-				p.SetGameState("AT_TABLE")
+				p.stateMachine.Dispatch(playerStateAtTable)
 			},
 			expectStateAfterFold: "FOLDED",
 			expectHasFolded:      true,
@@ -107,7 +107,7 @@ func TestPlayerStateMachine_FoldFromDifferentStates(t *testing.T) {
 		{
 			name: "Fold from IN_GAME",
 			setup: func(p *Player) {
-				p.SetGameState("IN_GAME")
+				p.stateMachine.Dispatch(playerStateInGame)
 			},
 			expectStateAfterFold: "FOLDED",
 			expectHasFolded:      true,
@@ -116,9 +116,9 @@ func TestPlayerStateMachine_FoldFromDifferentStates(t *testing.T) {
 			name: "Fold from ALL_IN (ignored)",
 			setup: func(p *Player) {
 				// Set up all-in conditions: balance = 0 and has bet
-				p.Balance = 0
-				p.CurrentBet = 100
-				p.SetGameState("IN_GAME")
+				p.balance = 0
+				p.currentBet = 100
+				p.stateMachine.Dispatch(playerStateInGame)
 				p.stateMachine.Dispatch(playerStateAllIn)
 			},
 			// Folding while all-in should be ignored; remain in ALL_IN.
@@ -164,11 +164,11 @@ func TestTryFold_AllowsFoldWhenNotAllIn(t *testing.T) {
 	// Test that TryFold allows folding when player is not all-in
 
 	player := NewPlayer("test-player", "Test Player", 1000)
-	player.SetGameState("IN_GAME")
 	player.stateMachine.Dispatch(playerStateInGame)
 
 	// TryFold should succeed
-	success := player.TryFold()
+	success, err := player.TryFold()
+	require.NoError(t, err, "TryFold should succeed when not all-in")
 	assert.True(t, success, "TryFold should succeed when not all-in")
 	assert.True(t, player.GetCurrentStateString() == "FOLDED", "Player should be folded")
 	assert.Equal(t, "FOLDED", player.GetCurrentStateString(), "Player should be in FOLDED state")
@@ -179,13 +179,14 @@ func TestTryFold_PreventsFoldWhenAllIn(t *testing.T) {
 
 	player := NewPlayer("test-player", "Test Player", 1000)
 	// Set up all-in conditions: balance = 0 and has bet
-	player.Balance = 0
-	player.CurrentBet = 100
-	player.SetGameState("IN_GAME")
+	player.balance = 0
+	player.currentBet = 100
+	player.stateMachine.Dispatch(playerStateInGame)
 	player.stateMachine.Dispatch(playerStateAllIn)
 
 	// TryFold should fail
-	success := player.TryFold()
+	success, err := player.TryFold()
+	require.Error(t, err, "TryFold should fail when all-in")
 	assert.False(t, success, "TryFold should fail when all-in")
 	assert.False(t, player.GetCurrentStateString() == "FOLDED", "Player should not be folded")
 	assert.Equal(t, "ALL_IN", player.GetCurrentStateString(), "Player should remain in ALL_IN state")

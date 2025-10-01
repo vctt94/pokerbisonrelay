@@ -32,6 +32,24 @@ final $typed_data.Uint8List gamePhaseDescriptor = $convert.base64Decode(
     'CglHYW1lUGhhc2USCwoHV0FJVElORxAAEhQKEE5FV19IQU5EX0RFQUxJTkcQARIMCghQUkVfRk'
     'xPUBACEggKBEZMT1AQAxIICgRUVVJOEAQSCQoFUklWRVIQBRIMCghTSE9XRE9XThAG');
 
+@$core.Deprecated('Use playerStateDescriptor instead')
+const PlayerState$json = {
+  '1': 'PlayerState',
+  '2': [
+    {'1': 'PLAYER_STATE_AT_TABLE', '2': 0},
+    {'1': 'PLAYER_STATE_IN_GAME', '2': 1},
+    {'1': 'PLAYER_STATE_ALL_IN', '2': 2},
+    {'1': 'PLAYER_STATE_FOLDED', '2': 3},
+    {'1': 'PLAYER_STATE_LEFT', '2': 4},
+  ],
+};
+
+/// Descriptor for `PlayerState`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List playerStateDescriptor = $convert.base64Decode(
+    'CgtQbGF5ZXJTdGF0ZRIZChVQTEFZRVJfU1RBVEVfQVRfVEFCTEUQABIYChRQTEFZRVJfU1RBVE'
+    'VfSU5fR0FNRRABEhcKE1BMQVlFUl9TVEFURV9BTExfSU4QAhIXChNQTEFZRVJfU1RBVEVfRk9M'
+    'REVEEAMSFQoRUExBWUVSX1NUQVRFX0xFRlQQBA==');
+
 @$core.Deprecated('Use notificationTypeDescriptor instead')
 const NotificationType$json = {
   '1': 'NotificationType',
@@ -59,6 +77,7 @@ const NotificationType$json = {
     {'1': 'CARDS_SHOWN', '2': 20},
     {'1': 'CARDS_HIDDEN', '2': 21},
     {'1': 'NEW_HAND_STARTED', '2': 22},
+    {'1': 'PLAYER_ALL_IN', '2': 23},
   ],
 };
 
@@ -71,7 +90,8 @@ final $typed_data.Uint8List notificationTypeDescriptor = $convert.base64Decode(
     'QVRFRBALEhEKDVRBQkxFX1JFTU9WRUQQDBIQCgxQTEFZRVJfUkVBRFkQDRISCg5QTEFZRVJfVU'
     '5SRUFEWRAOEhUKEUFMTF9QTEFZRVJTX1JFQURZEA8SFgoSU01BTExfQkxJTkRfUE9TVEVEEBAS'
     'FAoQQklHX0JMSU5EX1BPU1RFRBAREg0KCUNBTExfTUFERRASEg4KCkNIRUNLX01BREUQExIPCg'
-    'tDQVJEU19TSE9XThAUEhAKDENBUkRTX0hJRERFThAVEhQKEE5FV19IQU5EX1NUQVJURUQQFg==');
+    'tDQVJEU19TSE9XThAUEhAKDENBUkRTX0hJRERFThAVEhQKEE5FV19IQU5EX1NUQVJURUQQFhIR'
+    'Cg1QTEFZRVJfQUxMX0lOEBc=');
 
 @$core.Deprecated('Use handRankDescriptor instead')
 const HandRank$json = {
@@ -664,6 +684,7 @@ const Player$json = {
     {'1': 'is_dealer', '3': 9, '4': 1, '5': 8, '10': 'isDealer'},
     {'1': 'is_ready', '3': 10, '4': 1, '5': 8, '10': 'isReady'},
     {'1': 'hand_description', '3': 11, '4': 1, '5': 9, '10': 'handDescription'},
+    {'1': 'player_state', '3': 12, '4': 1, '5': 14, '6': '.poker.PlayerState', '10': 'playerState'},
   ],
 };
 
@@ -674,7 +695,8 @@ final $typed_data.Uint8List playerDescriptor = $convert.base64Decode(
     'ZW50X2JldBgFIAEoA1IKY3VycmVudEJldBIWCgZmb2xkZWQYBiABKAhSBmZvbGRlZBIXCgdpc1'
     '90dXJuGAcgASgIUgZpc1R1cm4SGgoJaXNfYWxsX2luGAggASgIUgdpc0FsbEluEhsKCWlzX2Rl'
     'YWxlchgJIAEoCFIIaXNEZWFsZXISGQoIaXNfcmVhZHkYCiABKAhSB2lzUmVhZHkSKQoQaGFuZF'
-    '9kZXNjcmlwdGlvbhgLIAEoCVIPaGFuZERlc2NyaXB0aW9u');
+    '9kZXNjcmlwdGlvbhgLIAEoCVIPaGFuZERlc2NyaXB0aW9uEjUKDHBsYXllcl9zdGF0ZRgMIAEo'
+    'DjISLnBva2VyLlBsYXllclN0YXRlUgtwbGF5ZXJTdGF0ZQ==');
 
 @$core.Deprecated('Use cardDescriptor instead')
 const Card$json = {

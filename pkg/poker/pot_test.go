@@ -110,8 +110,8 @@ func TestUncalledBet(t *testing.T) {
 
 	// Player balances should remain unchanged until pot distribution
 	expected := int64(100) // original balance
-	if players[2].Balance != expected {
-		t.Errorf("Expected player 2 balance to remain %d, got %d", expected, players[2].Balance)
+	if players[2].balance != expected {
+		t.Errorf("Expected player 2 balance to remain %d, got %d", expected, players[2].balance)
 	}
 }
 
@@ -216,14 +216,14 @@ func TestPotDistribution(t *testing.T) {
 
 	// Set up hand values and states manually for test
 	players[0].stateMachine.Dispatch(playerStateAllIn)
-	players[0].HandValue = &HandValue{Rank: TwoPair, RankValue: 3500} // Two Pair, Aces (lower rank value = better)
+	players[0].handValue = &HandValue{Rank: TwoPair, RankValue: 3500} // Two Pair, Aces (lower rank value = better)
 	players[0].stateMachine.Dispatch(playerStateInGame)
 
-	players[1].HandValue = &HandValue{Rank: Pair, RankValue: 4000} // Pair of 10s (higher rank value = worse)
+	players[1].handValue = &HandValue{Rank: Pair, RankValue: 4000} // Pair of 10s (higher rank value = worse)
 	players[1].stateMachine.Dispatch(playerStateInGame)
 
 	players[2].stateMachine.Dispatch(playerStateAllIn)
-	players[2].HandValue = &HandValue{Rank: ThreeOfAKind, RankValue: 500} // Three of a kind, 5s (lowest rank value = best overall)
+	players[2].handValue = &HandValue{Rank: ThreeOfAKind, RankValue: 500} // Three of a kind, 5s (lowest rank value = best overall)
 	players[2].stateMachine.Dispatch(playerStateInGame)
 
 	// Player 0 bets 50
@@ -257,9 +257,9 @@ func TestPotDistribution(t *testing.T) {
 	pm.pots = append(pm.pots, sidepot)
 
 	// Reset player balances for cleaner testing
-	players[0].Balance = 0
-	players[1].Balance = 0
-	players[2].Balance = 0
+	players[0].balance = 0
+	players[1].balance = 0
+	players[2].balance = 0
 
 	// Distribute pots
 	if err := pm.distributePots(players); err != nil {
@@ -271,16 +271,16 @@ func TestPotDistribution(t *testing.T) {
 	// Side pot: 40 - Player 0 should win with two pair
 
 	// Check player balances
-	if players[0].Balance != 40 {
-		t.Errorf("Expected player 0 to have balance 40, got %d", players[0].Balance)
+	if players[0].balance != 40 {
+		t.Errorf("Expected player 0 to have balance 40, got %d", players[0].balance)
 	}
 
-	if players[1].Balance != 0 {
-		t.Errorf("Expected player 1 to have balance 0, got %d", players[1].Balance)
+	if players[1].balance != 0 {
+		t.Errorf("Expected player 1 to have balance 0, got %d", players[1].balance)
 	}
 
-	if players[2].Balance != 90 {
-		t.Errorf("Expected player 2 to have balance 90, got %d", players[2].Balance)
+	if players[2].balance != 90 {
+		t.Errorf("Expected player 2 to have balance 90, got %d", players[2].balance)
 	}
 }
 
@@ -290,15 +290,13 @@ func TestTiepotDistribution(t *testing.T) {
 
 	// Create test players with identical hand values
 	players := []*Player{
-		{
-			Balance:   0,
-			HandValue: &HandValue{Rank: Pair, RankValue: 10}, // Player 0: Pair of 10s
-		},
-		{
-			Balance:   0,
-			HandValue: &HandValue{Rank: Pair, RankValue: 10}, // Player 1: Pair of 10s
-		},
+		NewPlayer("player1", "Player 1", 0),
+		NewPlayer("player2", "Player 2", 0),
 	}
+
+	// Set hand values
+	players[0].handValue = &HandValue{Rank: Pair, RankValue: 10} // Player 0: Pair of 10s
+	players[1].handValue = &HandValue{Rank: Pair, RankValue: 10} // Player 1: Pair of 10s
 
 	// Both players bet 50
 	pm.addBet(0, 50, players)
@@ -310,12 +308,12 @@ func TestTiepotDistribution(t *testing.T) {
 	pm.distributePots(players)
 
 	// Players should split the pot
-	if players[0].Balance != 50 {
-		t.Errorf("Expected player 0 to have balance 50, got %d", players[0].Balance)
+	if players[0].balance != 50 {
+		t.Errorf("Expected player 0 to have balance 50, got %d", players[0].balance)
 	}
 
-	if players[1].Balance != 50 {
-		t.Errorf("Expected player 1 to have balance 50, got %d", players[1].Balance)
+	if players[1].balance != 50 {
+		t.Errorf("Expected player 1 to have balance 50, got %d", players[1].balance)
 	}
 }
 
@@ -325,19 +323,15 @@ func TestOddChipDistribution(t *testing.T) {
 
 	// Create test players with identical hand values
 	players := []*Player{
-		{
-			Balance:   0,
-			HandValue: &HandValue{Rank: Pair, RankValue: 10}, // Player 0: Pair of 10s
-		},
-		{
-			Balance:   0,
-			HandValue: &HandValue{Rank: Pair, RankValue: 10}, // Player 1: Pair of 10s
-		},
-		{
-			Balance:   0,
-			HandValue: &HandValue{Rank: Pair, RankValue: 10}, // Player 2: Pair of 10s
-		},
+		NewPlayer("player1", "Player 1", 0),
+		NewPlayer("player2", "Player 2", 0),
+		NewPlayer("player3", "Player 3", 0),
 	}
+
+	// Set hand values
+	players[0].handValue = &HandValue{Rank: Pair, RankValue: 10} // Player 0: Pair of 10s
+	players[1].handValue = &HandValue{Rank: Pair, RankValue: 10} // Player 1: Pair of 10s
+	players[2].handValue = &HandValue{Rank: Pair, RankValue: 10} // Player 2: Pair of 10s
 
 	// All players bet 50
 	pm.addBet(0, 50, players)
@@ -351,25 +345,25 @@ func TestOddChipDistribution(t *testing.T) {
 	pm.distributePots(players)
 
 	// 150 / 3 = 50 each, with 0 remainder
-	if players[0].Balance != 50 {
-		t.Errorf("Expected player 0 to have balance 50, got %d", players[0].Balance)
+	if players[0].balance != 50 {
+		t.Errorf("Expected player 0 to have balance 50, got %d", players[0].balance)
 	}
 
-	if players[1].Balance != 50 {
-		t.Errorf("Expected player 1 to have balance 50, got %d", players[1].Balance)
+	if players[1].balance != 50 {
+		t.Errorf("Expected player 1 to have balance 50, got %d", players[1].balance)
 	}
 
-	if players[2].Balance != 50 {
-		t.Errorf("Expected player 2 to have balance 50, got %d", players[2].Balance)
+	if players[2].balance != 50 {
+		t.Errorf("Expected player 2 to have balance 50, got %d", players[2].balance)
 	}
 
 	// Let's try with 151 chips for an odd chip
 	pm = NewPotManager(3)
 
 	// Reset player balances
-	players[0].Balance = 0
-	players[1].Balance = 0
-	players[2].Balance = 0
+	players[0].balance = 0
+	players[1].balance = 0
+	players[2].balance = 0
 
 	// All players bet 50, plus 1 extra chip
 	pm.addBet(0, 50, players)
@@ -391,7 +385,7 @@ func TestOddChipDistribution(t *testing.T) {
 
 	// 151 / 3 = 50 each, with 1 remainder going to first winner
 	// Get the distribution and verify totals
-	total := players[0].Balance + players[1].Balance + players[2].Balance
+	total := players[0].balance + players[1].balance + players[2].balance
 	if total != 151 {
 		t.Errorf("Expected total distribution to be 151, got %d", total)
 	}
@@ -399,10 +393,10 @@ func TestOddChipDistribution(t *testing.T) {
 	// Verify each player got at least 50, and one player got 51
 	oneGotExtra := false
 	for i, player := range players {
-		if player.Balance < 50 {
-			t.Errorf("Player %d got less than 50: %d", i, player.Balance)
+		if player.balance < 50 {
+			t.Errorf("Player %d got less than 50: %d", i, player.balance)
 		}
-		if player.Balance == 51 {
+		if player.balance == 51 {
 			oneGotExtra = true
 		}
 	}
@@ -535,14 +529,14 @@ func TestHeadsUppotDistributionAfterCall(t *testing.T) {
 	// Both players check through flop, turn, river (no additional bets)
 
 	// Update players for showdown (set balances to 0 for testing)
-	players[0].Balance = 0 // Player 0 wins
-	players[1].Balance = 0 // Player 1 loses
+	players[0].balance = 0 // Player 0 wins
+	players[1].balance = 0 // Player 1 loses
 
 	// Set up hand values and states manually for test
 	players[0].stateMachine.Dispatch(playerStateInGame)
-	players[0].HandValue = &HandValue{Rank: Pair, RankValue: 100}
+	players[0].handValue = &HandValue{Rank: Pair, RankValue: 100}
 	players[1].stateMachine.Dispatch(playerStateInGame)
-	players[1].HandValue = &HandValue{Rank: HighCard, RankValue: 1000}
+	players[1].handValue = &HandValue{Rank: HighCard, RankValue: 1000}
 
 	// pots are automatically built on each bet, no need to call BuildpotsFromTotals
 	if err := pm.distributePots(players); err != nil {
@@ -550,7 +544,7 @@ func TestHeadsUppotDistributionAfterCall(t *testing.T) {
 	}
 
 	// Check results
-	player0Winnings := players[0].Balance
+	player0Winnings := players[0].balance
 	expectedWinnings := int64(40) // Should win 10+20+10 = 40 chips
 
 	t.Logf("Player 0 winnings: %d", player0Winnings)
@@ -683,11 +677,11 @@ func TestBetTrackingRegression(t *testing.T) {
 				}
 
 				if isWinner {
-					player.HandValue = &HandValue{Rank: Pair, RankValue: 100}
-					player.HandDescription = "Pair of Tens"
+					player.handValue = &HandValue{Rank: Pair, RankValue: 100}
+					player.handDescription = "Pair of Tens"
 				} else {
-					player.HandValue = &HandValue{Rank: HighCard, RankValue: 1000 + i}
-					player.HandDescription = "High Card"
+					player.handValue = &HandValue{Rank: HighCard, RankValue: 1000 + i}
+					player.handDescription = "High Card"
 				}
 			}
 
@@ -722,7 +716,7 @@ func TestBetTrackingRegression(t *testing.T) {
 
 			// Verify distribution
 			for i, expectedWinning := range scenario.expectedDistribution {
-				actualWinning := players[i].Balance
+				actualWinning := players[i].balance
 				if actualWinning != expectedWinning {
 					t.Errorf("Player %d: expected winnings %d, got %d", i, expectedWinning, actualWinning)
 				}
@@ -731,7 +725,7 @@ func TestBetTrackingRegression(t *testing.T) {
 			// CRITICAL INVARIANT: Total winnings must equal total pot
 			totalWinnings := int64(0)
 			for _, player := range players {
-				totalWinnings += player.Balance
+				totalWinnings += player.balance
 			}
 			if totalWinnings != scenario.expectedpot {
 				t.Errorf("CRITICAL: Total winnings (%d) != Total pot (%d) - bet tracking bug detected!",
@@ -1065,19 +1059,15 @@ func TestShowdownWinningsNotification_potZeroedAfterDistribution(t *testing.T) {
 	pm := NewPotManager(3)
 
 	players := []*Player{
-		{
-			ID:              "player1",
-			Balance:         0,
-			HandValue:       &HandValue{Rank: Pair, RankValue: 100}, // Winner
-			HandDescription: "Pair of Tens",
-		},
-		{
-			ID:              "player2",
-			Balance:         0,
-			HandValue:       &HandValue{Rank: HighCard, RankValue: 1000}, // Loser
-			HandDescription: "High Card",
-		},
+		NewPlayer("player1", "Player 1", 0),
+		NewPlayer("player2", "Player 2", 0),
 	}
+
+	// Set hand values
+	players[0].handValue = &HandValue{Rank: Pair, RankValue: 100} // Winner
+	players[0].handDescription = "Pair of Tens"
+	players[1].handValue = &HandValue{Rank: HighCard, RankValue: 1000} // Loser
+	players[1].handDescription = "High Card"
 
 	// Bets: 50 + 50 = 100
 	pm.addBet(0, 50, players)
@@ -1106,11 +1096,11 @@ func TestShowdownWinningsNotification_potZeroedAfterDistribution(t *testing.T) {
 	}
 
 	// Winner received full amount.
-	if players[0].Balance != 100 {
-		t.Fatalf("expected winner balance 100, got %d", players[0].Balance)
+	if players[0].balance != 100 {
+		t.Fatalf("expected winner balance 100, got %d", players[0].balance)
 	}
-	if players[1].Balance != 0 {
-		t.Fatalf("expected loser balance 0, got %d", players[1].Balance)
+	if players[1].balance != 0 {
+		t.Fatalf("expected loser balance 0, got %d", players[1].balance)
 	}
 
 	// Notification uses pre-distribution amount.
@@ -1119,7 +1109,7 @@ func TestShowdownWinningsNotification_potZeroedAfterDistribution(t *testing.T) {
 	}
 
 	t.Logf("✓ Test passed: potBefore=%d, potAfter=0, WinnerBalance=%d",
-		potForNotification, players[0].Balance)
+		potForNotification, players[0].balance)
 }
 
 func mkPlayers(n int) []*Player {
@@ -1139,7 +1129,7 @@ func settle(t *testing.T, pm *potManager, players []*Player) ([]int64, int64) {
 	// Snapshot balances AFTER any refunds, BEFORE distribution.
 	before := make([]int64, len(players))
 	for i, p := range players {
-		before[i] = p.Balance
+		before[i] = p.balance
 	}
 
 	// Total pot available to distribute now.
@@ -1153,7 +1143,7 @@ func settle(t *testing.T, pm *potManager, players []*Player) ([]int64, int64) {
 	// Return only the settlement deltas (excludes prior refunds).
 	delta := make([]int64, len(players))
 	for i, p := range players {
-		delta[i] = p.Balance - before[i]
+		delta[i] = p.balance - before[i]
 	}
 	return delta, total
 }
@@ -1169,9 +1159,9 @@ func TestContested_EqualStacks_SingleWinner(t *testing.T) {
 	pm.addBet(2, 20, players)
 
 	// showdown winners: only A (index 0)
-	players[0].HandValue = &HandValue{HandRank: pokerrpc.HandRank_PAIR, RankValue: 0}
-	players[1].HandValue = &HandValue{HandRank: pokerrpc.HandRank_HIGH_CARD, RankValue: 1}
-	players[2].HandValue = &HandValue{HandRank: pokerrpc.HandRank_HIGH_CARD, RankValue: 1}
+	players[0].handValue = &HandValue{HandRank: pokerrpc.HandRank_PAIR, RankValue: 0}
+	players[1].handValue = &HandValue{HandRank: pokerrpc.HandRank_HIGH_CARD, RankValue: 1}
+	players[2].handValue = &HandValue{HandRank: pokerrpc.HandRank_HIGH_CARD, RankValue: 1}
 
 	// pots are automatically built on each bet, no need to call BuildpotsFromTotals
 
@@ -1196,9 +1186,9 @@ func TestContested_Sidepot_BWinsMain_CWinsSide(t *testing.T) {
 	pm.addBet(1, 50, players)  // B (all-in)
 	pm.addBet(2, 100, players) // C
 
-	players[0].HandValue = &HandValue{RankValue: 2} // A
-	players[1].HandValue = &HandValue{RankValue: 1} // B (best)
-	players[2].HandValue = &HandValue{RankValue: 2} // C
+	players[0].handValue = &HandValue{RankValue: 2} // A
+	players[1].handValue = &HandValue{RankValue: 1} // B (best)
+	players[2].handValue = &HandValue{RankValue: 2} // C
 
 	// (Optional sanity checks)
 	if got := pm.getTotalPot(); got != 250 {
@@ -1279,9 +1269,9 @@ func TestContested_TieSplitRemainder(t *testing.T) {
 	pm.addBet(1, 50, players)
 	pm.addBet(2, 50, players)
 
-	players[0].HandValue = &HandValue{HandRank: 5, RankValue: 100} // Straight
-	players[1].HandValue = &HandValue{HandRank: 3, RankValue: 200} // Trips (worse)
-	players[2].HandValue = &HandValue{HandRank: 5, RankValue: 100} // Straight (tie)
+	players[0].handValue = &HandValue{HandRank: 5, RankValue: 100} // Straight
+	players[1].handValue = &HandValue{HandRank: 3, RankValue: 200} // Trips (worse)
+	players[2].handValue = &HandValue{HandRank: 5, RankValue: 100} // Straight (tie)
 
 	bals, pot := settle(t, pm, players)
 	if pot != 150 {
@@ -1300,14 +1290,10 @@ func TestContested_TieSplitRemainder(t *testing.T) {
 // contested pot (blinds) is awarded based on hand strength.
 func TestRefundUncalled_AllInVsNonCaller_HeadsUp(t *testing.T) {
 	players := []*Player{
-		{ID: "P0", Balance: 0},
-		{ID: "P1", Balance: 0},
+		NewPlayer("P0", "P0", 0),
+		NewPlayer("P1", "P1", 0),
 	}
 	// Ensure both are considered alive (not folded)
-	players[0].stateMachine = nil
-	players[1].stateMachine = nil
-	players[0] = NewPlayer(players[0].ID, players[0].ID, 0)
-	players[1] = NewPlayer(players[1].ID, players[1].ID, 0)
 	players[0].stateMachine.Dispatch(playerStateInGame)
 	players[1].stateMachine.Dispatch(playerStateInGame)
 
@@ -1340,18 +1326,18 @@ func TestRefundUncalled_AllInVsNonCaller_HeadsUp(t *testing.T) {
 
 	// Set hand values so that P1 beats P0. Lower RankValue is better
 	// (chehsunliu semantics), so give P1 the lower value.
-	players[0].HandValue = &HandValue{Rank: HighCard, RankValue: 1000}
-	players[1].HandValue = &HandValue{Rank: Pair, RankValue: 100}
+	players[0].handValue = &HandValue{Rank: HighCard, RankValue: 1000}
+	players[1].handValue = &HandValue{Rank: Pair, RankValue: 100}
 
 	if err := pm.distributePots(players); err != nil {
 		t.Fatalf("distributePots failed: %v", err)
 	}
 
 	// P0 receives the 980 refund; does not win the 40 pot
-	if players[0].Balance != 980 {
-		t.Fatalf("P0 expected 980 (refund), got %d", players[0].Balance)
+	if players[0].balance != 980 {
+		t.Fatalf("P0 expected 980 (refund), got %d", players[0].balance)
 	}
-	if players[1].Balance != 40 {
-		t.Fatalf("P1 expected 40, got %d", players[1].Balance)
+	if players[1].balance != 40 {
+		t.Fatalf("P1 expected 40, got %d", players[1].balance)
 	}
 }

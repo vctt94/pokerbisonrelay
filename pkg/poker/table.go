@@ -344,7 +344,7 @@ func (t *Table) handleShowdown() error {
 	balances := make(map[string]int64, len(snap.Players))
 	for _, p := range snap.Players {
 		if p != nil {
-			balances[p.ID] = p.Balance
+			balances[p.id] = p.balance
 		}
 	}
 
@@ -422,8 +422,8 @@ func (t *Table) shouldGameEnd() bool {
 		// Find player's current chip balance
 		var playerBalance int64 = 0
 		for _, player := range t.game.players {
-			if player.ID == u.ID {
-				playerBalance = player.Balance
+			if player.id == u.ID {
+				playerBalance = player.balance
 				break
 			}
 		}
@@ -506,8 +506,8 @@ func (t *Table) startNewHand() error {
 		// Find the corresponding player to get their current poker chip balance for logging
 		var playerBalance int64 = 0
 		for _, player := range t.game.players {
-			if player.ID == u.ID {
-				playerBalance = player.Balance
+			if player.id == u.ID {
+				playerBalance = player.balance
 				break
 			}
 		}
@@ -531,7 +531,7 @@ func (t *Table) startNewHand() error {
 		// Find the existing player object for this user
 		var existingPlayer *Player
 		for _, player := range t.game.players {
-			if player.ID == user.ID {
+			if player.id == user.ID {
 				existingPlayer = player
 				break
 			}
@@ -539,13 +539,13 @@ func (t *Table) startNewHand() error {
 
 		if existingPlayer != nil {
 			// Reset the existing player for the new hand, preserving their current balance
-			existingPlayer.ResetForNewHand(existingPlayer.Balance)
+			existingPlayer.ResetForNewHand(existingPlayer.balance)
 			activePlayers = append(activePlayers, existingPlayer)
 		} else {
 			// This is a new player that joined between hands - create a new Player object
 			newPlayer := NewPlayer(user.ID, user.Name, t.config.StartingChips)
-			newPlayer.TableSeat = user.TableSeat
-			newPlayer.IsReady = user.IsReady
+			newPlayer.tableSeat = user.TableSeat
+			newPlayer.isReady = user.IsReady
 			activePlayers = append(activePlayers, newPlayer)
 		}
 	}
@@ -609,7 +609,7 @@ func (t *Table) setupNewHand(activePlayers []*User) error {
 	// Start the timeout clock for the first current player
 	if t.game.currentPlayer >= 0 && t.game.currentPlayer < len(t.game.players) {
 		if t.game.players[t.game.currentPlayer].GetCurrentStateString() != "FOLDED" {
-			t.game.players[t.game.currentPlayer].LastAction = time.Now()
+			t.game.players[t.game.currentPlayer].lastAction = time.Now()
 		}
 	}
 
@@ -750,7 +750,7 @@ func (t *Table) HandleTimeouts() {
 		// Prefer snapshot to avoid racy access to game internals
 		snap := t.game.GetStateSnapshot()
 		if snap.CurrentPlayer >= 0 && snap.CurrentPlayer < len(snap.Players) && snap.Players[snap.CurrentPlayer] != nil {
-			currentPlayerID = snap.Players[snap.CurrentPlayer].ID
+			currentPlayerID = snap.Players[snap.CurrentPlayer].id
 		}
 	}
 
@@ -777,16 +777,16 @@ func (t *Table) HandleTimeouts() {
 	shouldCheckCompletion := false
 
 	// Check if current player has timed out
-	if now.Sub(currentPlayer.LastAction) > t.config.TimeBank {
+	if now.Sub(currentPlayer.lastAction) > t.config.TimeBank {
 		// Try to auto-check first, if not possible then auto-fold
 		currentBet := snap.CurrentBet
 
 		// A check is valid if the player's current bet equals the current bet
 		// (meaning they don't need to put any additional money in)
-		if currentPlayer.CurrentBet == currentBet {
+		if currentPlayer.currentBet == currentBet {
 			// Auto-check: essentially a bet of the current amount
 			// This doesn't change the bet amounts but advances the action
-			currentPlayer.LastAction = now
+			currentPlayer.lastAction = now
 
 			// Increment actions counter for this betting round
 			t.game.IncrementActionsInRound()
@@ -795,9 +795,9 @@ func (t *Table) HandleTimeouts() {
 			t.advanceToNextPlayer()
 		} else {
 			// Auto-fold the current player - they cannot check because they need to call/raise
-			// This covers the case where currentPlayer.CurrentBet < currentBet (player needs to call)
+			// This covers the case where currentPlayer.currentBet < currentBet (player needs to call)
 			currentPlayer.stateMachine.Dispatch(playerStateFolded)
-			currentPlayer.LastAction = now
+			currentPlayer.lastAction = now
 
 			// Advance to next player
 			t.advanceToNextPlayer()
@@ -934,7 +934,7 @@ func (t *Table) GetCurrentPlayerID() string {
 	if p == nil {
 		return ""
 	}
-	return p.ID
+	return p.id
 }
 
 // currentPlayerID returns the current player ID without acquiring locks (private helper)
@@ -950,7 +950,7 @@ func (t *Table) currentPlayerID() string {
 	if p == nil {
 		return ""
 	}
-	return p.ID
+	return p.id
 }
 
 // advanceToNextPlayer delegates to Game layer
@@ -1112,15 +1112,15 @@ func (t *Table) postBlindsFromGame() error {
 		player := t.game.players[smallBlindPos]
 
 		// Handle all-in logic for small blind
-		if smallBlindAmount > player.Balance {
+		if smallBlindAmount > player.balance {
 			// Player cannot cover small blind - treat as all-in of remaining balance
-			smallBlindAmount = player.Balance
+			smallBlindAmount = player.balance
 			player.stateMachine.Dispatch(playerStateAllIn)
-			t.log.Debugf("Player %s all-in for small blind: posting %d (had %d)", player.ID, smallBlindAmount, player.Balance)
+			t.log.Debugf("Player %s all-in for small blind: posting %d (had %d)", player.id, smallBlindAmount, player.balance)
 		}
 
-		player.Balance -= smallBlindAmount
-		player.CurrentBet = smallBlindAmount
+		player.balance -= smallBlindAmount
+		player.currentBet = smallBlindAmount
 		t.game.potManager.addBet(smallBlindPos, smallBlindAmount, t.game.players)
 
 		// Send small blind notification
@@ -1134,15 +1134,15 @@ func (t *Table) postBlindsFromGame() error {
 		player := t.game.players[bigBlindPos]
 
 		// Handle all-in logic for big blind
-		if bigBlindAmount > player.Balance {
+		if bigBlindAmount > player.balance {
 			// Player cannot cover big blind - treat as all-in of remaining balance
-			bigBlindAmount = player.Balance
+			bigBlindAmount = player.balance
 			player.stateMachine.Dispatch(playerStateAllIn)
-			t.log.Debugf("Player %s all-in for big blind: posting %d (had %d)", player.ID, bigBlindAmount, player.Balance)
+			t.log.Debugf("Player %s all-in for big blind: posting %d (had %d)", player.id, bigBlindAmount, player.balance)
 		}
 
-		player.Balance -= bigBlindAmount
-		player.CurrentBet = bigBlindAmount
+		player.balance -= bigBlindAmount
+		player.currentBet = bigBlindAmount
 		t.game.potManager.addBet(bigBlindPos, bigBlindAmount, t.game.players)
 		t.game.currentBet = bigBlindAmount // Set current bet to big blind amount
 
@@ -1169,8 +1169,8 @@ func (t *Table) dealCardsToPlayers(activePlayers []*User) error {
 			// Also sync the card to the corresponding game player
 			found := false
 			for _, player := range t.game.players {
-				if player.ID == u.ID {
-					player.Hand = append(player.Hand, card)
+				if player.id == u.ID {
+					player.hand = append(player.hand, card)
 					found = true
 					break
 				}

@@ -69,8 +69,8 @@ func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*po
 	var prevBalance int64
 	if game := table.GetGame(); game != nil {
 		for _, p := range game.GetPlayers() {
-			if p.ID == req.PlayerId {
-				prevBalance = p.Balance
+			if p.ID() == req.PlayerId {
+				prevBalance = p.Balance()
 				break
 			}
 		}
@@ -85,8 +85,8 @@ func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*po
 	var acceptedAmount int64 = req.Amount
 	if game := table.GetGame(); game != nil {
 		for _, p := range game.GetPlayers() {
-			if p.ID == req.PlayerId {
-				acceptedAmount = p.CurrentBet
+			if p.ID() == req.PlayerId {
+				acceptedAmount = p.CurrentBet()
 				break
 			}
 		}
@@ -109,17 +109,17 @@ func (s *Server) MakeBet(ctx context.Context, req *pokerrpc.MakeBetRequest) (*po
 	// If this action took the player all-in, emit a dedicated ALL_IN event.
 	if game := table.GetGame(); game != nil {
 		for _, p := range game.GetPlayers() {
-			if p.ID == req.PlayerId {
-				if p.GetCurrentStateString() == "ALL_IN" || (p.Balance == 0 && p.CurrentBet > 0) {
-					contributed := prevBalance - p.Balance
+			if p.ID() == req.PlayerId {
+				if p.GetCurrentStateString() == "ALL_IN" || (p.Balance() == 0 && p.CurrentBet() > 0) {
+					contributed := prevBalance - p.Balance()
 					if contributed < 0 {
 						contributed = 0
 					}
-					if evt, err := s.buildGameEvent(
-						pokerrpc.NotificationType_PLAYER_ALL_IN,
-						req.TableId,
-						PlayerAllInPayload{PlayerID: req.PlayerId, Amount: contributed},
-					); err == nil {
+                    if evt, err := s.buildGameEvent(
+                        pokerrpc.NotificationType_PLAYER_ALL_IN,
+                        req.TableId,
+                        PlayerAllInPayload{PlayerID: req.PlayerId, Amount: contributed},
+                    ); err == nil {
 						s.eventProcessor.PublishEvent(evt)
 					} else {
 						s.log.Errorf("Failed to build PLAYER_ALL_IN event: %v", err)
@@ -197,8 +197,8 @@ func (s *Server) CallBet(ctx context.Context, req *pokerrpc.CallBetRequest) (*po
 	var prevBet int64
 	if game := table.GetGame(); game != nil {
 		for _, p := range game.GetPlayers() {
-			if p.ID == req.PlayerId {
-				prevBet = p.CurrentBet
+			if p.ID() == req.PlayerId {
+				prevBet = p.CurrentBet()
 				break
 			}
 		}
@@ -214,9 +214,9 @@ func (s *Server) CallBet(ctx context.Context, req *pokerrpc.CallBetRequest) (*po
 	var newBalance int64
 	if game := table.GetGame(); game != nil {
 		for _, p := range game.GetPlayers() {
-			if p.ID == req.PlayerId {
-				newBet = p.CurrentBet
-				newBalance = p.Balance
+			if p.ID() == req.PlayerId {
+				newBet = p.CurrentBet()
+				newBalance = p.Balance()
 				break
 			}
 		}
@@ -243,13 +243,13 @@ func (s *Server) CallBet(ctx context.Context, req *pokerrpc.CallBetRequest) (*po
 	// If the call put the player all-in, emit a PLAYER_ALL_IN event with the contributed amount.
 	if game := table.GetGame(); game != nil {
 		for _, p := range game.GetPlayers() {
-			if p.ID == req.PlayerId {
-				if p.GetCurrentStateString() == "ALL_IN" || (newBalance == 0 && p.CurrentBet > 0) {
-					if evt, err := s.buildGameEvent(
-						pokerrpc.NotificationType_PLAYER_ALL_IN,
-						req.TableId,
-						PlayerAllInPayload{PlayerID: req.PlayerId, Amount: delta},
-					); err == nil {
+			if p.ID() == req.PlayerId {
+				if p.GetCurrentStateString() == "ALL_IN" || (newBalance == 0 && p.CurrentBet() > 0) {
+                        if evt, err := s.buildGameEvent(
+                            pokerrpc.NotificationType_PLAYER_ALL_IN,
+                            req.TableId,
+                            PlayerAllInPayload{PlayerID: req.PlayerId, Amount: delta},
+                        ); err == nil {
 						s.eventProcessor.PublishEvent(evt)
 					} else {
 						s.log.Errorf("Failed to build PLAYER_ALL_IN event: %v", err)
@@ -299,14 +299,15 @@ func (s *Server) CheckBet(ctx context.Context, req *pokerrpc.CheckBetRequest) (*
 // buildPlayerForUpdate creates a Player proto message with appropriate card visibility
 func (s *Server) buildPlayerForUpdate(p *poker.Player, requestingPlayerID string, game *poker.Game) *pokerrpc.Player {
 	player := &pokerrpc.Player{
-		Id:      p.ID,
-		Balance: p.Balance,
-		IsReady: p.IsReady,
+		Id:      p.ID(),
+		Balance: p.Balance(),
+		IsReady: p.IsReady(),
 		Folded:  p.GetCurrentStateString() == "FOLDED",
 		// Surface all-in status to clients so UIs can render an explicit
 		// ALL-IN badge without inferring from balance/current bet.
-		IsAllIn:    p.GetCurrentStateString() == "ALL_IN",
-		CurrentBet: p.CurrentBet,
+		IsAllIn:     p.GetCurrentStateString() == "ALL_IN",
+		CurrentBet:  p.CurrentBet(),
+		PlayerState: p.RPCPlayerState(),
 	}
 
 	// Early return if game doesn't exist or player has no cards
@@ -316,25 +317,25 @@ func (s *Server) buildPlayerForUpdate(p *poker.Player, requestingPlayerID string
 
 	// Show cards if it's the requesting player's own data (except during NEW_HAND_DEALING to avoid race conditions)
 	// OR during showdown for all players
-	if p.ID == requestingPlayerID {
+	if p.ID() == requestingPlayerID {
 		// Show own cards during all active game phases (not just showdown)
-		if game.GetPhase() != pokerrpc.GamePhase_NEW_HAND_DEALING && len(p.Hand) > 0 {
-			player.Hand = make([]*pokerrpc.Card, len(p.Hand))
-			for i, card := range p.Hand {
+		if game.GetPhase() != pokerrpc.GamePhase_NEW_HAND_DEALING && len(p.Hand()) > 0 {
+			player.Hand = make([]*pokerrpc.Card, len(p.Hand()))
+			for i, card := range p.Hand() {
 				player.Hand[i] = &pokerrpc.Card{
 					Suit:  card.GetSuit(),
 					Value: card.GetValue(),
 				}
 			}
-			s.log.Debugf("DEBUG: Showing %d cards for player %s (own cards, phase=%v)", len(p.Hand), p.ID, game.GetPhase())
+			s.log.Debugf("DEBUG: Showing %d cards for player %s (own cards, phase=%v)", len(p.Hand()), p.ID(), game.GetPhase())
 		} else {
 			// Debug: Log why cards are not being shown
-			s.log.Debugf("DEBUG: Not showing cards for player %s: phase=%v, handSize=%d", p.ID, game.GetPhase(), len(p.Hand))
+			s.log.Debugf("DEBUG: Not showing cards for player %s: phase=%v, handSize=%d", p.ID(), game.GetPhase(), len(p.Hand()))
 		}
-	} else if game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN && len(p.Hand) > 0 {
+	} else if game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN && len(p.Hand()) > 0 {
 		// Show other players' cards only during showdown
-		player.Hand = make([]*pokerrpc.Card, len(p.Hand))
-		for i, card := range p.Hand {
+		player.Hand = make([]*pokerrpc.Card, len(p.Hand()))
+		for i, card := range p.Hand() {
 			player.Hand[i] = &pokerrpc.Card{
 				Suit:  card.GetSuit(),
 				Value: card.GetValue(),
@@ -343,8 +344,8 @@ func (s *Server) buildPlayerForUpdate(p *poker.Player, requestingPlayerID string
 	}
 
 	// Include hand description during showdown
-	if game != nil && game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN && p.HandDescription != "" {
-		player.HandDescription = p.HandDescription
+	if game != nil && game.GetPhase() == pokerrpc.GamePhase_SHOWDOWN && p.HandDescription() != "" {
+		player.HandDescription = p.HandDescription()
 	}
 
 	return player
@@ -376,7 +377,8 @@ func (s *Server) buildGameStateForPlayer(table *poker.Table, game *poker.Game, r
 				Balance: 0, // No poker chips when no game - Balance field should be poker chips, not DCR
 				IsReady: user.IsReady,
 
-				Hand: make([]*pokerrpc.Card, 0), // Empty hand when no game
+				Hand:        make([]*pokerrpc.Card, 0), // Empty hand when no game
+				PlayerState: pokerrpc.PlayerState_PLAYER_STATE_AT_TABLE,
 			})
 		}
 	}

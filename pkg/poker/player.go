@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/vctt94/pokerbisonrelay/pkg/rpc/grpc/pokerrpc"
 	"github.com/vctt94/pokerbisonrelay/pkg/statemachine"
 )
 
@@ -13,46 +14,46 @@ type PlayerStateFn = statemachine.StateFn[Player]
 // Player represents a unified poker player state for both table-level and game-level operations
 type Player struct {
 	// Identity
-	ID   string
-	Name string
+	id   string
+	name string
 
 	// Table-level state
-	TableSeat      int  // Seat position at the table
-	IsReady        bool // Ready to start/continue games
-	IsDisconnected bool // Whether player is disconnected (for game flow control)
-	LastAction     time.Time
+	tableSeat      int  // Seat position at the table
+	isReady        bool // Ready to start/continue games
+	isDisconnected bool // Whether player is disconnected (for game flow control)
+	lastAction     time.Time
 
 	// Game-level state (reset between hands)
-	Balance         int64 // Current in-game chips balance for active hand
-	StartingBalance int64 // Chips balance at start of current hand (for calculations)
-	Hand            []Card
-	CurrentBet      int64 // Current bet amount in this betting round
-	IsDealer        bool
-	IsTurn          bool
+	balance         int64 // Current in-game chips balance for active hand
+	startingBalance int64 // Chips balance at start of current hand (for calculations)
+	hand            []Card
+	currentBet      int64 // Current bet amount in this betting round
+	isDealer        bool
+	isTurn          bool
 
 	// State machine - Rob Pike's pattern
 	stateMachine *statemachine.StateMachine[Player]
 
 	// Hand evaluation (populated during showdown)
-	HandValue       *HandValue
-	HandDescription string
+	handValue       *HandValue
+	handDescription string
 }
 
 // NewPlayer creates a new player with the specified starting poker chips
 // balance: starting poker chips for the game (not DCR balance)
 func NewPlayer(id, name string, balance int64) *Player {
 	p := &Player{
-		ID:              id,
-		Name:            name,
-		Balance:         balance, // Starting poker chips
-		StartingBalance: balance,
-		TableSeat:       -1,
-		Hand:            make([]Card, 0, 2),
-		CurrentBet:      0,
-		LastAction:      time.Now(),
-		IsReady:         false,
-		IsDealer:        false,
-		IsTurn:          false,
+		id:              id,
+		name:            name,
+		balance:         balance, // Starting poker chips
+		startingBalance: balance,
+		tableSeat:       -1,
+		hand:            make([]Card, 0, 2),
+		currentBet:      0,
+		lastAction:      time.Now(),
+		isReady:         false,
+		isDealer:        false,
+		isTurn:          false,
 	}
 
 	// Initialize the state machine with first state function
@@ -78,7 +79,7 @@ func playerStateAtTable(entity *Player) PlayerStateFn {
 // playerStateInGame represents the player actively in a game
 func playerStateInGame(entity *Player) PlayerStateFn {
 	// Update all-in status based on balance and bet
-	if entity.Balance == 0 && entity.CurrentBet > 0 {
+	if entity.balance == 0 && entity.currentBet > 0 {
 		// Player is all-in, transition to all-in state
 		return playerStateAllIn
 	}
@@ -99,7 +100,7 @@ func playerStateInGame(entity *Player) PlayerStateFn {
 // playerStateFolded represents the player having folded
 func playerStateFolded(entity *Player) PlayerStateFn {
 	// Check if player is all-in - if so, ignore the fold attempt
-	if entity.Balance == 0 && entity.CurrentBet > 0 {
+	if entity.balance == 0 && entity.currentBet > 0 {
 		// Player is all-in, cannot fold, return to all-in state
 		return playerStateAllIn
 	}
@@ -118,7 +119,7 @@ func playerStateAllIn(entity *Player) PlayerStateFn {
 	// All-in players cannot fold - ignore any fold attempts
 	// This prevents the state machine from transitioning to folded when all-in
 
-	if entity.Balance > 0 {
+	if entity.balance > 0 {
 		// Player is no longer all-in (e.g., won chips or new hand), transition back to in-game
 		return playerStateInGame
 	}
@@ -131,55 +132,25 @@ func playerStateLeft(entity *Player) PlayerStateFn {
 	return nil // Terminal state - return nil to end state machine
 }
 
-// ensureStateMachine ensures the state machine is initialized, panics if not
-// This should only be called during normal operation, never during initialization
-func (p *Player) ensureStateMachine() {
-	if p.stateMachine == nil {
-		panic(fmt.Sprintf("Player %s state machine not initialized - this indicates a bug in player creation", p.ID))
-	}
-}
-
 // ResetForNewHand resets the player's game-level state for a new hand while preserving table-level state
-func (p *Player) ResetForNewHand(startingChips int64) {
+func (p *Player) ResetForNewHand(startingChips int64) error {
 	// Clear hand completely - create new slice to ensure old references are lost
-	p.Hand = make([]Card, 0, 2)
-	p.Balance = startingChips
-	p.StartingBalance = startingChips
-	p.CurrentBet = 0
-	p.IsDealer = false
-	p.IsTurn = false
-	p.HandValue = nil
-	p.HandDescription = ""
-	p.LastAction = time.Now()
+	p.hand = make([]Card, 0, 2)
+	p.balance = startingChips
+	p.startingBalance = startingChips
+	p.currentBet = 0
+	p.isDealer = false
+	p.isTurn = false
+	p.handValue = nil
+	p.handDescription = ""
+	p.lastAction = time.Now()
 
 	// Transition to IN_GAME state
-	p.ensureStateMachine()
-	p.stateMachine.Dispatch(playerStateInGame)
-}
-
-// SetGameState updates the player's game state using the new state machine
-func (p *Player) SetGameState(stateName string) {
-	p.ensureStateMachine()
-
-	var newState PlayerStateFn
-
-	switch stateName {
-	case "AT_TABLE":
-		newState = playerStateAtTable
-	case "IN_GAME":
-		newState = playerStateInGame
-	case "FOLDED":
-		newState = playerStateFolded
-	case "ALL_IN":
-		newState = playerStateAllIn
-	case "LEFT":
-		newState = playerStateLeft
-	default:
-		return // Unknown state, don't transition
+	if p.stateMachine == nil {
+		return fmt.Errorf("player state machine not initialized")
 	}
-
-	p.stateMachine.Dispatch(newState)
-
+	p.stateMachine.Dispatch(playerStateInGame)
+	return nil
 }
 
 // GetGameState returns a string representation of the current state
@@ -212,15 +183,163 @@ func (p *Player) GetCurrentStateString() string {
 
 // TryFold attempts to fold the player, returning true if successful, false if not allowed
 // This method enforces the rule that players cannot fold while all-in
-func (p *Player) TryFold() bool {
+func (p *Player) TryFold() (bool, error) {
 	// Check if player is all-in - if so, fold is not allowed
-	if p.Balance == 0 && p.CurrentBet > 0 {
-		return false
+	if p.balance == 0 && p.currentBet > 0 {
+		return false, fmt.Errorf("player is all-in")
 	}
 
 	// Set the fold flag and let the state machine handle the transition
-	p.ensureStateMachine()
+	if p.stateMachine == nil {
+		return false, fmt.Errorf("player state machine not initialized")
+	}
 	p.stateMachine.Dispatch(playerStateFolded)
 
-	return true
+	return true, nil
+}
+
+// Marshal converts the Player to gRPC Player for external access
+func (p *Player) Marshal() *pokerrpc.Player {
+	// Convert []Card to []*Card for gRPC
+	grpcHand := make([]*pokerrpc.Card, len(p.hand))
+	for i, card := range p.hand {
+		grpcHand[i] = &pokerrpc.Card{
+			Suit:  string(card.suit),
+			Value: string(card.value),
+		}
+	}
+
+	return &pokerrpc.Player{
+		Id:              p.id,
+		Name:            p.name,
+		Balance:         p.balance,
+		Hand:            grpcHand,
+		CurrentBet:      p.currentBet,
+		Folded:          p.GetCurrentStateString() == "FOLDED",
+		IsTurn:          p.isTurn,
+		IsAllIn:         p.GetCurrentStateString() == "ALL_IN",
+		IsDealer:        p.isDealer,
+		IsReady:         p.isReady,
+		HandDescription: p.handDescription,
+		PlayerState:     p.RPCPlayerState(),
+	}
+}
+
+// RPCPlayerState maps the internal player state string to the protobuf enum.
+func (p *Player) RPCPlayerState() pokerrpc.PlayerState {
+	switch p.GetCurrentStateString() {
+	case "AT_TABLE":
+		return pokerrpc.PlayerState_PLAYER_STATE_AT_TABLE
+	case "IN_GAME":
+		return pokerrpc.PlayerState_PLAYER_STATE_IN_GAME
+	case "ALL_IN":
+		return pokerrpc.PlayerState_PLAYER_STATE_ALL_IN
+	case "FOLDED":
+		return pokerrpc.PlayerState_PLAYER_STATE_FOLDED
+	case "LEFT":
+		return pokerrpc.PlayerState_PLAYER_STATE_LEFT
+	default:
+		return pokerrpc.PlayerState_PLAYER_STATE_AT_TABLE
+	}
+}
+
+// Unmarshal updates the Player from gRPC Player
+func (p *Player) Unmarshal(grpcPlayer *pokerrpc.Player) {
+	p.id = grpcPlayer.Id
+	p.name = grpcPlayer.Name
+	p.balance = grpcPlayer.Balance
+	p.currentBet = grpcPlayer.CurrentBet
+	p.isTurn = grpcPlayer.IsTurn
+	p.isDealer = grpcPlayer.IsDealer
+	p.isReady = grpcPlayer.IsReady
+	p.handDescription = grpcPlayer.HandDescription
+
+	// Convert []*Card to []Card for internal use
+	p.hand = make([]Card, len(grpcPlayer.Hand))
+	for i, grpcCard := range grpcPlayer.Hand {
+		p.hand[i] = Card{
+			suit:  Suit(grpcCard.Suit),
+			value: Value(grpcCard.Value),
+		}
+	}
+}
+
+// RestoreState sets the player's state machine to the provided state string.
+// The provided state must match the strings returned by GetCurrentStateString().
+func (p *Player) RestoreState(state string) error {
+	if p.stateMachine == nil {
+		return fmt.Errorf("player state machine not initialized")
+	}
+
+	switch state {
+	case "AT_TABLE":
+		p.stateMachine.Dispatch(playerStateAtTable)
+	case "IN_GAME":
+		p.stateMachine.Dispatch(playerStateInGame)
+	case "ALL_IN":
+		p.stateMachine.Dispatch(playerStateAllIn)
+	case "FOLDED":
+		p.stateMachine.Dispatch(playerStateFolded)
+	case "LEFT":
+		p.stateMachine.Dispatch(playerStateLeft)
+	default:
+		return fmt.Errorf("unknown player state: %s", state)
+	}
+
+	return nil
+}
+
+func (p *Player) Hand() []Card {
+	return p.hand
+}
+
+func (p *Player) HandDescription() string {
+	return p.handDescription
+}
+
+func (p *Player) ID() string {
+	return p.id
+}
+
+// Name returns the player's display name
+func (p *Player) Name() string {
+	return p.name
+}
+
+func (p *Player) Balance() int64 {
+	return p.balance
+}
+
+func (p *Player) IsReady() bool {
+	return p.isReady
+}
+
+// GetTableSeat returns the table seat (for external access)
+func (p *Player) TableSeat() int {
+	return p.tableSeat
+}
+
+// GetStartingBalance returns the starting balance (for external access)
+func (p *Player) StartingBalance() int64 {
+	return p.startingBalance
+}
+
+// GetIsDisconnected returns the disconnected state (for external access)
+func (p *Player) IsDisconnected() bool {
+	return p.isDisconnected
+}
+
+// GetCurrentBet returns the current bet (for external access)
+func (p *Player) CurrentBet() int64 {
+	return p.currentBet
+}
+
+// SetTableSeat sets the table seat (for external access)
+func (p *Player) SetTableSeat(seat int) {
+	p.tableSeat = seat
+}
+
+// SetStartingBalance sets the starting balance (for external access)
+func (p *Player) SetStartingBalance(balance int64) {
+	p.startingBalance = balance
 }

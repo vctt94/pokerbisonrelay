@@ -237,53 +237,74 @@ func (s *Server) restoreGameState(table *poker.Table, dbTableState *db.TableStat
 	)
 
 	// Restore player state from database, including hands
-	game.ModifyPlayers(func(players []*poker.Player) {
-		for _, dbPlayerState := range dbPlayerStates {
-			for _, player := range players {
-				if player.ID != dbPlayerState.PlayerID {
-					continue
-				}
+    game.ModifyPlayers(func(players []*poker.Player) {
+        for _, dbPlayerState := range dbPlayerStates {
+            for _, player := range players {
+                if player.ID() != dbPlayerState.PlayerID {
+                    continue
+                }
 
-				// Restore game state fields
-				player.Balance = dbPlayerState.Balance
-				player.StartingBalance = dbPlayerState.StartingBalance
-				player.CurrentBet = dbPlayerState.CurrentBet
-				player.IsDealer = dbPlayerState.IsDealer
-				player.IsTurn = dbPlayerState.IsTurn
-				player.HandDescription = dbPlayerState.HandDescription
-				player.SetGameState(dbPlayerState.GameState)
+				// Parse hand cards from JSON if available
+                var handCards []*pokerrpc.Card
+                if dbPlayerState.Hand != nil {
+                    if handJSON, ok := dbPlayerState.Hand.(string); ok && handJSON != "" && handJSON != "[]" {
+                        var cards []map[string]interface{}
+                        if err := json.Unmarshal([]byte(handJSON), &cards); err == nil {
+                            handCards = make([]*pokerrpc.Card, len(cards))
+                            for i, cardMap := range cards {
+                                handCards[i] = &pokerrpc.Card{
+                                    Suit:  cardMap["suit"].(string),
+                                    Value: cardMap["value"].(string),
+                                }
+                            }
+                            s.log.Debugf("Restored %d cards for player %s", len(handCards), dbPlayerState.PlayerID)
+                        } else {
+                            s.log.Errorf("Failed to unmarshal hand for player %s: %v", dbPlayerState.PlayerID, err)
+                        }
+                    }
+                }
 
-				// Restore hand cards
-				if dbPlayerState.Hand != nil {
-					if handJSON, ok := dbPlayerState.Hand.(string); ok && handJSON != "" && handJSON != "[]" {
-						var cards []poker.Card
-						if err := json.Unmarshal([]byte(handJSON), &cards); err == nil {
-							player.Hand = cards
-							s.log.Debugf("Restored %d cards for player %s", len(cards), player.ID)
-						} else {
-							s.log.Errorf("Failed to unmarshal hand for player %s: %v", player.ID, err)
-						}
-					}
-				}
+                // Create gRPC Player from database state
+                restoreGRPCPlayer := &pokerrpc.Player{
+                    Id:              dbPlayerState.PlayerID,
+                    Name:            player.Name(), // Keep existing name
+                    Balance:         dbPlayerState.Balance,
+                    Hand:            handCards,
+                    CurrentBet:      dbPlayerState.CurrentBet,
+                    Folded:          dbPlayerState.HasFolded,
+                    IsTurn:          dbPlayerState.IsTurn,
+                    IsAllIn:         dbPlayerState.IsAllIn,
+                    IsDealer:        dbPlayerState.IsDealer,
+                    IsReady:         dbPlayerState.IsReady,
+                    HandDescription: dbPlayerState.HandDescription,
+                }
 
-				// Set table-level state
-				player.TableSeat = dbPlayerState.TableSeat
-				player.IsReady = dbPlayerState.IsReady
+                // Restore base fields from saved state
+                player.Unmarshal(restoreGRPCPlayer)
 
-				s.log.Debugf("Restored player %s: balance=%d, hasbet=%d,  disconnected=%v",
-					player.ID, player.Balance, player.CurrentBet, player.IsDisconnected)
+                // Restore the exact player state deterministically from DB value
+                if err := player.RestoreState(dbPlayerState.GameState); err != nil {
+                    s.log.Warnf("Unknown saved state '%s' for player %s: %v", dbPlayerState.GameState, dbPlayerState.PlayerID, err)
+                }
 
-				break
-			}
-		}
-	})
+                // Set additional fields that are not in gRPC Player
+                player.SetTableSeat(dbPlayerState.TableSeat)
+                player.SetStartingBalance(dbPlayerState.StartingBalance)
+
+                s.log.Debugf("Restored player %s: balance=%d, hasbet=%d, disconnected=%v",
+                    dbPlayerState.PlayerID, dbPlayerState.Balance, dbPlayerState.CurrentBet, player.IsDisconnected())
+
+                break
+            }
+        }
+    })
 
 	// Reconstruct pot based on each player's saved bet so that GetPot() matches
 	// the persisted total. We do this outside the ModifyPlayers block to avoid
 	// holding the game write-lock for the additional potManager updates.
 	for idx, p := range game.GetPlayers() {
-		if p.CurrentBet > 0 {
-			game.AddToPotForPlayer(idx, p.CurrentBet)
+		if p.CurrentBet() > 0 {
+			game.AddToPotForPlayer(idx, p.CurrentBet())
 		}
 	}
 

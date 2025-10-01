@@ -2784,6 +2784,7 @@ class Player extends $pb.GeneratedMessage {
     $core.bool? isDealer,
     $core.bool? isReady,
     $core.String? handDescription,
+    PlayerState? playerState,
   }) {
     final $result = create();
     if (id != null) {
@@ -2819,6 +2820,9 @@ class Player extends $pb.GeneratedMessage {
     if (handDescription != null) {
       $result.handDescription = handDescription;
     }
+    if (playerState != null) {
+      $result.playerState = playerState;
+    }
     return $result;
   }
   Player._() : super();
@@ -2837,6 +2841,7 @@ class Player extends $pb.GeneratedMessage {
     ..aOB(9, _omitFieldNames ? '' : 'isDealer')
     ..aOB(10, _omitFieldNames ? '' : 'isReady')
     ..aOS(11, _omitFieldNames ? '' : 'handDescription')
+    ..e<PlayerState>(12, _omitFieldNames ? '' : 'playerState', $pb.PbFieldType.OE, defaultOrMaker: PlayerState.PLAYER_STATE_AT_TABLE, valueOf: PlayerState.valueOf, enumValues: PlayerState.values)
     ..hasRequiredFields = false
   ;
 
@@ -2953,6 +2958,15 @@ class Player extends $pb.GeneratedMessage {
   $core.bool hasHandDescription() => $_has(10);
   @$pb.TagNumber(11)
   void clearHandDescription() => clearField(11);
+
+  @$pb.TagNumber(12)
+  PlayerState get playerState => $_getN(11);
+  @$pb.TagNumber(12)
+  set playerState(PlayerState v) { setField(12, v); }
+  @$pb.TagNumber(12)
+  $core.bool hasPlayerState() => $_has(11);
+  @$pb.TagNumber(12)
+  void clearPlayerState() => clearField(12);
 }
 
 class Card extends $pb.GeneratedMessage {

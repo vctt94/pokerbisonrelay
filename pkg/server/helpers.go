@@ -13,21 +13,21 @@ import (
 
 // buildGameState creates a GameUpdate for the requesting player
 func (s *Server) buildGameState(tableID, requestingPlayerID string) (*pokerrpc.GameUpdate, error) {
-    // Acquire server lock only to fetch table pointer, then release before
-    // interacting with the table to avoid lock coupling.
-    s.mu.RLock()
-    table, ok := s.tables[tableID]
-    s.mu.RUnlock()
-    if !ok {
-        return nil, status.Error(codes.NotFound, "table not found")
-    }
+	// Acquire server lock only to fetch table pointer, then release before
+	// interacting with the table to avoid lock coupling.
+	s.mu.RLock()
+	table, ok := s.tables[tableID]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, status.Error(codes.NotFound, "table not found")
+	}
 
-    // Process any player timeouts before building the state
-    table.HandleTimeouts()
+	// Process any player timeouts before building the state
+	table.HandleTimeouts()
 
-    game := table.GetGame()
+	game := table.GetGame()
 
-    return s.buildGameStateForPlayer(table, game, requestingPlayerID), nil
+	return s.buildGameStateForPlayer(table, game, requestingPlayerID), nil
 }
 
 // saveTableState persists the current table state to the database
@@ -92,23 +92,24 @@ func (s *Server) saveTableState(tableID string) error {
 	// Then override/add any players that are part of the active game so that their in-game state is captured.
 	if tableSnapshot.Game != nil {
 		for _, player := range tableSnapshot.Game.Players {
+			grpcPlayer := player.Marshal()
 			ps := &db.PlayerState{
-				PlayerID:        player.ID,
+				PlayerID:        grpcPlayer.Id,
 				TableID:         tableID,
-				TableSeat:       player.TableSeat,
-				IsReady:         player.IsReady,
-				Balance:         player.Balance,
-				StartingBalance: player.StartingBalance,
-				CurrentBet:      player.CurrentBet,
-				HasFolded:       player.GetCurrentStateString() == "FOLDED",
-				IsAllIn:         player.GetCurrentStateString() == "ALL_IN",
-				IsDealer:        player.IsDealer,
-				IsTurn:          player.IsTurn,
+				TableSeat:       player.TableSeat(),
+				IsReady:         grpcPlayer.IsReady,
+				Balance:         grpcPlayer.Balance,
+				StartingBalance: player.StartingBalance(),
+				CurrentBet:      grpcPlayer.CurrentBet,
+				HasFolded:       grpcPlayer.Folded,
+				IsAllIn:         grpcPlayer.IsAllIn,
+				IsDealer:        grpcPlayer.IsDealer,
+				IsTurn:          grpcPlayer.IsTurn,
 				GameState:       player.GetCurrentStateString(),
-				Hand:            player.Hand,
-				HandDescription: player.HandDescription,
+				Hand:            convertGRPCHandToInterface(grpcPlayer.Hand),
+				HandDescription: grpcPlayer.HandDescription,
 			}
-			playerStateMap[player.ID] = ps
+			playerStateMap[grpcPlayer.Id] = ps
 		}
 	}
 
@@ -159,4 +160,23 @@ func (s *Server) saveTableStateAsync(tableID string, reason string) {
 			s.log.Errorf("Failed to save table state for %s (%s): %v", tableID, reason, err)
 		}
 	}()
+}
+
+// convertGRPCHandToInterface converts gRPC hand to interface for database storage
+func convertGRPCHandToInterface(grpcHand []*pokerrpc.Card) interface{} {
+	if len(grpcHand) == 0 {
+		return "[]"
+	}
+
+	// Convert to JSON string for storage
+	handCards := make([]map[string]interface{}, len(grpcHand))
+	for i, card := range grpcHand {
+		handCards[i] = map[string]interface{}{
+			"suit":  card.Suit,
+			"value": card.Value,
+		}
+	}
+
+	// This will be marshaled to JSON by the database layer
+	return handCards
 }
